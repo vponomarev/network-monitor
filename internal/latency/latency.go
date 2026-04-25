@@ -1,6 +1,3 @@
-//go:build linux
-// +build linux
-
 package latency
 
 import (
@@ -13,8 +10,6 @@ import (
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/pkg/events"
 	"go.uber.org/zap"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
 )
 
 // Event types
@@ -85,7 +80,7 @@ func (m *Monitor) measureAll(ctx context.Context) {
 		wg.Add(1)
 		go func(t string) {
 			defer wg.Done()
-			result := m.measure(ctx, t)
+			result := m.measureUDP(ctx, t)
 			m.storeResult(result)
 		}(target)
 	}
@@ -93,89 +88,7 @@ func (m *Monitor) measureAll(ctx context.Context) {
 	wg.Wait()
 }
 
-// measure measures latency to a single target
-func (m *Monitor) measure(ctx context.Context, target string) *Result {
-	start := time.Now()
-	timeout := m.config.TimeoutDuration()
-
-	conn, err := icmp.Listen("ip4:icmp", nil)
-	if err != nil {
-		// Fallback to ping via UDP if ICMP not available
-		return m.measureUDP(ctx, target)
-	}
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(timeout))
-
-	// Create ICMP message
-	msg := &icmp.Message{
-		Type: ipv4.ICMPTypeEcho,
-		Code: 0,
-		Body: &icmp.Echo{
-			ID:   time.Now().Nanosecond(),
-			Seq:  1,
-			Data: []byte("network-monitor"),
-		},
-	}
-
-	msgBytes, err := msg.Marshal(nil)
-	if err != nil {
-		return &Result{
-			Target:    target,
-			Timestamp: start,
-			Success:   false,
-			Error:     fmt.Errorf("marshaling: %w", err),
-		}
-	}
-
-	// Send
-	dst, err := net.ResolveIPAddr("ip4", target)
-	if err != nil {
-		return &Result{
-			Target:    target,
-			Timestamp: start,
-			Success:   false,
-			Error:     fmt.Errorf("resolving: %w", err),
-		}
-	}
-
-	if _, err := conn.WriteTo(msgBytes, dst); err != nil {
-		return &Result{
-			Target:    target,
-			Timestamp: start,
-			Success:   false,
-			Error:     fmt.Errorf("sending: %w", err),
-		}
-	}
-
-	// Receive
-	reply := make([]byte, 1500)
-	n, _, err := conn.ReadFrom(reply)
-	if err != nil {
-		return &Result{
-			Target:    target,
-			Timestamp: start,
-			Success:   false,
-			Error:     fmt.Errorf("receiving: %w", err),
-		}
-	}
-
-	rtt := time.Since(start)
-
-	result := &Result{
-		Target:    target,
-		RTT:       rtt,
-		Timestamp: start,
-		Success:   true,
-	}
-
-	// Parse reply (simplified)
-	_ = n
-
-	return result
-}
-
-// measureUDP measures latency using UDP (fallback when ICMP not available)
+// measureUDP measures latency using UDP
 func (m *Monitor) measureUDP(ctx context.Context, target string) *Result {
 	start := time.Now()
 	timeout := m.config.TimeoutDuration()

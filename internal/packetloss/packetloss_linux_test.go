@@ -5,13 +5,13 @@ package packetloss
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vponomarev/network-monitor/internal/config"
-	"github.com/vponomarev/network-monitor/pkg/events"
 	"go.uber.org/zap"
 )
 
@@ -57,7 +57,7 @@ func TestMonitor_recordPacketLoss(t *testing.T) {
 		Interfaces:       []string{"eth0"},
 		ThresholdPercent: 50.0, // High threshold to avoid alerts
 		WindowSize:       10,
-		AlertInterval:    time.Second,
+		AlertInterval:    "1s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -106,7 +106,7 @@ func TestMonitor_Events(t *testing.T) {
 		Interfaces:       []string{"eth0"},
 		ThresholdPercent: 10.0,
 		WindowSize:       10,
-		AlertInterval:    time.Millisecond,
+		AlertInterval:    "1ms",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -203,7 +203,7 @@ func TestMonitor_Run_ContextCancellation(t *testing.T) {
 	cfg := config.PacketLossConfig{
 		Interfaces:    []string{"lo"},
 		WindowSize:    100,
-		AlertInterval: time.Second,
+		AlertInterval: "1s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
