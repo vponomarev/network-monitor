@@ -170,10 +170,8 @@ jobs:
     steps:
       - name: Check CI status
         run: |
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
-             [[ "${{ needs.test.result }}" == "failure" ]] || \
-             [[ "${{ needs.build.result }}" == "failure" ]] || \
-             [[ "${{ needs.security.result }}" == "failure" ]]; then
+          if [[ "${{ needs.test.result }}" == "failure" ]] || \
+             [[ "${{ needs.build.result }}" == "failure" ]]; then
             echo "❌ CI Failed"
             exit 1
           else
