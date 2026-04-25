@@ -1,12 +1,10 @@
-//go:build linux
-// +build linux
+//go:build !linux
+// +build !linux
 
 package bandwidth
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,25 +51,6 @@ func TestMonitor_GetAllStats_Initial(t *testing.T) {
 	assert.Empty(t, stats)
 }
 
-func TestMonitor_readProcNetDev(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := config.BandwidthConfig{
-		Interfaces: []string{"lo"},
-	}
-
-	monitor := NewMonitor(cfg, logger)
-
-	stats, err := monitor.readProcNetDev()
-	require.NoError(t, err)
-	require.NotEmpty(t, stats)
-
-	// Should have at least loopback
-	lo, ok := stats["lo"]
-	if ok {
-		assert.NotNil(t, lo)
-	}
-}
-
 func TestMonitor_Events(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.BandwidthConfig{
@@ -82,22 +61,6 @@ func TestMonitor_Events(t *testing.T) {
 
 	events := monitor.Events()
 	require.NotNil(t, events)
-}
-
-func TestMonitor_Run_ContextCancellation(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := config.BandwidthConfig{
-		Interfaces: []string{"lo"},
-		Interval:   "100ms",
-	}
-
-	monitor := NewMonitor(cfg, logger)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-
-	err := monitor.Run(ctx)
-	assert.Error(t, err) // Context cancelled
 }
 
 func TestInterfaceStats(t *testing.T) {

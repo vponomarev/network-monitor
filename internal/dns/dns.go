@@ -51,11 +51,12 @@ func NewMonitor(cfg config.DNSConfig, logger *zap.Logger) *Monitor {
 
 // Run starts the DNS monitoring
 func (m *Monitor) Run(ctx context.Context) error {
+	interval := m.config.IntervalDuration()
 	m.logger.Info("Starting DNS monitor",
 		zap.Strings("interfaces", m.config.Interfaces),
 		zap.Int("port", m.config.Port))
 
-	ticker := time.NewTicker(m.config.Interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Test domains to monitor

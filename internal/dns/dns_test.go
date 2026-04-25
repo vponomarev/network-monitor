@@ -16,7 +16,7 @@ func TestNewMonitor(t *testing.T) {
 	cfg := config.DNSConfig{
 		Interfaces: []string{"eth0"},
 		Port:       53,
-		Interval:   10 * time.Second,
+		Interval:   "10s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -30,7 +30,7 @@ func TestNewMonitor(t *testing.T) {
 func TestMonitor_storeResult(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.DNSConfig{
-		Interval: time.Second,
+		Interval: "1s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -140,7 +140,7 @@ func TestMonitor_Events_Slow(t *testing.T) {
 func TestMonitor_Run_ContextCancellation(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.DNSConfig{
-		Interval: 100 * time.Millisecond,
+		Interval: "100ms",
 	}
 
 	monitor := NewMonitor(cfg, logger)

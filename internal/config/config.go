@@ -10,12 +10,17 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	Global   GlobalConfig   `yaml:"global"`
-	Metadata MetadataConfig `yaml:"metadata"`
-	Discovery DiscoveryConfig `yaml:"discovery"`
-	Topology TopologyConfig `yaml:"topology"`
-	Metrics  MetricsConfig  `yaml:"metrics"`
-	Logging  LoggingConfig  `yaml:"logging"`
+	Global      GlobalConfig      `yaml:"global"`
+	Metadata    MetadataConfig    `yaml:"metadata"`
+	Discovery   DiscoveryConfig   `yaml:"discovery"`
+	Topology    TopologyConfig    `yaml:"topology"`
+	Metrics     MetricsConfig     `yaml:"metrics"`
+	Logging     LoggingConfig     `yaml:"logging"`
+	Connections ConnectionsConfig `yaml:"connections"`
+	PacketLoss  PacketLossConfig  `yaml:"packet_loss"`
+	Latency     LatencyConfig     `yaml:"latency"`
+	Bandwidth   BandwidthConfig   `yaml:"bandwidth"`
+	DNS         DNSConfig         `yaml:"dns"`
 }
 
 // GlobalConfig holds global settings
@@ -219,4 +224,64 @@ func (c *Config) Validate() error {
 // TTL returns the TTL duration
 func (c *Config) TTL() time.Duration {
 	return time.Duration(c.Global.TTLHours) * time.Hour
+}
+
+// PacketLossInterval returns the alert interval as time.Duration
+func (c *PacketLossConfig) AlertIntervalDuration() time.Duration {
+	if c.AlertInterval == "" {
+		return time.Minute
+	}
+	d, err := time.ParseDuration(c.AlertInterval)
+	if err != nil {
+		return time.Minute
+	}
+	return d
+}
+
+// LatencyInterval returns the interval as time.Duration
+func (c *LatencyConfig) IntervalDuration() time.Duration {
+	if c.Interval == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(c.Interval)
+	if err != nil {
+		return 5 * time.Minute
+	}
+	return d
+}
+
+// LatencyTimeout returns the timeout as time.Duration
+func (c *LatencyConfig) TimeoutDuration() time.Duration {
+	if c.Timeout == "" {
+		return 5 * time.Second
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return 5 * time.Second
+	}
+	return d
+}
+
+// BandwidthInterval returns the interval as time.Duration
+func (c *BandwidthConfig) IntervalDuration() time.Duration {
+	if c.Interval == "" {
+		return time.Minute
+	}
+	d, err := time.ParseDuration(c.Interval)
+	if err != nil {
+		return time.Minute
+	}
+	return d
+}
+
+// DNSInterval returns the interval as time.Duration
+func (c *DNSConfig) IntervalDuration() time.Duration {
+	if c.Interval == "" {
+		return time.Minute
+	}
+	d, err := time.ParseDuration(c.Interval)
+	if err != nil {
+		return time.Minute
+	}
+	return d
 }

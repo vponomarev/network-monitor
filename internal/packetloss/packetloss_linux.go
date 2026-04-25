@@ -180,7 +180,8 @@ func (m *Monitor) calculateLossPercent(stats *interfaceStats) float64 {
 // checkAndSendAlert sends an alert if the interval has passed
 func (m *Monitor) checkAndSendAlert(iface string, lossPercent float64, stats *interfaceStats) {
 	now := time.Now()
-	if now.Sub(stats.lastAlert) < m.config.AlertInterval {
+	alertInterval := m.config.AlertIntervalDuration()
+	if now.Sub(stats.lastAlert) < alertInterval {
 		return
 	}
 

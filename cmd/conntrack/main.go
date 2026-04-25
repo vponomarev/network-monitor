@@ -83,8 +83,8 @@ func run(cmd *cobra.Command, args []string) error {
 	// Initialize connection tracker
 	tracker, err := conntrack.NewTracker(conntrack.Config{
 		EBPFProgramPath: ebpfProgram,
-		TrackIncoming:   cfg.Monitoring.Connections.TrackIncoming,
-		TrackOutgoing:   cfg.Monitoring.Connections.TrackOutgoing,
+		TrackIncoming:   cfg.Connections.TrackIncoming,
+		TrackOutgoing:   cfg.Connections.TrackOutgoing,
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create connection tracker: %w", err)

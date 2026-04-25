@@ -15,8 +15,8 @@ func TestNewMonitor(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.LatencyConfig{
 		Targets:  []string{"8.8.8.8", "1.1.1.1"},
-		Interval: 10 * time.Second,
-		Timeout:  5 * time.Second,
+		Interval: "10s",
+		Timeout:  "5s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -31,8 +31,8 @@ func TestMonitor_storeResult(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.LatencyConfig{
 		Targets:  []string{"8.8.8.8"},
-		Interval: time.Second,
-		Timeout:  time.Second,
+		Interval: "1s",
+		Timeout:  "1s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -104,7 +104,7 @@ func TestMonitor_Events(t *testing.T) {
 func TestMonitor_measureUDP(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.LatencyConfig{
-		Timeout: 2 * time.Second,
+		Timeout: "2s",
 	}
 
 	monitor := NewMonitor(cfg, logger)
@@ -121,8 +121,8 @@ func TestMonitor_Run_ContextCancellation(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.LatencyConfig{
 		Targets:  []string{"127.0.0.1"},
-		Interval: 100 * time.Millisecond,
-		Timeout:  500 * time.Millisecond,
+		Interval: "100ms",
+		Timeout:  "500ms",
 	}
 
 	monitor := NewMonitor(cfg, logger)

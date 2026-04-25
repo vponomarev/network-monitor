@@ -4,7 +4,6 @@
 package discovery
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -62,39 +61,20 @@ func DefaultTracerouteConfig() *TracerouteConfig {
 	}
 }
 
-// TracerouteResult represents the result of a traceroute to a single destination
-type TracerouteResult struct {
-	Destination string        `json:"destination"`
-	Hops        []HopResult   `json:"hops"`
-	Completed   bool          `json:"completed"`
-	Duration    time.Duration `json:"duration"`
-}
-
-// HopResult represents a single hop in a traceroute
-type HopResult struct {
-	TTL       int           `json:"ttl"`
-	IP        string        `json:"ip,omitempty"`
-	Hostname  string        `json:"hostname,omitempty"`
-	RTT       time.Duration `json:"rtt,omitempty"`
-	Lost      bool          `json:"lost"`
-	Timeout   bool          `json:"timeout"`
-	ProbeSent time.Time     `json:"probe_sent"`
-}
-
-// Tracerouter performs network traceroute
-type Tracerouter interface {
+// PacketTracerouter performs network traceroute using raw packets
+type PacketTracerouter interface {
 	Trace(ctx context.Context, dstIP string) (*TracerouteResult, error)
 }
 
-// ICMPTracerouter implements traceroute using ICMP Echo Request
-type ICMPTracerouter struct {
+// ICMPPacketTracerouter implements traceroute using ICMP Echo Request
+type ICMPPacketTracerouter struct {
 	config *TracerouteConfig
 	logger *zap.Logger
 	srcIP  net.IP
 }
 
 // NewICMPTracerouter creates a new ICMP-based tracerouter
-func NewICMPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*ICMPTracerouter, error) {
+func NewICMPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*ICMPPacketTracerouter, error) {
 	if config == nil {
 		config = DefaultTracerouteConfig()
 	}
@@ -105,7 +85,7 @@ func NewICMPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*ICMPTrac
 		return nil, fmt.Errorf("getting source IP: %w", err)
 	}
 
-	return &ICMPTracerouter{
+	return &ICMPPacketTracerouter{
 		config: config,
 		logger: logger.Named("traceroute"),
 		srcIP:  srcIP,
@@ -113,7 +93,7 @@ func NewICMPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*ICMPTrac
 }
 
 // Trace performs traceroute to destination
-func (t *ICMPTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
+func (t *ICMPPacketTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
 	start := time.Now()
 	t.logger.Debug("Starting ICMP traceroute", zap.String("dst", dstIP))
 
@@ -165,7 +145,7 @@ func (t *ICMPTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteR
 }
 
 // traceHop traces a single hop
-func (t *ICMPTracerouter) traceHop(ctx context.Context, conn *icmpConn, dst net.IP, ttl int) HopResult {
+func (t *ICMPPacketTracerouter) traceHop(ctx context.Context, conn *icmpConn, dst net.IP, ttl int) HopResult {
 	hop := HopResult{
 		TTL:       ttl,
 		Lost:      true,
@@ -215,7 +195,7 @@ func (t *ICMPTracerouter) traceHop(ctx context.Context, conn *icmpConn, dst net.
 }
 
 // sendProbe sends a single ICMP probe and waits for response
-func (t *ICMPTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Duration, net.IP, error) {
+func (t *ICMPPacketTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Duration, net.IP, error) {
 	start := time.Now()
 
 	// Create ICMP Echo Request
@@ -391,15 +371,15 @@ func getOutboundIP() (net.IP, error) {
 	return localAddr.IP, nil
 }
 
-// UDPTracerouter implements traceroute using UDP probes
-type UDPTracerouter struct {
+// UDPPacketTracerouter implements traceroute using UDP probes
+type UDPPacketTracerouter struct {
 	config *TracerouteConfig
 	logger *zap.Logger
 	srcIP  net.IP
 }
 
 // NewUDPTracerouter creates a new UDP-based tracerouter
-func NewUDPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*UDPTracerouter, error) {
+func NewUDPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*UDPPacketTracerouter, error) {
 	if config == nil {
 		config = DefaultTracerouteConfig()
 	}
@@ -409,7 +389,7 @@ func NewUDPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*UDPTracer
 		return nil, fmt.Errorf("getting source IP: %w", err)
 	}
 
-	return &UDPTracerouter{
+	return &UDPPacketTracerouter{
 		config: config,
 		logger: logger.Named("traceroute-udp"),
 		srcIP:  srcIP,
@@ -417,7 +397,7 @@ func NewUDPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*UDPTracer
 }
 
 // Trace performs UDP traceroute
-func (t *UDPTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
+func (t *UDPPacketTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
 	start := time.Now()
 	t.logger.Debug("Starting UDP traceroute", zap.String("dst", dstIP))
 
@@ -461,7 +441,7 @@ func (t *UDPTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteRe
 	return result, nil
 }
 
-func (t *UDPTracerouter) traceHopUDP(ctx context.Context, conn *udpConn, dst net.IP, ttl int) HopResult {
+func (t *UDPPacketTracerouter) traceHopUDP(ctx context.Context, conn *udpConn, dst net.IP, ttl int) HopResult {
 	hop := HopResult{
 		TTL:       ttl,
 		Lost:      true,
@@ -505,7 +485,7 @@ func (t *UDPTracerouter) traceHopUDP(ctx context.Context, conn *udpConn, dst net
 	return hop
 }
 
-func (t *UDPTracerouter) sendUDPProbe(conn *udpConn, dst net.IP, port int) (time.Duration, net.IP, error) {
+func (t *UDPPacketTracerouter) sendUDPProbe(conn *udpConn, dst net.IP, port int) (time.Duration, net.IP, error) {
 	start := time.Now()
 
 	data := []byte("traceroute")
@@ -626,7 +606,7 @@ func NewTracerouteFactory(config *TracerouteConfig, logger *zap.Logger) *Tracero
 }
 
 // Create creates a tracerouter based on protocol
-func (f *TracerouteFactory) Create(protocol string) (Tracerouter, error) {
+func (f *TracerouteFactory) Create(protocol string) (PacketTracerouter, error) {
 	switch protocol {
 	case "udp":
 		return NewUDPTracerouter(f.config, f.logger)
@@ -641,9 +621,9 @@ func (f *TracerouteFactory) Create(protocol string) (Tracerouter, error) {
 
 // TraceroutePool manages multiple concurrent traceroutes
 type TraceroutePool struct {
-	factory  *TracerouteFactory
+	factory     *TracerouteFactory
 	maxConcurrent int
-	semaphore chan struct{}
+	semaphore   chan struct{}
 }
 
 // NewTraceroutePool creates a new traceroute pool
@@ -700,15 +680,15 @@ func (p *TraceroutePool) TraceBatch(ctx context.Context, dstIPs []string) ([]*Tr
 	return results, nil
 }
 
-// TCPTracerouter implements traceroute using TCP SYN probes
-type TCPTracerouter struct {
+// TCPPacketTracerouter implements traceroute using TCP SYN probes
+type TCPPacketTracerouter struct {
 	config *TracerouteConfig
 	logger *zap.Logger
 	srcIP  net.IP
 }
 
 // NewTCPTracerouter creates a new TCP-based tracerouter
-func NewTCPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*TCPTracerouter, error) {
+func NewTCPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*TCPPacketTracerouter, error) {
 	if config == nil {
 		config = DefaultTracerouteConfig()
 	}
@@ -718,7 +698,7 @@ func NewTCPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*TCPTracer
 		return nil, fmt.Errorf("getting source IP: %w", err)
 	}
 
-	return &TCPTracerouter{
+	return &TCPPacketTracerouter{
 		config: config,
 		logger: logger.Named("traceroute-tcp"),
 		srcIP:  srcIP,
@@ -726,7 +706,7 @@ func NewTCPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*TCPTracer
 }
 
 // Trace performs TCP traceroute to destination
-func (t *TCPTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
+func (t *TCPPacketTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
 	start := time.Now()
 	t.logger.Debug("Starting TCP traceroute", zap.String("dst", dstIP))
 
@@ -776,7 +756,7 @@ func (t *TCPTracerouter) Trace(ctx context.Context, dstIP string) (*TracerouteRe
 	return result, nil
 }
 
-func (t *TCPTracerouter) traceHopTCP(ctx context.Context, conn *tcpConn, dst net.IP, ttl int) HopResult {
+func (t *TCPPacketTracerouter) traceHopTCP(ctx context.Context, conn *tcpConn, dst net.IP, ttl int) HopResult {
 	hop := HopResult{
 		TTL:       ttl,
 		Lost:      true,
@@ -822,7 +802,7 @@ func (t *TCPTracerouter) traceHopTCP(ctx context.Context, conn *tcpConn, dst net
 	return hop
 }
 
-func (t *TCPTracerouter) sendTCPProbe(conn *tcpConn, dst net.IP, port int) (time.Duration, net.IP, error) {
+func (t *TCPPacketTracerouter) sendTCPProbe(conn *tcpConn, dst net.IP, port int) (time.Duration, net.IP, error) {
 	start := time.Now()
 
 	// Parse TCP flags

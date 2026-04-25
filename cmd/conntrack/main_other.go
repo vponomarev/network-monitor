@@ -8,7 +8,19 @@ import (
 	"os"
 )
 
+func main() {
+	fmt.Fprintf(os.Stderr, "Error: conntrack is only available on Linux. Current OS: %s\n", getGOOS())
+	os.Exit(1)
+}
+
 // checkPlatform returns an error on non-Linux platforms
 func checkPlatform() error {
-	return fmt.Errorf("conntrack is only available on Linux. Current OS: %s", os.Getenv("GOOS"))
+	return fmt.Errorf("conntrack is only available on Linux. Current OS: %s", getGOOS())
+}
+
+func getGOOS() string {
+	if os.Getenv("GOOS") != "" {
+		return os.Getenv("GOOS")
+	}
+	return "unknown (non-Linux)"
 }

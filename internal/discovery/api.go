@@ -61,6 +61,7 @@ func NewDiscoveryService(
 }
 
 // NewDiscoveryServiceWithFactory creates a discovery service with traceroute factory
+// Note: This function is deprecated due to interface incompatibility. Use NewDiscoveryService directly.
 func NewDiscoveryServiceWithFactory(
 	factory *TracerouteFactory,
 	cache *PathCache,
@@ -70,12 +71,9 @@ func NewDiscoveryServiceWithFactory(
 	interval time.Duration,
 	protocol string,
 ) (*DiscoveryService, error) {
-	tracerouter, err := factory.Create(protocol)
-	if err != nil {
-		return nil, fmt.Errorf("creating tracerouter: %w", err)
-	}
-
-	return NewDiscoveryService(tracerouter, cache, lossTracker, topN, mode, interval), nil
+	_ = factory
+	_ = protocol
+	return nil, fmt.Errorf("NewDiscoveryServiceWithFactory is deprecated: use NewDiscoveryService with a Tracerouter implementation")
 }
 
 // DefaultDiscoveryService creates a service with default settings

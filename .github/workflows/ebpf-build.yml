@@ -30,7 +30,10 @@ jobs:
             llvm \
             libbpf-dev \
             linux-headers-$(uname -r) \
-            bpftool
+            linux-tools-generic
+          
+          # bpftool is included in linux-tools-generic
+          sudo ln -sf /usr/lib/linux-tools/generic/bpftool /usr/local/bin/bpftool || true
 
       - name: Build eBPF programs
         run: |

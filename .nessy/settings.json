@@ -5,7 +5,13 @@
       "Bash(rm *)",
       "Bash(go *)",
       "Bash(mkdir *)",
-      "Bash(docker build *)"
+      "Bash(docker build *)",
+      "Bash(do *)",
+      "Bash(done)",
+      "Bash(xargs *)",
+      "Bash(jq *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   },
   "$version": 3

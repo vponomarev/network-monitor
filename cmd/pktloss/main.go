@@ -57,7 +57,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Override interface if provided via flag
 	if interfaceName != "" {
-		cfg.Monitoring.PacketLoss.Interfaces = []string{interfaceName}
+		cfg.PacketLoss.Interfaces = []string{interfaceName}
 	}
 
 	// Initialize logger
@@ -69,7 +69,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	logger.Info("Starting Packet Loss Monitor",
 		zap.String("version", Version),
-		zap.Strings("interfaces", cfg.Monitoring.PacketLoss.Interfaces),
+		zap.Strings("interfaces", cfg.PacketLoss.Interfaces),
 	)
 
 	// Create context with cancellation
@@ -86,7 +86,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Start packet loss monitor
-	monitor := packetloss.NewMonitor(cfg.Monitoring.PacketLoss, logger)
+	monitor := packetloss.NewMonitor(cfg.PacketLoss, logger)
 	if err := monitor.Run(ctx); err != nil {
 		return fmt.Errorf("packet loss monitor error: %w", err)
 	}

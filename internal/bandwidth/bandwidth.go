@@ -57,11 +57,12 @@ func NewMonitor(cfg config.BandwidthConfig, logger *zap.Logger) *Monitor {
 
 // Run starts the bandwidth monitoring
 func (m *Monitor) Run(ctx context.Context) error {
+	interval := m.config.IntervalDuration()
 	m.logger.Info("Starting bandwidth monitor",
 		zap.Strings("interfaces", m.config.Interfaces),
-		zap.Duration("interval", m.config.Interval))
+		zap.Duration("interval", interval))
 
-	ticker := time.NewTicker(m.config.Interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Initial measurement

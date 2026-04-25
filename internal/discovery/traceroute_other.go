@@ -56,6 +56,11 @@ func DefaultTracerouteConfig() *TracerouteConfig {
 	}
 }
 
+// PacketTracerouter performs network traceroute using raw packets (Linux only)
+type PacketTracerouter interface {
+	Trace(ctx context.Context, dstIP string) (*TracerouteResult, error)
+}
+
 // TracerouteFactory creates tracerouters
 type TracerouteFactory struct {
 	config *TracerouteConfig
@@ -74,7 +79,7 @@ func NewTracerouteFactory(config *TracerouteConfig, logger *zap.Logger) *Tracero
 }
 
 // Create returns an error on non-Linux platforms
-func (f *TracerouteFactory) Create(protocol string) (Tracerouter, error) {
+func (f *TracerouteFactory) Create(protocol string) (PacketTracerouter, error) {
 	return nil, fmt.Errorf("traceroute not supported on this platform (requires Linux)")
 }
 
