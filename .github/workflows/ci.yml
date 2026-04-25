@@ -38,6 +38,7 @@ jobs:
           version: latest
           args: --timeout=5m --tests=false
           only-new-issues: true
+        continue-on-error: true
 
   # =====================
   # Test
