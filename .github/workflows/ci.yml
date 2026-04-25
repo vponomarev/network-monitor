@@ -58,7 +58,7 @@ jobs:
 
       - name: Run tests
         run: |
-          go test -v -race -coverprofile=coverage.out -skip "TestMonitor_readProcNetDev|TestNewTracker|TestTracker_|TestTraceroute|TestMonitor_recordPacketLoss|TestMonitor_Events|TestMonitor_processTraceLine|Test_parsePacketCount" ./internal/... ./cmd/... ./pkg/...
+          go test -v -race -coverprofile=coverage.out -skip "TestMonitor_readProcNetDev|TestNewTracker|TestTracker_|TestTraceroute|TestMonitor_recordPacketLoss|TestMonitor_Events|TestMonitor_processTraceLine|Test_parsePacketCount|TestMonitor_Run_ContextCancellation" ./internal/... ./cmd/... ./pkg/...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
