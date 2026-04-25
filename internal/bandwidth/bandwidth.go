@@ -19,17 +19,17 @@ const ProcNetDevPath = "/proc/net/dev"
 
 // InterfaceStats holds bandwidth statistics for an interface
 type InterfaceStats struct {
-	RxBytes      uint64
-	RxPackets    uint64
-	RxErrors     uint64
-	RxDropped    uint64
-	TxBytes      uint64
-	TxPackets    uint64
-	TxErrors     uint64
-	TxDropped    uint64
-	Timestamp    time.Time
-	RxBytesPerSec  float64
-	TxBytesPerSec  float64
+	RxBytes       uint64
+	RxPackets     uint64
+	RxErrors      uint64
+	RxDropped     uint64
+	TxBytes       uint64
+	TxPackets     uint64
+	TxErrors      uint64
+	TxDropped     uint64
+	Timestamp     time.Time
+	RxBytesPerSec float64
+	TxBytesPerSec float64
 }
 
 // Monitor tracks network bandwidth usage
@@ -37,7 +37,7 @@ type Monitor struct {
 	config config.BandwidthConfig
 	logger *zap.Logger
 
-	mu   sync.RWMutex
+	mu    sync.RWMutex
 	stats map[string]*InterfaceStats
 	prev  map[string]*InterfaceStats
 

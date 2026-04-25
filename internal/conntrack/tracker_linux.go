@@ -20,7 +20,7 @@ import (
 
 // Connection event types
 const (
-	EventTypeNewConnection  events.EventType = "new_connection"
+	EventTypeNewConnection   events.EventType = "new_connection"
 	EventTypeCloseConnection events.EventType = "close_connection"
 )
 
@@ -263,9 +263,9 @@ func (t *Tracker) sendEvent(conn *Connection) {
 
 	// Create event
 	event := events.Event{
-		Type:       EventTypeNewConnection,
-		Timestamp:  conn.Timestamp,
-		Source:     "conntrack",
+		Type:      EventTypeNewConnection,
+		Timestamp: conn.Timestamp,
+		Source:    "conntrack",
 		Data: map[string]interface{}{
 			"source_ip":    conn.SourceIP.String(),
 			"source_port":  conn.SourcePort,

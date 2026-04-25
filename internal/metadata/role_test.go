@@ -137,7 +137,7 @@ func TestRoleMatcher_Reload(t *testing.T) {
 
 func TestRoleMatcher_BestMatchOrder(t *testing.T) {
 	matcher := NewEmptyRoleMatcher()
-	
+
 	// Add in random order
 	matcher.networks = []netWithRole{
 		{network: mustParseCIDR("10.0.0.0/8"), role: "broad"},

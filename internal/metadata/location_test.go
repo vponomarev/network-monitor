@@ -142,7 +142,7 @@ func TestLocationMatcher_Reload(t *testing.T) {
 
 func TestLocationMatcher_BestMatchOrder(t *testing.T) {
 	matcher := NewEmptyLocationMatcher()
-	
+
 	// Add in random order
 	matcher.networks = []netWithLocation{
 		{network: mustParseCIDR("10.0.0.0/8"), location: "broad"},

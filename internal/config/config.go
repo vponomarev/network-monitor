@@ -25,9 +25,9 @@ type Config struct {
 
 // GlobalConfig holds global settings
 type GlobalConfig struct {
-	TTLHours       int    `yaml:"ttl_hours"`
-	MetricsPort    int    `yaml:"metrics_port"`
-	TracePipePath  string `yaml:"trace_pipe_path"`
+	TTLHours      int    `yaml:"ttl_hours"`
+	MetricsPort   int    `yaml:"metrics_port"`
+	TracePipePath string `yaml:"trace_pipe_path"`
 }
 
 // MetadataConfig holds metadata source configuration
@@ -83,11 +83,11 @@ type LoggingConfig struct {
 
 // PacketLossConfig holds packet loss monitoring configuration (for other modules)
 type PacketLossConfig struct {
-	Enabled          bool          `yaml:"enabled"`
-	Interfaces       []string      `yaml:"interfaces"`
-	ThresholdPercent float64       `yaml:"threshold_percent"`
-	WindowSize       int           `yaml:"window_size"`
-	AlertInterval    string        `yaml:"alert_interval"`
+	Enabled          bool     `yaml:"enabled"`
+	Interfaces       []string `yaml:"interfaces"`
+	ThresholdPercent float64  `yaml:"threshold_percent"`
+	WindowSize       int      `yaml:"window_size"`
+	AlertInterval    string   `yaml:"alert_interval"`
 }
 
 // LatencyConfig holds latency monitoring configuration (for other modules)

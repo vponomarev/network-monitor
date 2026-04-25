@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vponomarev/network-monitor/internal/conntrack"
 	"github.com/vponomarev/network-monitor/internal/config"
+	"github.com/vponomarev/network-monitor/internal/conntrack"
 	"go.uber.org/zap"
 )
 

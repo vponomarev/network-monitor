@@ -24,7 +24,7 @@ type TracerouteConfig struct {
 	StartTTL     int           `json:"start_ttl"`
 	Protocol     string        `json:"protocol"` // icmp, udp, tcp
 	DstPort      int           `json:"dst_port"`
-	SrcPort      int           `json:"src_port"` // Source port for TCP traceroute
+	SrcPort      int           `json:"src_port"`  // Source port for TCP traceroute
 	TCPFlags     string        `json:"tcp_flags"` // TCP flags for probes (SYN, ACK, FIN)
 }
 
@@ -56,7 +56,7 @@ func DefaultTracerouteConfig() *TracerouteConfig {
 		StartTTL:     1,
 		Protocol:     "icmp",
 		DstPort:      33434,
-		SrcPort:      0, // Auto-select
+		SrcPort:      0,   // Auto-select
 		TCPFlags:     "S", // SYN flag for TCP traceroute
 	}
 }
@@ -242,8 +242,8 @@ func createICMPEchoRequest(seq int) []byte {
 
 	// Build packet
 	pkt := make([]byte, 64)
-	pkt[0] = ICMP_ECHO_REQUEST // Type
-	pkt[1] = 0                  // Code
+	pkt[0] = ICMP_ECHO_REQUEST              // Type
+	pkt[1] = 0                              // Code
 	binary.BigEndian.PutUint16(pkt[2:4], 0) // Checksum (filled later)
 	binary.BigEndian.PutUint16(pkt[4:6], uint16(id))
 	binary.BigEndian.PutUint16(pkt[6:8], uint16(seq))
@@ -621,17 +621,17 @@ func (f *TracerouteFactory) Create(protocol string) (PacketTracerouter, error) {
 
 // TraceroutePool manages multiple concurrent traceroutes
 type TraceroutePool struct {
-	factory     *TracerouteFactory
+	factory       *TracerouteFactory
 	maxConcurrent int
-	semaphore   chan struct{}
+	semaphore     chan struct{}
 }
 
 // NewTraceroutePool creates a new traceroute pool
 func NewTraceroutePool(factory *TracerouteFactory, maxConcurrent int) *TraceroutePool {
 	return &TraceroutePool{
-		factory:     factory,
+		factory:       factory,
 		maxConcurrent: maxConcurrent,
-		semaphore:   make(chan struct{}, maxConcurrent),
+		semaphore:     make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -868,9 +868,9 @@ func createTCPPacket(srcIP, dstIP net.IP, srcPort, dstPort int, flags byte, seq 
 	binary.BigEndian.PutUint16(tcpHeader[0:2], uint16(srcPort))
 	binary.BigEndian.PutUint16(tcpHeader[2:4], uint16(dstPort))
 	binary.BigEndian.PutUint32(tcpHeader[4:8], seq)
-	binary.BigEndian.PutUint32(tcpHeader[8:12], 0) // ACK number
-	tcpHeader[12] = 0x50                          // Data offset (5 * 4 = 20 bytes, no options)
-	tcpHeader[13] = flags                         // Flags
+	binary.BigEndian.PutUint32(tcpHeader[8:12], 0)      // ACK number
+	tcpHeader[12] = 0x50                                // Data offset (5 * 4 = 20 bytes, no options)
+	tcpHeader[13] = flags                               // Flags
 	binary.BigEndian.PutUint16(tcpHeader[14:16], 65535) // Window size
 	// Checksum will be calculated by kernel for raw sockets
 	binary.BigEndian.PutUint16(tcpHeader[18:20], 0) // Urgent pointer

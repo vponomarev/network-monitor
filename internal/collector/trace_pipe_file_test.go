@@ -70,35 +70,35 @@ func TestTracePipeCollector_WithRealData(t *testing.T) {
 func TestTracePipeCollector_ParseAllFormats(t *testing.T) {
 	// Test various formats found in real data
 	testCases := []struct {
-		line     string
-		wantSrc  string
-		wantDst  string
+		line      string
+		wantSrc   string
+		wantDst   string
 		wantMatch bool
 	}{
 		{
-			line:     "          <idle>-0       [077] ..s.. 20660829.667623: tcp_retransmit_skb: family=AF_INET sport=7005 dport=30792 saddr=10.181.208.50 daddr=10.179.64.23 saddrv6=::ffff:10.181.208.50 daddrv6=::ffff:10.179.64.23 state=TCP_ESTABLISHED",
-			wantSrc:  "10.181.208.50",
-			wantDst:  "10.179.64.23",
+			line:      "          <idle>-0       [077] ..s.. 20660829.667623: tcp_retransmit_skb: family=AF_INET sport=7005 dport=30792 saddr=10.181.208.50 daddr=10.179.64.23 saddrv6=::ffff:10.181.208.50 daddrv6=::ffff:10.179.64.23 state=TCP_ESTABLISHED",
+			wantSrc:   "10.181.208.50",
+			wantDst:   "10.179.64.23",
 			wantMatch: true,
 		},
 		{
-			line:     "         radosgw-2855037 [034] ..s.. 20660830.025212: tcp_retransmit_skb: family=AF_INET sport=83 dport=11746 saddr=10.181.208.50 daddr=10.181.208.80 saddrv6=::ffff:10.181.208.50 daddrv6=::ffff:10.181.208.80 state=TCP_ESTABLISHED",
-			wantSrc:  "10.181.208.50",
-			wantDst:  "10.181.208.80",
+			line:      "         radosgw-2855037 [034] ..s.. 20660830.025212: tcp_retransmit_skb: family=AF_INET sport=83 dport=11746 saddr=10.181.208.50 daddr=10.181.208.80 saddrv6=::ffff:10.181.208.50 daddrv6=::ffff:10.181.208.80 state=TCP_ESTABLISHED",
+			wantSrc:   "10.181.208.50",
+			wantDst:   "10.181.208.80",
 			wantMatch: true,
 		},
 		{
-			line:     "          <...>-12345 [001] d.H. 12345.678901: tcp_retransmit_skb: addr=0xffff888012345678 sk=0xffff888012345678 saddr=192.168.1.10 daddr=192.168.1.20 seq=123456789",
-			wantSrc:  "192.168.1.10",
-			wantDst:  "192.168.1.20",
+			line:      "          <...>-12345 [001] d.H. 12345.678901: tcp_retransmit_skb: addr=0xffff888012345678 sk=0xffff888012345678 saddr=192.168.1.10 daddr=192.168.1.20 seq=123456789",
+			wantSrc:   "192.168.1.10",
+			wantDst:   "192.168.1.20",
 			wantMatch: true,
 		},
 		{
-			line:     "          <...>-12346 [002] d.H. 12346.789012: tcp_connect: saddr=192.168.1.10 daddr=192.168.1.20",
+			line:      "          <...>-12346 [002] d.H. 12346.789012: tcp_connect: saddr=192.168.1.10 daddr=192.168.1.20",
 			wantMatch: false, // Not a retransmit event
 		},
 		{
-			line:     "random garbage line",
+			line:      "random garbage line",
 			wantMatch: false,
 		},
 	}

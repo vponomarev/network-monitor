@@ -56,9 +56,9 @@ type NetworkDevice struct {
 
 // Topology represents the network topology
 type Topology struct {
-	mu       sync.RWMutex
-	devices  map[string]*NetworkDevice
-	ipIndex  map[string]string // IP -> DeviceID
+	mu          sync.RWMutex
+	devices     map[string]*NetworkDevice
+	ipIndex     map[string]string // IP -> DeviceID
 	subnetIndex map[string]string // Subnet -> DeviceID
 }
 
@@ -281,17 +281,17 @@ func (t *Topology) EnrichPath(srcIP, dstIP string) *PathInfo {
 
 // PathInfo contains enriched path information
 type PathInfo struct {
-	SourceIP             string          `json:"src_ip"`
-	DestinationIP        string          `json:"dst_ip"`
-	SourceDevice         *NetworkDevice  `json:"src_device,omitempty"`
-	DestinationDevice    *NetworkDevice  `json:"dst_device,omitempty"`
-	IntermediateDevices  []*NetworkDevice `json:"intermediate_devices,omitempty"`
-	SourceLocation       string          `json:"src_location,omitempty"`
-	DestinationLocation  string          `json:"dst_location,omitempty"`
-	SourceRack           string          `json:"src_rack,omitempty"`
-	DestinationRack      string          `json:"dst_rack,omitempty"`
-	CrossesDatacenter    bool            `json:"crosses_datacenter"`
-	CrossesRack          bool            `json:"crosses_rack"`
+	SourceIP            string           `json:"src_ip"`
+	DestinationIP       string           `json:"dst_ip"`
+	SourceDevice        *NetworkDevice   `json:"src_device,omitempty"`
+	DestinationDevice   *NetworkDevice   `json:"dst_device,omitempty"`
+	IntermediateDevices []*NetworkDevice `json:"intermediate_devices,omitempty"`
+	SourceLocation      string           `json:"src_location,omitempty"`
+	DestinationLocation string           `json:"dst_location,omitempty"`
+	SourceRack          string           `json:"src_rack,omitempty"`
+	DestinationRack     string           `json:"dst_rack,omitempty"`
+	CrossesDatacenter   bool             `json:"crosses_datacenter"`
+	CrossesRack         bool             `json:"crosses_rack"`
 }
 
 // GetTopologyType determines the topology type based on device relationships

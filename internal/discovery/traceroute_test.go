@@ -12,7 +12,7 @@ import (
 
 func TestDefaultTracerouteConfig(t *testing.T) {
 	config := DefaultTracerouteConfig()
-	
+
 	require.NotNil(t, config)
 	assert.Equal(t, 30, config.MaxHops)
 	assert.Equal(t, 3*time.Second, config.Timeout)
@@ -172,7 +172,7 @@ func TestTraceroutePool_Concurrency(t *testing.T) {
 	logger := zap.NewNop()
 	config := DefaultTracerouteConfig()
 	factory := NewTracerouteFactory(config, logger)
-	
+
 	// Test different concurrency levels
 	concurrencyLevels := []int{1, 5, 10, 20}
 
@@ -244,7 +244,7 @@ func TestTracerouteConfig_EdgeCases(t *testing.T) {
 
 func TestTracerouteFactory_NilConfig(t *testing.T) {
 	logger := zap.NewNop()
-	
+
 	// Should use defaults when config is nil
 	factory := NewTracerouteFactory(nil, logger)
 	require.NotNil(t, factory)

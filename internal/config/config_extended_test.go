@@ -206,7 +206,7 @@ func TestConfig_Validate_ValidInterval(t *testing.T) {
 
 func TestConfig_TTL_Hours(t *testing.T) {
 	cfg := DefaultConfig()
-	
+
 	assert.Equal(t, 3*time.Hour, cfg.TTL())
 
 	cfg.Global.TTLHours = 1
@@ -287,7 +287,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 
 func TestConfig_DefaultLabels(t *testing.T) {
 	cfg := DefaultConfig()
-	
+
 	expectedLabels := []string{
 		"src_ip",
 		"dst_ip",
@@ -302,7 +302,7 @@ func TestConfig_DefaultLabels(t *testing.T) {
 
 func TestConfig_OptionalLabels(t *testing.T) {
 	cfg := DefaultConfig()
-	
+
 	expectedLabels := []string{
 		"src_network",
 		"dst_network",
@@ -314,14 +314,14 @@ func TestConfig_OptionalLabels(t *testing.T) {
 
 func TestConfig_LoggingDefaults(t *testing.T) {
 	cfg := DefaultConfig()
-	
+
 	assert.Equal(t, "info", cfg.Logging.Level)
 	assert.Equal(t, "json", cfg.Logging.Format)
 }
 
 func TestConfig_DiscoveryDefaults(t *testing.T) {
 	cfg := DefaultConfig()
-	
+
 	assert.True(t, cfg.Discovery.Traceroute.Enabled)
 	assert.Equal(t, 10, cfg.Discovery.Traceroute.TopN)
 	assert.Equal(t, "both", cfg.Discovery.Traceroute.Mode)

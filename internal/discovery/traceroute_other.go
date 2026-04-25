@@ -19,7 +19,7 @@ type TracerouteConfig struct {
 	StartTTL     int           `json:"start_ttl"`
 	Protocol     string        `json:"protocol"` // icmp, udp, tcp
 	DstPort      int           `json:"dst_port"`
-	SrcPort      int           `json:"src_port"` // Source port for TCP traceroute
+	SrcPort      int           `json:"src_port"`  // Source port for TCP traceroute
 	TCPFlags     string        `json:"tcp_flags"` // TCP flags for probes
 }
 

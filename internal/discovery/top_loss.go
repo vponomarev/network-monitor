@@ -8,11 +8,11 @@ import (
 
 // LossPair represents a source-destination pair with loss statistics
 type LossPair struct {
-	SrcIP       string    `json:"src_ip"`
-	DstIP       string    `json:"dst_ip"`
-	LossCount   uint64    `json:"loss_count"`
-	LastSeen    time.Time `json:"last_seen"`
-	LossRate    float64   `json:"loss_rate"` // losses per second
+	SrcIP     string    `json:"src_ip"`
+	DstIP     string    `json:"dst_ip"`
+	LossCount uint64    `json:"loss_count"`
+	LastSeen  time.Time `json:"last_seen"`
+	LossRate  float64   `json:"loss_rate"` // losses per second
 }
 
 // LossTracker tracks loss statistics for IP pairs

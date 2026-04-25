@@ -9,13 +9,13 @@ import (
 
 // Hop represents a single hop in a network path
 type Hop struct {
-	TTL       int           `json:"ttl"`
-	IP        net.IP        `json:"ip"`
-	Hostname  string        `json:"hostname,omitempty"`
-	RTT       time.Duration `json:"rtt,omitempty"`
-	Lost      bool          `json:"lost"`
-	Device    string        `json:"device,omitempty"`
-	Layer     string        `json:"layer,omitempty"`
+	TTL      int           `json:"ttl"`
+	IP       net.IP        `json:"ip"`
+	Hostname string        `json:"hostname,omitempty"`
+	RTT      time.Duration `json:"rtt,omitempty"`
+	Lost     bool          `json:"lost"`
+	Device   string        `json:"device,omitempty"`
+	Layer    string        `json:"layer,omitempty"`
 }
 
 // Path represents a complete network path between two hosts
@@ -34,27 +34,27 @@ func (p *Path) PathID() string {
 
 // Bottleneck represents a network bottleneck
 type Bottleneck struct {
-	HopIP      string  `json:"hop_ip"`
-	HopTTL     int     `json:"hop_ttl"`
-	Device     string  `json:"device,omitempty"`
-	LossPercent float64 `json:"loss_percent"`
-	RTTAvg     time.Duration `json:"rtt_avg"`
+	HopIP       string        `json:"hop_ip"`
+	HopTTL      int           `json:"hop_ttl"`
+	Device      string        `json:"device,omitempty"`
+	LossPercent float64       `json:"loss_percent"`
+	RTTAvg      time.Duration `json:"rtt_avg"`
 }
 
 // Tracerouter defines the interface for running traceroutes
 type Tracerouter interface {
 	// Run executes a traceroute from src to dst
 	Run(ctx context.Context, src, dst string) (*Path, error)
-	
+
 	// RunWithTimeout executes a traceroute with custom timeout
 	RunWithTimeout(ctx context.Context, src, dst string, timeout time.Duration) (*Path, error)
 }
 
 // DefaultTracerouter implements Tracerouter using system traceroute
 type DefaultTracerouter struct {
-	maxHops   int
-	timeout   time.Duration
-	probes    int
+	maxHops int
+	timeout time.Duration
+	probes  int
 }
 
 // NewDefaultTracerouter creates a new tracerouter with default settings

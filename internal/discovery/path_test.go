@@ -144,7 +144,7 @@ func TestFindBottleneck(t *testing.T) {
 				},
 			},
 			wantNil:  false,
-			wantHop:  3,  // The bottleneck is at the last lost hop (highest loss %)
+			wantHop:  3,     // The bottleneck is at the last lost hop (highest loss %)
 			wantLoss: 66.67, // 2/3 hops lost
 		},
 	}

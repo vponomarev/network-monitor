@@ -12,14 +12,14 @@ import (
 
 // DiscoveryService coordinates path discovery
 type DiscoveryService struct {
-	mu           sync.RWMutex
-	tracerouter  Tracerouter
-	cache        *PathCache
-	lossTracker  *LossTracker
-	topN         int
-	mode         string // both, top_loss, on_demand, periodic
-	interval     time.Duration
-	stopCh       chan struct{}
+	mu          sync.RWMutex
+	tracerouter Tracerouter
+	cache       *PathCache
+	lossTracker *LossTracker
+	topN        int
+	mode        string // both, top_loss, on_demand, periodic
+	interval    time.Duration
+	stopCh      chan struct{}
 }
 
 // DiscoveryRequest represents an API discovery request
@@ -30,14 +30,14 @@ type DiscoveryRequest struct {
 
 // DiscoveryResponse represents an API discovery response
 type DiscoveryResponse struct {
-	PathID      string     `json:"path_id"`
-	SrcIP       string     `json:"src_ip"`
-	DstIP       string     `json:"dst_ip"`
-	Hops        []Hop      `json:"hops"`
-	Bottleneck  *Bottleneck `json:"bottleneck,omitempty"`
-	Discovered  time.Time  `json:"discovered"`
-	TotalLoss   float64    `json:"total_loss"`
-	AvgRTT      string     `json:"avg_rtt"`
+	PathID     string      `json:"path_id"`
+	SrcIP      string      `json:"src_ip"`
+	DstIP      string      `json:"dst_ip"`
+	Hops       []Hop       `json:"hops"`
+	Bottleneck *Bottleneck `json:"bottleneck,omitempty"`
+	Discovered time.Time   `json:"discovered"`
+	TotalLoss  float64     `json:"total_loss"`
+	AvgRTT     string      `json:"avg_rtt"`
 }
 
 // NewDiscoveryService creates a new discovery service
@@ -171,14 +171,14 @@ func (s *DiscoveryService) pathToResponse(path *Path) *DiscoveryResponse {
 	bottleneck := FindBottleneck(path)
 
 	return &DiscoveryResponse{
-		PathID:      path.PathID(),
-		SrcIP:       path.SrcIP.String(),
-		DstIP:       path.DstIP.String(),
-		Hops:        path.Hops,
-		Bottleneck:  bottleneck,
-		Discovered:  path.Discovered,
-		TotalLoss:   path.TotalLoss(),
-		AvgRTT:      path.AvgRTT().String(),
+		PathID:     path.PathID(),
+		SrcIP:      path.SrcIP.String(),
+		DstIP:      path.DstIP.String(),
+		Hops:       path.Hops,
+		Bottleneck: bottleneck,
+		Discovered: path.Discovered,
+		TotalLoss:  path.TotalLoss(),
+		AvgRTT:     path.AvgRTT().String(),
 	}
 }
 

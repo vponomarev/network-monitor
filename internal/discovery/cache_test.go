@@ -89,15 +89,15 @@ func TestPathCache_Cleanup(t *testing.T) {
 
 	// Add expired path
 	cache.Set(&Path{
-		SrcIP: mustParseIP("192.168.1.1"),
-		DstIP: mustParseIP("192.168.1.2"),
+		SrcIP:      mustParseIP("192.168.1.1"),
+		DstIP:      mustParseIP("192.168.1.2"),
 		Discovered: time.Now().Add(-1 * time.Hour), // Expired
 	})
 
 	// Add valid path
 	cache.Set(&Path{
-		SrcIP: mustParseIP("192.168.1.3"),
-		DstIP: mustParseIP("192.168.1.4"),
+		SrcIP:      mustParseIP("192.168.1.3"),
+		DstIP:      mustParseIP("192.168.1.4"),
 		Discovered: time.Now(),
 	})
 
@@ -116,8 +116,8 @@ func TestPathCache_StartCleanup(t *testing.T) {
 
 	// Add expired path
 	cache.Set(&Path{
-		SrcIP: mustParseIP("192.168.1.1"),
-		DstIP: mustParseIP("192.168.1.2"),
+		SrcIP:      mustParseIP("192.168.1.1"),
+		DstIP:      mustParseIP("192.168.1.2"),
 		Discovered: time.Now().Add(-1 * time.Hour),
 	})
 
@@ -134,7 +134,7 @@ func TestPathCache_GetAll(t *testing.T) {
 
 	path1 := &Path{SrcIP: mustParseIP("192.168.1.1"), DstIP: mustParseIP("192.168.1.2"), Discovered: time.Now()}
 	path2 := &Path{SrcIP: mustParseIP("192.168.1.3"), DstIP: mustParseIP("192.168.1.4"), Discovered: time.Now()}
-	
+
 	cache.Set(path1)
 	cache.Set(path2)
 
@@ -147,8 +147,8 @@ func TestPathCache_GetOrLoad_FromCache(t *testing.T) {
 
 	// Pre-populate cache
 	path := &Path{
-		SrcIP: mustParseIP("192.168.1.1"),
-		DstIP: mustParseIP("192.168.1.2"),
+		SrcIP:      mustParseIP("192.168.1.1"),
+		DstIP:      mustParseIP("192.168.1.2"),
 		Discovered: time.Now(),
 	}
 	cache.Set(path)
@@ -170,8 +170,8 @@ func TestPathCache_GetOrLoad_FromLoader(t *testing.T) {
 
 	loadCalled := false
 	expectedPath := &Path{
-		SrcIP: mustParseIP("192.168.1.1"),
-		DstIP: mustParseIP("192.168.1.2"),
+		SrcIP:      mustParseIP("192.168.1.1"),
+		DstIP:      mustParseIP("192.168.1.2"),
 		Discovered: time.Now(),
 	}
 	loader := func() (*Path, error) {

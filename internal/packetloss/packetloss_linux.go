@@ -34,7 +34,7 @@ type Monitor struct {
 	logger *zap.Logger
 
 	// Statistics per interface
-	mu   sync.RWMutex
+	mu    sync.RWMutex
 	stats map[string]*interfaceStats
 
 	// Event channel for notifications
@@ -188,9 +188,9 @@ func (m *Monitor) checkAndSendAlert(iface string, lossPercent float64, stats *in
 	stats.lastAlert = now
 
 	event := events.Event{
-		Type:       EventTypePacketLoss,
-		Timestamp:  now,
-		Source:     "packetloss",
+		Type:      EventTypePacketLoss,
+		Timestamp: now,
+		Source:    "packetloss",
 		Data: map[string]interface{}{
 			"interface":    iface,
 			"loss_percent": lossPercent,

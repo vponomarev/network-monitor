@@ -166,7 +166,7 @@ func (m *Monitor) sendSlowAlert(result *QueryResult) {
 		Timestamp: result.Timestamp,
 		Source:    "dns",
 		Data: map[string]interface{}{
-			"domain":    result.Domain,
+			"domain":     result.Domain,
 			"latency_ms": result.Latency.Milliseconds(),
 		},
 	}
