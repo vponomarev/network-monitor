@@ -1,0 +1,26 @@
+[Unit]
+Description=Network Monitor - Connection Tracker (eBPF)
+Documentation=https://github.com/vponomarev/network-monitor
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/conntrack --config /etc/netmon/config.yaml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/netmon
+
+# eBPF requirements
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_PERFMON CAP_SYS_RESOURCE
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_PERFMON CAP_SYS_RESOURCE
+
+[Install]
+WantedBy=multi-user.target

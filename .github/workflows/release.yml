@@ -1,0 +1,345 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags (v1.0.0, v1.2.3, etc.)
+
+env:
+  GO_VERSION: '1.21'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  # =====================
+  # Validate Tag
+  # =====================
+  validate:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Validate version tag
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+          
+          # Check if prerelease (contains -alpha, -beta, -rc)
+          if [[ "$TAG" =~ -(alpha|beta|rc) ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+  # =====================
+  # Build Binaries
+  # =====================
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    needs: [validate]
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: darwin
+            arch: amd64
+          - os: darwin
+            arch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
+            go build -ldflags="-s -w \
+              -X main.Version=${VERSION} \
+              -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+              -X main.GitCommit=$(git rev-parse --short HEAD)" \
+            -o netmon-${{ matrix.os }}-${{ matrix.arch }} ./cmd/netmon
+
+      - name: Create checksum
+        run: |
+          sha256sum netmon-${{ matrix.os }}-${{ matrix.arch }} > netmon-${{ matrix.os }}-${{ matrix.arch }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netmon-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            netmon-${{ matrix.os }}-${{ matrix.arch }}
+            netmon-${{ matrix.os }}-${{ matrix.arch }}.sha256
+          retention-days: 1
+
+  # =====================
+  # Build Docker Images
+  # =====================
+  docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [validate, build]
+    strategy:
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ !needs.validate.outputs.prerelease }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.validate.outputs.version }}
+
+  # =====================
+  # Create Release
+  # =====================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [validate, build, docker]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          cd artifacts
+          # Flatten structure
+          find . -type f -exec mv {} . \;
+          find . -type d -empty -delete
+          find . -type d -delete
+          ls -la
+
+      - name: Generate changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configuration: |
+            {
+              "categories": [
+                {
+                  "title": "🚀 Features",
+                  "labels": ["feature", "enhancement"]
+                },
+                {
+                  "title": "🐛 Bug Fixes",
+                  "labels": ["bug", "fix"]
+                },
+                {
+                  "title": "📝 Documentation",
+                  "labels": ["documentation"]
+                },
+                {
+                  "title": "🔧 Maintenance",
+                  "labels": ["chore", "refactor"]
+                }
+              ],
+              "ignore_labels": ["skip-changelog"],
+              "template": "${{ github.event.repository.name }} ${{ needs.validate.outputs.version }}\n\n## Changes\n\n${{ github.event.release.body }}\n\n### Commits\n\n${{ steps.changelog.outputs.changelog }}",
+              "pr_template": "- ${{ title }} (#${{ number }})"
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ needs.validate.outputs.version }}
+          body: |
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## 📦 Installation
+
+            ### Linux (amd64)
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/netmon-linux-amd64
+            chmod +x netmon-linux-amd64
+            sudo mv netmon-linux-amd64 /usr/local/bin/netmon
+            ```
+
+            ### Linux (arm64)
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/netmon-linux-arm64
+            chmod +x netmon-linux-arm64
+            sudo mv netmon-linux-arm64 /usr/local/bin/netmon
+            ```
+
+            ### macOS (amd64)
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/netmon-darwin-amd64
+            chmod +x netmon-darwin-amd64
+            sudo mv netmon-darwin-amd64 /usr/local/bin/netmon
+            ```
+
+            ### macOS (arm64/M1/M2)
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/netmon-darwin-arm64
+            chmod +x netmon-darwin-arm64
+            sudo mv netmon-darwin-arm64 /usr/local/bin/netmon
+            ```
+
+            ### Docker
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ needs.validate.outputs.version }}
+            ```
+
+            ## 🔍 Verify Checksums
+
+            ```bash
+            # Download checksum file
+            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/checksums.txt
+
+            # Verify
+            sha256sum -c checksums.txt
+            ```
+
+            ## 📖 Documentation
+
+            - [README](https://github.com/${{ github.repository }}/blob/main/README.md)
+            - [Deployment Guide](https://github.com/${{ github.repository }}/blob/main/docs/SYSTEMD_DEPLOYMENT.md)
+            - [Docker Guide](https://github.com/${{ github.repository }}/blob/main/docs/DOCKER_DEPLOYMENT.md)
+
+            ---
+
+            **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ github.event.release.tag_name }}...${{ needs.validate.outputs.version }}
+          draft: false
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          files: |
+            artifacts/netmon-*
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload checksums
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./artifacts/checksums.txt
+          asset_name: checksums.txt
+          asset_content_type: text/plain
+
+  # =====================
+  # Publish Docker Manifest
+  # =====================
+  docker-manifest:
+    name: Create Docker Manifest
+    runs-on: ubuntu-latest
+    needs: [validate, docker]
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        run: |
+          VERSION=${{ needs.validate.outputs.version }}
+          
+          # Create manifest for version tag
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION} \
+            --amend ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}-amd64 \
+            --amend ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}-arm64
+          
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}
+          
+          # Create manifest for major.minor tag
+          MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)
+          docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${MAJOR_MINOR} \
+            --amend ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}-amd64 \
+            --amend ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}-arm64
+          
+          docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${MAJOR_MINOR}
+          
+          # Create manifest for latest tag (only for stable releases)
+          if [[ ! "$VERSION" =~ -(alpha|beta|rc) ]]; then
+            docker manifest create ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+              --amend ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}-amd64 \
+              --amend ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}-arm64
+          
+            docker manifest push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          fi
+
+  # =====================
+  # Notify
+  # =====================
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [release, docker-manifest]
+    if: always()
+    steps:
+      - name: Check release status
+        run: |
+          if [[ "${{ needs.release.result }}" == "success" ]]; then
+            echo "✅ Release published successfully!"
+            echo "📦 https://github.com/${{ github.repository }}/releases"
+            echo "🐳 ghcr.io/${{ github.repository }}:${{ needs.validate.outputs.version }}"
+          else
+            echo "❌ Release failed"
+            exit 1
+          fi

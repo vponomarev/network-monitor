@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  netmon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: netmon:latest
+    container_name: netmon
+
+    # CRITICAL: Use host network to see host traffic
+    network_mode: host
+
+    # Required capabilities
+    cap_add:
+      - CAP_SYS_ADMIN      # For trace_pipe access
+      - CAP_NET_RAW        # For traceroute (ICMP/UDP/TCP)
+
+    # Mount tracefs from host
+    volumes:
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro
+      - ./config.yaml:/etc/netmon/config.yaml:ro
+      - ./topology.yaml:/etc/netmon/topology.yaml:ro
+      - netmon-data:/var/lib/netmon
+
+    # Environment variables
+    environment:
+      - NETMON_CONFIG=/etc/netmon/config.yaml
+      - TZ=UTC
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9876/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Read-only root filesystem (optional, for extra security)
+    # read_only: true
+    # tmpfs:
+    #   - /tmp
+
+# Named volume for persistent data
+volumes:
+  netmon-data:
+    driver: local

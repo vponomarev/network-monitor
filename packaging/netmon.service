@@ -1,0 +1,52 @@
+[Unit]
+Description=Network Monitor - TCP Packet Loss Tracking
+Documentation=https://github.com/vponomarev/network-monitor
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Binary and config
+ExecStart=/usr/local/bin/netmon --config /etc/netmon/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Environment
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=GOMAXPROCS=2
+
+# Working directory
+WorkingDirectory=/var/lib/netmon
+
+# Security hardening
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=false
+ProtectKernelModules=false
+ProtectControlGroups=false
+
+# Capabilities (required for trace_pipe and raw sockets)
+AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_RAW
+
+# File descriptors
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netmon
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+# Build context
+.git
+.gitignore
+.nessy
+*.md
+!README.md
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Test data
+testdata/
+*.txt
+
+# Local configs
+config.yaml
+locations.yaml
+roles.yaml
+topology.yaml
+
+# Binaries
+bin/
+*.exe
+
+# Docker
+docker-compose*.yml
+!Dockerfile
+
+# Logs
+*.log
+
+# Coverage
+coverage.txt
+coverage.out

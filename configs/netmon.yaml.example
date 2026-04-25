@@ -1,0 +1,64 @@
+# Network Monitor Configuration Example
+# Copy this file to /etc/netmon/config.yaml and customize
+
+# Monitoring module configurations
+monitoring:
+  # Packet loss monitoring via trace_pipe
+  packet_loss:
+    enabled: true
+    interfaces:
+      - eth0
+      - eth1
+    # Alert threshold (percentage)
+    threshold_percent: 1.0
+    # Window size for calculating loss rate
+    window_size: 100
+    # Minimum interval between alerts
+    alert_interval: 1m
+
+  # Connection tracking via eBPF
+  connections:
+    enabled: true
+    track_incoming: true
+    track_outgoing: true
+    # Optional: filter by ports (empty = all ports)
+    filter_ports: []
+
+  # Latency monitoring (ICMP/UDP ping)
+  latency:
+    enabled: true
+    targets:
+      - 8.8.8.8
+      - 1.1.1.1
+      - 208.67.222.222
+    interval: 10s
+    timeout: 5s
+
+  # Bandwidth monitoring via /proc/net/dev
+  bandwidth:
+    enabled: true
+    interfaces:
+      - eth0
+      - eth1
+    interval: 5s
+
+  # DNS query monitoring
+  dns:
+    enabled: true
+    interfaces:
+      - eth0
+    port: 53
+    interval: 30s
+
+# Metrics export configuration
+metrics:
+  prometheus:
+    enabled: true
+    port: 9090
+    path: /metrics
+
+# Logging configuration
+logging:
+  level: info  # debug, info, warn, error
+  format: json  # json, console
+  # output: /var/log/netmon/netmon.log  # empty = stdout

@@ -1,0 +1,66 @@
+# Roles Configuration Example
+# Maps IP ranges to logical roles
+
+roles:
+  # Storage servers
+  - network: 10.179.64.32/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.5/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.8/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.9/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.19/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.21/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.23/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.24/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.25/32
+    role: s3-dwh05
+    
+  - network: 10.179.64.30/32
+    role: s3-dwh05
+
+  # Load balancers
+  - network: 10.179.65.31/32
+    role: dwh-lb
+    
+  - network: 10.179.65.32/32
+    role: dwh-lb
+    
+  - network: 10.179.65.33/32
+    role: dwh-lb
+    
+  - network: 10.179.65.34/32
+    role: dwh-lb
+    
+  - network: 10.179.65.35/32
+    role: dwh-lb
+    
+  - network: 10.179.65.36/32
+    role: dwh-lb
+
+  # DWH cluster (broader range)
+  - network: 10.179.64.0/22
+    role: dwh-storage
+    
+  - network: 10.181.208.0/22
+    role: dwh-storage
+    
+  - network: 10.198.8.0/22
+    role: dwh-storage
+    
+  - network: 10.218.74.0/24
+    role: dwh-storage

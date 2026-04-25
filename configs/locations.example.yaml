@@ -1,0 +1,43 @@
+# Locations Configuration Example
+# Maps IP ranges to physical locations
+
+locations:
+  # DataCenter 1
+  - network: 10.146.22.0/24
+    location: IX-M4-SM3
+    
+  - network: 10.179.64.0/22
+    location: IX-M5-SM13
+    
+  - network: 10.179.68.0/24
+    location: IX-M5-SM14
+    
+  - network: 10.181.208.0/22
+    location: IX-M3.31
+    
+  - network: 10.198.8.0/22
+    location: DS-402
+    
+  - network: 10.218.74.0/24
+    location: M1-4
+    
+  - network: 10.181.212.0/24
+    location: IX-M3-SM10
+    
+  - network: 10.118.52.0/24
+    location: IX-M4-SM3
+    
+  - network: 10.117.10.0/24
+    location: IX-M4-SM3
+    
+  - network: 10.144.180.0/24
+    location: IX-M5-SM6
+
+  # Specific hosts with hostnames
+  - network: 10.179.65.31/32
+    location: IX-M5-SM13
+    hostname: dwh-lb-01
+    
+  - network: 10.179.65.32/32
+    location: IX-M5-SM13
+    hostname: dwh-lb-02

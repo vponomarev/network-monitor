@@ -1,0 +1,72 @@
+# Configuration for release-changelog-builder-action
+categories:
+  - title: "🚀 Features"
+    labels:
+      - feature
+      - enhancement
+      - new
+  - title: "🐛 Bug Fixes"
+    labels:
+      - bug
+      - fix
+  - title: "📝 Documentation"
+    labels:
+      - documentation
+      - docs
+  - title: "🔧 Maintenance"
+    labels:
+      - chore
+      - refactor
+      - maintenance
+  - title: "⚡ Performance"
+    labels:
+      - performance
+      - optimization
+  - title: "🔒 Security"
+    labels:
+      - security
+  - title: "🧪 Tests"
+    labels:
+      - tests
+      - testing
+  - title: "📦 Dependencies"
+    labels:
+      - dependencies
+      - deps
+
+ignore_labels:
+  - skip-changelog
+  - duplicate
+  - wontfix
+  - invalid
+
+template: |
+  ## What's Changed
+
+  ${{ changes }}
+
+  **Full Changelog**: https://github.com/${{ owner }}/${{ repo }}/compare/${{ fromTag }}...${{ toTag }}
+
+pr_template:
+  - "- ${{ title }} (#${{ number }}) by @${{ author }}"
+
+empty_template:
+  - "- No changes"
+
+label_extractor:
+  - pattern: "^(feat|feature):"
+    target: "feature"
+  - pattern: "^(fix|bug):"
+    target: "bug"
+  - pattern: "^(docs|doc):"
+    target: "documentation"
+  - pattern: "^(chore|maintenance):"
+    target: "chore"
+  - pattern: "^(perf|performance):"
+    target: "performance"
+  - pattern: "^(security|sec):"
+    target: "security"
+  - pattern: "^(test|tests):"
+    target: "tests"
+  - pattern: "^(deps|dependencies):"
+    target: "dependencies"

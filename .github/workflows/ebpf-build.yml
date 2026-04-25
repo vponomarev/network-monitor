@@ -1,0 +1,71 @@
+name: eBPF Build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'bpf/**'
+      - '**.c'
+      - '**.h'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'bpf/**'
+      - '**.c'
+      - '**.h'
+
+jobs:
+  build-ebpf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            libbpf-dev \
+            linux-headers-$(uname -r) \
+            bpftool
+
+      - name: Build eBPF programs
+        run: |
+          cd bpf
+          make
+
+      - name: Verify eBPF objects
+        run: |
+          ls -la bpf/*.o
+          file bpf/*.o
+
+      - name: Upload eBPF artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-objects
+          path: bpf/*.o
+          retention-days: 7
+
+  # Test eBPF on multiple kernel versions (simulated)
+  test-ebpf-compat:
+    runs-on: ubuntu-latest
+    needs: build-ebpf
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download eBPF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf-objects
+          path: bpf/
+
+      - name: Verify eBPF compatibility
+        run: |
+          # Check ELF format
+          file bpf/*.o | grep -q "ELF 64-bit"
+          echo "eBPF objects are valid ELF files"

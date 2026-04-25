@@ -1,0 +1,25 @@
+[Unit]
+Description=Network Monitor - Packet Loss Monitor
+Documentation=https://github.com/vponomarev/network-monitor
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pktloss --config /etc/netmon/config.yaml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/netmon
+
+# trace_pipe access requires CAP_SYS_ADMIN or tracefs mount
+CapabilityBoundingSet=CAP_SYS_ADMIN
+AmbientCapabilities=CAP_SYS_ADMIN
+
+[Install]
+WantedBy=multi-user.target

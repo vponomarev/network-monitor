@@ -1,0 +1,54 @@
+# Network Monitor Configuration Example
+# Copy to config.yaml and customize
+
+global:
+  ttl_hours: 3
+  metrics_port: 9876
+  trace_pipe_path: /sys/kernel/tracing/trace_pipe
+
+metadata:
+  locations:
+    type: file
+    path: locations.yaml
+    
+  roles:
+    type: file
+    path: roles.yaml
+
+discovery:
+  traceroute:
+    enabled: true
+    top_n: 10
+    mode: both  # both | top_loss | on_demand | periodic
+    interval: 5m
+    # Traceroute-specific settings
+    protocol: icmp        # icmp | udp | tcp
+    max_hops: 30          # Maximum TTL
+    timeout: 3s           # Per-probe timeout
+    probes_per_hop: 3     # Probes per TTL value
+    start_ttl: 1          # Starting TTL
+    dst_port: 33434       # Destination port for UDP/TCP traceroute
+    src_port: 0           # Source port (0 = auto) for TCP traceroute
+    tcp_flags: S          # TCP flags: S=SYN, A=ACK, F=FIN, R=RST (for TCP traceroute)
+
+topology:
+  enabled: false          # Enable topology enrichment
+  path: topology.yaml     # Path to topology YAML file
+
+metrics:
+  name: netmon_tcp_loss_total
+  default_labels:
+    - src_ip
+    - dst_ip
+    - src_location
+    - dst_location
+    - src_role
+    - dst_role
+  optional_labels:
+    - src_network
+    - dst_network
+    - path_id
+
+logging:
+  level: info
+  format: json

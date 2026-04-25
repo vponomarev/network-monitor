@@ -1,0 +1,188 @@
+# Network Topology Configuration
+# Defines the network topology for enrichment of metrics and path discovery
+
+devices:
+  # =====================
+  # Super-Spine Layer (Core)
+  # =====================
+  - id: ss-01
+    name: super-spine-01
+    type: super-spine
+    management_ip: 10.0.0.1
+    datacenter: DC1
+    rack: CORE-A1
+    labels:
+      vendor: arista
+      model: DCS-7500E
+      role: core
+
+  - id: ss-02
+    name: super-spine-02
+    type: super-spine
+    management_ip: 10.0.0.2
+    datacenter: DC1
+    rack: CORE-A2
+    labels:
+      vendor: arista
+      model: DCS-7500E
+      role: core
+
+  # =====================
+  # Spine Layer (Aggregation)
+  # =====================
+  - id: spine-01
+    name: spine-01
+    type: spine
+    management_ip: 10.0.1.1
+    datacenter: DC1
+    rack: AGG-A1
+    parent_id: ss-01
+    connected_devices:
+      - ss-01
+      - ss-02
+    labels:
+      vendor: arista
+      model: DCS-7050SX
+
+  - id: spine-02
+    name: spine-02
+    type: spine
+    management_ip: 10.0.1.2
+    datacenter: DC1
+    rack: AGG-A2
+    parent_id: ss-02
+    connected_devices:
+      - ss-01
+      - ss-02
+    labels:
+      vendor: arista
+      model: DCS-7050SX
+
+  # =====================
+  # Leaf Layer (Access)
+  # =====================
+  - id: leaf-01
+    name: leaf-01
+    type: leaf
+    management_ip: 10.0.2.1
+    datacenter: DC1
+    rack: RACK-01
+    parent_id: spine-01
+    connected_devices:
+      - spine-01
+      - spine-02
+    subnets:
+      - 10.179.64.0/24
+    ip_addresses:
+      - 10.179.64.1
+    labels:
+      vendor: arista
+      model: DCS-7050QX
+
+  - id: leaf-02
+    name: leaf-02
+    type: leaf
+    management_ip: 10.0.2.2
+    datacenter: DC1
+    rack: RACK-02
+    parent_id: spine-01
+    connected_devices:
+      - spine-01
+      - spine-02
+    subnets:
+      - 10.179.65.0/24
+    ip_addresses:
+      - 10.179.65.1
+    labels:
+      vendor: arista
+      model: DCS-7050QX
+
+  - id: leaf-03
+    name: leaf-03
+    type: leaf
+    management_ip: 10.0.2.3
+    datacenter: DC1
+    rack: RACK-03
+    parent_id: spine-02
+    connected_devices:
+      - spine-01
+      - spine-02
+    subnets:
+      - 10.181.208.0/24
+    ip_addresses:
+      - 10.181.208.1
+    labels:
+      vendor: arista
+      model: DCS-7050QX
+
+  # =====================
+  # Servers (End Hosts)
+  # =====================
+  - id: srv-dwh-05
+    name: s3-dwh05-01
+    type: server
+    management_ip: 10.179.64.32
+    datacenter: DC1
+    rack: RACK-01
+    parent_id: leaf-01
+    ip_addresses:
+      - 10.179.64.32
+    labels:
+      os: linux
+      application: dwh
+      team: analytics
+
+  - id: srv-dwh-lb
+    name: dwh-lb-01
+    type: loadbalancer
+    management_ip: 10.179.65.31
+    datacenter: DC1
+    rack: RACK-02
+    parent_id: leaf-02
+    ip_addresses:
+      - 10.179.65.31
+    labels:
+      vendor: nginx
+      application: loadbalancer
+
+  - id: srv-storage-01
+    name: storage-01
+    type: server
+    management_ip: 10.181.208.50
+    datacenter: DC1
+    rack: RACK-03
+    parent_id: leaf-03
+    ip_addresses:
+      - 10.181.208.50
+    labels:
+      os: linux
+      application: ceph
+      role: storage
+
+  # =====================
+  # Network Services
+  # =====================
+  - id: fw-01
+    name: firewall-01
+    type: firewall
+    management_ip: 10.0.10.1
+    datacenter: DC1
+    rack: SEC-01
+    connected_devices:
+      - ss-01
+    labels:
+      vendor: paloalto
+      model: PA-5200
+
+  - id: rtr-edge-01
+    name: edge-router-01
+    type: router
+    management_ip: 10.0.100.1
+    datacenter: DC1
+    rack: EDGE-01
+    connected_devices:
+      - ss-01
+      - ss-02
+    labels:
+      vendor: juniper
+      model: MX960

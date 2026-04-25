@@ -1,0 +1,78 @@
+run:
+  timeout: 5m
+  tests: true
+
+output:
+  formats:
+    - format: colored-line-number
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - nakedret
+    - unconvert
+    - unparam
+    - whitespace
+    - bodyclose
+    - contextcheck
+    - errname
+    - errorlint
+    - exportloopref
+    - gocritic
+    - gosec
+    - nilerr
+    - noctx
+    - predeclared
+    - revive
+    - tenv
+    - tparallel
+    - usestdlibvars
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment
+      - shadow
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - dupImport
+  gosec:
+    excludes:
+      - G304  # File path provided as variable (acceptable for our use case)
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - disableStutteringCheck
+      - name: var-naming
+        arguments:
+          - ["ID", "API", "URL", "eBPF"]
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - unparam
+    - path: internal/conntrack/ebpf
+      linters:
+        - unused
+  max-issues-per-linter: 0
+  max-same-issues: 0
