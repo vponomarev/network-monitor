@@ -1,0 +1,135 @@
+# Prometheus alert rules for Network Monitor
+# Include this file in prometheus.yml rule_files section
+
+groups:
+  # =============================================================================
+  # TCP Loss Alerts
+  # =============================================================================
+  - name: network_monitor_tcp_loss
+    interval: 30s
+    rules:
+      - alert: HighTCPLossRate
+        expr: sum(rate(netmon_tcp_loss_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High TCP loss rate detected"
+          description: "TCP retransmit rate is {{ $value }}/sec (threshold: 100/sec)"
+
+      - alert: CriticalTCPLossRate
+        expr: sum(rate(netmon_tcp_loss_total[5m])) > 500
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical TCP loss rate detected"
+          description: "TCP retransmit rate is {{ $value }}/sec (threshold: 500/sec)"
+
+      - alert: HighLossForLocationPair
+        expr: sum by (src_location, dst_location) (rate(netmon_tcp_loss_total[5m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High TCP loss between {{ $labels.src_location }} and {{ $labels.dst_location }}"
+          description: "TCP retransmit rate is {{ $value }}/sec for this location pair"
+
+  # =============================================================================
+  # Discovery Alerts
+  # =============================================================================
+  - name: network_monitor_discovery
+    interval: 30s
+    rules:
+      - alert: DiscoveryNotRunning
+        expr: time() - netmon_discovery_last_run_seconds > 600
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network discovery has not run recently"
+          description: "Last discovery run was {{ $value | humanizeDuration }} ago"
+
+      - alert: HighPathBottleneckLoss
+        expr: netmon_path_bottleneck_loss_percent > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High bottleneck loss on path {{ $labels.src_ip }} → {{ $labels.dst_ip }}"
+          description: "Bottleneck loss is {{ $value }}% at hop {{ $labels.bottleneck_ip }}"
+
+      - alert: CriticalPathBottleneckLoss
+        expr: netmon_path_bottleneck_loss_percent > 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical bottleneck loss on path {{ $labels.src_ip }} → {{ $labels.dst_ip }}"
+          description: "Bottleneck loss is {{ $value }}% at hop {{ $labels.bottleneck_ip }}"
+
+  # =============================================================================
+  # Connection Tracking Alerts
+  # =============================================================================
+  - name: network_monitor_conntrack
+    interval: 30s
+    rules:
+      - alert: HighPendingConnections
+        expr: conntrack_connections{state="pending_outgoing"} > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of pending outgoing connections"
+          description: "{{ $value }} connections stuck in SYN_SENT state"
+
+      - alert: ConnectionHandshakeSlow
+        expr: histogram_quantile(0.95, rate(conntrack_handshake_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TCP handshake is slow"
+          description: "95th percentile handshake time is {{ $value | humanizeDuration }}"
+
+      - alert: HighConnectionFailureRate
+        expr: sum(rate(conntrack_events_total{event="FAILED"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High connection failure rate"
+          description: "{{ $value }} connection failures per second"
+
+  # =============================================================================
+  # System Alerts
+  # =============================================================================
+  - name: network_monitor_system
+    interval: 30s
+    rules:
+      - alert: NetmonTargetDown
+        expr: up{job="netmon"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Netmon target is down"
+          description: "Netmon instance {{ $labels.instance }} is not reachable"
+
+      - alert: ConntrackTargetDown
+        expr: up{job="conntrack"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Conntrack target is down"
+          description: "Conntrack instance {{ $labels.instance }} is not reachable"
+
+      - alert: NetmonHighRestartRate
+        expr: increase(netmon_config_reload_total[1h]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Netmon is restarting frequently"
+          description: "Netmon has restarted {{ $value }} times in the last hour"

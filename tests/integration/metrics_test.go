@@ -7,60 +7,87 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vponomarev/network-monitor/internal/config"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/vponomarev/network-monitor/internal/metadata"
 	"github.com/vponomarev/network-monitor/internal/metrics"
 	"go.uber.org/zap"
 )
 
-// TestMetrics_Integration tests Prometheus metrics endpoint
-func TestMetrics_Integration(t *testing.T) {
+// TestMetrics_Server_Integration tests Prometheus metrics server
+func TestMetrics_Server_Integration(t *testing.T) {
 	logger := zap.NewNop()
-	cfg := config.PrometheusConfig{
-		Enabled: true,
-		Port:    19100,
-		Path:    "/metrics",
+
+	// Create exporter
+	locationMatcher := metadata.NewEmptyLocationMatcher()
+	roleMatcher := metadata.NewEmptyRoleMatcher()
+	exporter := metrics.NewExporter("test_metric", locationMatcher, roleMatcher, logger)
+
+	// Create registry
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(exporter)
+
+	// Start HTTP server
+	port := 19101
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	server := &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
 	}
 
-	server := metrics.NewServer(cfg.Port, logger)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	err := server.Start(ctx)
-	require.NoError(t, err)
+	// Start server in background
+	go func() {
+		_ = server.ListenAndServe()
+	}()
 
 	// Wait for server to start
 	<-time.After(100 * time.Millisecond)
 
 	// Test metrics endpoint
-	resp, err := http.Get("http://localhost:19100/metrics")
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/metrics", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Test health endpoint
-	resp, err = http.Get("http://localhost:19100/health")
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/health", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	cancel()
+	// Shutdown server
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
 }
 
 // TestMetrics_Record tests metric recording
 func TestMetrics_Record(t *testing.T) {
-	// Record various metrics
-	metrics.RecordPacketLoss("eth0", true, 1.5)
-	metrics.RecordPacketLoss("eth0", false, 1.0)
-	metrics.RecordConnection("outgoing", "tcp")
-	metrics.RecordConnection("incoming", "udp")
-	metrics.RecordLatency("8.8.8.8", 50*time.Millisecond)
-	metrics.RecordBandwidth("eth0", "rx", 1024.5)
-	metrics.RecordBandwidth("eth0", "tx", 512.25)
-	metrics.RecordDNSQuery("success", "8.8.8.8", 10*time.Millisecond)
-	metrics.RecordConnectionClose()
+	logger := zap.NewNop()
+	locationMatcher := metadata.NewEmptyLocationMatcher()
+	roleMatcher := metadata.NewEmptyRoleMatcher()
+	
+	// Create a new registry for this test to avoid duplicate registration
+	reg := prometheus.NewRegistry()
+	exporter := metrics.NewExporterWithRegistry("test_metric_record", locationMatcher, roleMatcher, logger, reg)
 
-	// Test passes if no panic
+	// Record some metrics
+	exporter.RecordRetransmit("192.168.1.10", "192.168.1.20")
+	exporter.RecordRetransmit("192.168.1.10", "192.168.1.20")
+	exporter.RecordRetransmit("192.168.1.10", "192.168.1.30")
+
+	// Verify metrics were recorded
+	assert.Equal(t, 2, exporter.GetEventCount())
 }

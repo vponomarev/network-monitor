@@ -141,10 +141,14 @@ func DefaultConfig() *Config {
 		},
 		Discovery: DiscoveryConfig{
 			Traceroute: TracerouteConfig{
-				Enabled:  true,
-				TopN:     10,
-				Mode:     "both",
-				Interval: "5m",
+				Enabled:      true,
+				TopN:         10,
+				Mode:         "both",
+				Interval:     "5m",
+				Protocol:     "icmp",
+				MaxHops:      30,
+				Timeout:      "3s",
+				ProbesPerHop: 3,
 			},
 		},
 		Topology: TopologyConfig{
@@ -201,6 +205,7 @@ func Load(path string) (*Config, error) {
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
+	// Validate global settings
 	if c.Global.MetricsPort < 1 || c.Global.MetricsPort > 65535 {
 		return fmt.Errorf("invalid metrics_port: must be between 1 and 65535")
 	}
@@ -209,13 +214,95 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid ttl_hours: must be at least 1")
 	}
 
+	if c.Global.TracePipePath == "" {
+		return fmt.Errorf("trace_pipe_path is required")
+	}
+
+	// Validate discovery settings
 	validModes := map[string]bool{"both": true, "top_loss": true, "on_demand": true, "periodic": true}
 	if !validModes[c.Discovery.Traceroute.Mode] {
-		return fmt.Errorf("invalid discovery mode: %s", c.Discovery.Traceroute.Mode)
+		return fmt.Errorf("invalid discovery mode: %s (valid: both, top_loss, on_demand, periodic)", c.Discovery.Traceroute.Mode)
 	}
 
 	if _, err := time.ParseDuration(c.Discovery.Traceroute.Interval); err != nil {
 		return fmt.Errorf("invalid discovery interval: %w", err)
+	}
+
+	if c.Discovery.Traceroute.TopN < 1 || c.Discovery.Traceroute.TopN > 100 {
+		return fmt.Errorf("invalid traceroute top_n: must be between 1 and 100")
+	}
+
+	// Validate traceroute protocol
+	validProtocols := map[string]bool{"icmp": true, "udp": true, "tcp": true}
+	if !validProtocols[c.Discovery.Traceroute.Protocol] {
+		return fmt.Errorf("invalid traceroute protocol: %s (valid: icmp, udp, tcp)", c.Discovery.Traceroute.Protocol)
+	}
+
+	if c.Discovery.Traceroute.MaxHops < 1 || c.Discovery.Traceroute.MaxHops > 64 {
+		return fmt.Errorf("invalid traceroute max_hops: must be between 1 and 64")
+	}
+
+	if _, err := time.ParseDuration(c.Discovery.Traceroute.Timeout); err != nil {
+		return fmt.Errorf("invalid traceroute timeout: %w", err)
+	}
+
+	if c.Discovery.Traceroute.ProbesPerHop < 1 || c.Discovery.Traceroute.ProbesPerHop > 10 {
+		return fmt.Errorf("invalid traceroute probes_per_hop: must be between 1 and 10")
+	}
+
+	// Validate metadata paths
+	if c.Metadata.Locations.Path == "" {
+		return fmt.Errorf("metadata.locations.path is required")
+	}
+
+	if c.Metadata.Roles.Path == "" {
+		return fmt.Errorf("metadata.roles.path is required")
+	}
+
+	// Validate topology path if enabled
+	if c.Topology.Enabled && c.Topology.Path == "" {
+		return fmt.Errorf("topology.path is required when topology is enabled")
+	}
+
+	// Validate logging settings
+	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if !validLogLevels[c.Logging.Level] {
+		return fmt.Errorf("invalid logging level: %s (valid: debug, info, warn, error)", c.Logging.Level)
+	}
+
+	validLogFormats := map[string]bool{"json": true, "console": true}
+	if !validLogFormats[c.Logging.Format] {
+		return fmt.Errorf("invalid logging format: %s (valid: json, console)", c.Logging.Format)
+	}
+
+	// Validate packet loss config
+	if c.PacketLoss.Enabled {
+		if c.PacketLoss.ThresholdPercent < 0 || c.PacketLoss.ThresholdPercent > 100 {
+			return fmt.Errorf("invalid packet_loss threshold_percent: must be between 0 and 100")
+		}
+		if c.PacketLoss.WindowSize < 10 || c.PacketLoss.WindowSize > 1000 {
+			return fmt.Errorf("invalid packet_loss window_size: must be between 10 and 1000")
+		}
+	}
+
+	// Validate latency config
+	if c.Latency.Enabled {
+		if len(c.Latency.Targets) == 0 {
+			return fmt.Errorf("latency.targets is required when latency is enabled")
+		}
+		if _, err := time.ParseDuration(c.Latency.Interval); err != nil {
+			return fmt.Errorf("invalid latency interval: %w", err)
+		}
+	}
+
+	// Validate bandwidth config
+	if c.Bandwidth.Enabled {
+		if len(c.Bandwidth.Interfaces) == 0 {
+			return fmt.Errorf("bandwidth.interfaces is required when bandwidth is enabled")
+		}
+		if _, err := time.ParseDuration(c.Bandwidth.Interval); err != nil {
+			return fmt.Errorf("invalid bandwidth interval: %w", err)
+		}
 	}
 
 	return nil

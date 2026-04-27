@@ -1,0 +1,107 @@
+# Prometheus configuration for Network Monitor
+# This configuration scrapes metrics from netmon and conntrack applications
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'network-monitor'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Rule files (optional)
+# rule_files:
+#   - "alerts/*.yml"
+
+scrape_configs:
+  # =============================================================================
+  # Network Monitor (netmon)
+  # =============================================================================
+  - job_name: 'netmon'
+    static_configs:
+      - targets: ['localhost:9876']
+        labels:
+          application: 'netmon'
+          component: 'monitoring'
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # =============================================================================
+  # Connection Tracker (conntrack)
+  # =============================================================================
+  - job_name: 'conntrack'
+    static_configs:
+      - targets: ['localhost:9876']
+        labels:
+          application: 'conntrack'
+          component: 'tracking'
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # =============================================================================
+  # Prometheus self-monitoring (optional)
+  # =============================================================================
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          application: 'prometheus'
+          component: 'metrics'
+    scrape_interval: 15s
+
+  # =============================================================================
+  # Node Exporter (optional - for system metrics)
+  # =============================================================================
+  # - job_name: 'node'
+  #   static_configs:
+  #     - targets: ['localhost:9100']
+  #       labels:
+  #         application: 'node'
+  #         component: 'system'
+  #   scrape_interval: 15s
+
+  # =============================================================================
+  # Dynamic service discovery (optional - for Docker/Kubernetes)
+  # =============================================================================
+  
+  # Docker daemon discovery (requires Docker socket)
+  # - job_name: 'docker'
+  #   docker_sd_configs:
+  #     - host: unix:///var/run/docker.sock
+  #       refresh_interval: 5s
+  #       filters:
+  #         - name: label
+  #           values: ["com.network-monitor.app"]
+  #   relabel_configs:
+  #     - source_labels: [__meta_docker_container_name]
+  #       regex: '/(.*)'
+  #       target_label: container
+  #     - source_labels: [__meta_docker_container_label_com_network_monitor_app]
+  #       target_label: application
+
+  # Kubernetes service discovery (for K8s deployments)
+  # - job_name: 'kubernetes-pods'
+  #   kubernetes_sd_configs:
+  #     - role: pod
+  #   relabel_configs:
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+  #       action: keep
+  #       regex: true
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+  #       action: replace
+  #       target_label: __metrics_path__
+  #       regex: (.+)
+  #     - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+  #       action: replace
+  #       regex: ([^:]+)(?::\d+)?;(\d+)
+  #       replacement: $${1}:$${2}
+  #       target_label: __address__
+  #     - source_labels: [__meta_kubernetes_pod_label_app]
+  #       target_label: application

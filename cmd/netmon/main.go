@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vponomarev/network-monitor/internal/collector"
 	"github.com/vponomarev/network-monitor/internal/config"
+	"github.com/vponomarev/network-monitor/internal/conntrack"
 	"github.com/vponomarev/network-monitor/internal/discovery"
 	"github.com/vponomarev/network-monitor/internal/metadata"
 	"github.com/vponomarev/network-monitor/internal/metrics"
@@ -155,6 +156,33 @@ func main() {
 		}
 	}()
 
+	// Start connection tracker (Linux only)
+	var connTracker *conntrack.Tracker
+	if cfg.Connections.Enabled {
+		connCfg := conntrack.Config{
+			TrackIncoming:  cfg.Connections.TrackIncoming,
+			TrackOutgoing: cfg.Connections.TrackOutgoing,
+			TrackCloses:   true,
+			FilterPorts:   cfg.Connections.FilterPorts,
+			SYNTimeout:    30 * time.Second,
+		}
+
+		var err error
+		connTracker, err = conntrack.NewTracker(connCfg, logger)
+		if err != nil {
+			logger.Warn("Failed to create connection tracker", zap.Error(err))
+		} else {
+			go func() {
+				if err := connTracker.Run(ctx); err != nil {
+					logger.Error("Connection tracker error", zap.Error(err))
+				}
+			}()
+			logger.Info("Connection tracker started",
+				zap.Bool("incoming", cfg.Connections.TrackIncoming),
+				zap.Bool("outgoing", cfg.Connections.TrackOutgoing))
+		}
+	}
+
 	// Start HTTP server for metrics and API
 	mux := http.NewServeMux()
 
@@ -185,6 +213,16 @@ func main() {
 
 		logger.Info("Discovery API enabled",
 			zap.String("endpoints", "/api/v1/discover, /api/v1/loss/top"))
+	}
+
+	// Connection tracking API endpoints
+	if connTracker != nil {
+		connAPI := conntrack.NewAPI(connTracker)
+		connMux := connAPI.HTTPHandler()
+		mux.Handle("/api/v1/conntrack/", connMux)
+
+		logger.Info("Connection tracking API enabled",
+			zap.String("endpoints", "/api/v1/conntrack/connections, /api/v1/conntrack/stats"))
 	}
 
 	server := &http.Server{

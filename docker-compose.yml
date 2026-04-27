@@ -1,25 +1,45 @@
 version: '3.8'
 
+# Docker Compose for Network Monitor Suite
+# Supports both netmon (TCP loss monitoring) and conntrack (connection tracking)
+#
+# Usage:
+#   docker-compose up -d           # Start all services
+#   docker-compose up -d netmon    # Start only netmon
+#   docker-compose up -d conntrack # Start only conntrack
+#   docker-compose logs -f         # View logs
+#   docker-compose down            # Stop all services
+
 services:
+  # ==========================================================================
+  # NETMON - TCP Loss Monitoring
+  # ==========================================================================
   netmon:
     build:
       context: .
       dockerfile: Dockerfile
+      target: netmon
+      args:
+        VERSION: ${VERSION:-latest}
+        BUILD_TIME: ${BUILD_TIME:-}
+        GIT_COMMIT: ${GIT_COMMIT:-}
     image: netmon:latest
     container_name: netmon
 
     # CRITICAL: Use host network to see host traffic
     network_mode: host
 
-    # Required capabilities
+    # Required capabilities for trace_pipe and traceroute
     cap_add:
       - CAP_SYS_ADMIN      # For trace_pipe access
       - CAP_NET_RAW        # For traceroute (ICMP/UDP/TCP)
 
-    # Mount tracefs from host
+    # Mount tracefs from host (read-only)
     volumes:
       - /sys/kernel/tracing:/sys/kernel/tracing:ro
       - ./config.yaml:/etc/netmon/config.yaml:ro
+      - ./locations.yaml:/etc/netmon/locations.yaml:ro
+      - ./roles.yaml:/etc/netmon/roles.yaml:ro
       - ./topology.yaml:/etc/netmon/topology.yaml:ro
       - netmon-data:/var/lib/netmon
 
@@ -31,7 +51,7 @@ services:
     # Restart policy
     restart: unless-stopped
 
-    # Logging
+    # Logging configuration
     logging:
       driver: "json-file"
       options:
@@ -60,12 +80,148 @@ services:
     security_opt:
       - no-new-privileges:true
 
-    # Read-only root filesystem (optional, for extra security)
-    # read_only: true
-    # tmpfs:
-    #   - /tmp
+    # Labels for monitoring
+    labels:
+      - "com.network-monitor.app=netmon"
+      - "com.network-monitor.component=monitoring"
 
-# Named volume for persistent data
+  # ==========================================================================
+  # CONNTRACK - Connection Tracking
+  # ==========================================================================
+  conntrack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: conntrack
+      args:
+        VERSION: ${VERSION:-latest}
+        BUILD_TIME: ${BUILD_TIME:-}
+        GIT_COMMIT: ${GIT_COMMIT:-}
+    image: conntrack:latest
+    container_name: conntrack
+
+    # Use host network for connection tracking
+    network_mode: host
+
+    # Required capabilities for eBPF
+    cap_add:
+      - CAP_BPF          # For eBPF programs
+      - CAP_PERFMON      # For eBPF perf events
+      - CAP_NET_RAW      # For raw socket access
+      - CAP_SYS_ADMIN    # For various kernel operations
+
+    # Mount BPF filesystem and syslog
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /var/run/syslog:/var/run/syslog:rw
+      - ./config.yaml:/etc/conntrack/config.yaml:ro
+      - conntrack-data:/var/lib/conntrack
+
+    # Environment variables
+    environment:
+      - CONNTRACK_CONFIG=/etc/conntrack/config.yaml
+      - TZ=UTC
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Health check (check if process is running)
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "conntrack"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 64M
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Labels for monitoring
+    labels:
+      - "com.network-monitor.app=conntrack"
+      - "com.network-monitor.component=tracking"
+
+  # ==========================================================================
+  # PROMETHEUS - Metrics Collection (Optional)
+  # ==========================================================================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: netmon-prometheus
+    profiles:
+      - monitoring
+
+    # Use host network to scrape netmon
+    network_mode: host
+
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+
+    restart: unless-stopped
+
+    labels:
+      - "com.network-monitor.app=prometheus"
+      - "com.network-monitor.component=metrics"
+
+  # ==========================================================================
+  # GRAFANA - Visualization (Optional)
+  # ==========================================================================
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: netmon-grafana
+    profiles:
+      - monitoring
+
+    # Use host network
+    network_mode: host
+
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./prometheus.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - TZ=UTC
+
+    restart: unless-stopped
+
+    labels:
+      - "com.network-monitor.app=grafana"
+      - "com.network-monitor.component=visualization"
+
+# Named volumes for persistent data
 volumes:
   netmon-data:
+    driver: local
+  conntrack-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
     driver: local

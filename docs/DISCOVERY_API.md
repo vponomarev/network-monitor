@@ -1,223 +1,340 @@
-# Discovery API Documentation
+# Discovery API Reference
 
 ## Overview
 
-The Discovery API provides path discovery and analysis capabilities for identifying network bottlenecks.
+The Discovery API provides endpoints for network path discovery and loss analysis. It uses traceroute to discover network paths and identify bottlenecks.
+
+**Base URL:** `http://localhost:9876/api/v1`
+
+---
 
 ## Endpoints
 
-### POST /api/v1/discover
+### 1. Get Top Lossy IP Pairs
 
-Discover the network path between two IP addresses.
+Returns the top N IP pairs with the highest packet loss.
 
 **Request:**
+```http
+GET /api/v1/loss/top?limit=10
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 10 | Maximum number of pairs to return (1-100) |
+
+**Response:**
 ```json
+[
+  {
+    "src_ip": "10.181.208.50",
+    "dst_ip": "10.179.64.39",
+    "loss_count": 1301,
+    "first_seen": "2024-01-15T10:00:00Z",
+    "last_seen": "2024-01-15T10:30:00Z"
+  },
+  {
+    "src_ip": "10.181.208.51",
+    "dst_ip": "10.179.64.40",
+    "loss_count": 856,
+    "first_seen": "2024-01-15T10:05:00Z",
+    "last_seen": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+**Status Codes:**
+- `200 OK` - Success
+- `400 Bad Request` - Invalid limit parameter
+
+---
+
+### 2. Discover Path (On-Demand)
+
+Discovers the network path between two IP addresses using traceroute.
+
+**Request:**
+```http
+POST /api/v1/discover
+Content-Type: application/json
+
 {
-    "src_ip": "192.168.1.10",
-    "dst_ip": "192.168.2.20"
+  "src_ip": "10.181.208.50",
+  "dst_ip": "10.179.64.39"
 }
 ```
+
+**Body Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `src_ip` | string | Yes | Source IP address |
+| `dst_ip` | string | Yes | Destination IP address |
 
 **Response:**
 ```json
 {
-    "path_id": "path-192.168.1.10-192.168.2.20",
-    "src_ip": "192.168.1.10",
-    "dst_ip": "192.168.2.20",
-    "hops": [
-        {
-            "ttl": 1,
-            "ip": "192.168.1.1",
-            "hostname": "leaf-01",
-            "rtt": 1000000,
-            "lost": false,
-            "device": "leaf-dc1-01",
-            "layer": "leaf"
-        },
-        {
-            "ttl": 2,
-            "ip": "10.0.0.1",
-            "hostname": "spine-01",
-            "rtt": 2000000,
-            "lost": false,
-            "device": "spine-dc1-01",
-            "layer": "spine"
-        }
-    ],
-    "bottleneck": {
-        "hop_ip": "10.0.0.1",
-        "hop_ttl": 2,
-        "device": "spine-dc1-01",
-        "loss_percent": 2.5,
-        "rtt_avg": 2000000
+  "path_id": "path-10.181.208.50-10.179.64.39",
+  "src_ip": "10.181.208.50",
+  "dst_ip": "10.179.64.39",
+  "hops": [
+    {
+      "ttl": 1,
+      "ip": "10.181.208.1",
+      "hostname": "leaf-01.local",
+      "rtt_seconds": 0.0005,
+      "loss_percent": 0
     },
-    "discovered": "2024-01-15T10:30:00Z",
-    "total_loss": 2.5,
-    "avg_rtt": "1.5ms"
+    {
+      "ttl": 2,
+      "ip": "10.0.0.1",
+      "hostname": "spine-01.local",
+      "rtt_seconds": 0.0012,
+      "loss_percent": 0
+    },
+    {
+      "ttl": 3,
+      "ip": "10.179.64.1",
+      "hostname": "leaf-03.local",
+      "rtt_seconds": 0.0028,
+      "loss_percent": 2.5
+    }
+  ],
+  "bottleneck": {
+    "hop_ip": "10.179.64.1",
+    "hop_ttl": 3,
+    "loss_percent": 2.5
+  },
+  "total_loss_percent": 2.5,
+  "avg_rtt_seconds": 0.0015,
+  "total_hops": 3,
+  "discovered_at": "2024-01-15T10:30:00Z"
 }
 ```
 
-### GET /api/v1/discover/top
-
-Discover paths for the top N most lossy connection pairs.
-
-**Response:**
-```json
-[
-    {
-        "path_id": "path-192.168.1.10-192.168.2.20",
-        "src_ip": "192.168.1.10",
-        "dst_ip": "192.168.2.20",
-        "hops": [...],
-        "bottleneck": {...},
-        "total_loss": 5.2,
-        "avg_rtt": "2ms"
-    }
-]
-```
-
-### GET /api/v1/loss/top
-
-Get the top N connection pairs by loss count.
-
-**Query Parameters:**
-- `limit` (optional): Number of pairs to return (default: 10)
-
-**Response:**
-```json
-[
-    {
-        "src_ip": "192.168.1.10",
-        "dst_ip": "192.168.2.20",
-        "loss_count": 150,
-        "last_seen": "2024-01-15T10:30:00Z",
-        "loss_rate": 0.5
-    }
-]
-```
-
-## Data Models
-
-### Hop
-
-Represents a single hop in a network path.
-
+**Response Fields:**
 | Field | Type | Description |
 |-------|------|-------------|
-| `ttl` | int | Time To Live (hop number) |
-| `ip` | string | IP address of the hop |
-| `hostname` | string | Reverse DNS hostname (if available) |
-| `rtt` | int | Round-trip time in nanoseconds |
-| `lost` | bool | Whether this hop had packet loss |
-| `device` | string | Network device ID (if known) |
-| `layer` | string | Network layer (leaf, spine, super-spine) |
-
-### Bottleneck
-
-Identifies a network bottleneck.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `hop_ip` | string | IP address of the bottleneck hop |
-| `hop_ttl` | int | TTL of the bottleneck hop |
-| `device` | string | Device ID (if known) |
-| `loss_percent` | float | Packet loss percentage |
-| `rtt_avg` | int | Average RTT in nanoseconds |
-
-### Path
-
-Complete network path between two hosts.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `path_id` | string | Unique identifier |
+| `path_id` | string | Unique identifier for this path |
 | `src_ip` | string | Source IP address |
 | `dst_ip` | string | Destination IP address |
-| `hops` | array | List of hops |
-| `bottleneck` | object | Identified bottleneck (if any) |
-| `discovered` | timestamp | When the path was discovered |
-| `total_loss` | float | Total packet loss percentage |
-| `avg_rtt` | string | Average RTT (human-readable) |
+| `hops` | array | List of hops in the path |
+| `bottleneck` | object | Hop with highest loss |
+| `total_loss_percent` | float | Total packet loss percentage |
+| `avg_rtt_seconds` | float | Average round-trip time |
+| `total_hops` | int | Number of hops discovered |
+| `discovered_at` | string | Timestamp of discovery |
 
-## Caching
+**Status Codes:**
+- `200 OK` - Success
+- `400 Bad Request` - Invalid IP addresses
+- `500 Internal Server Error` - Traceroute failed
 
-Paths are cached to avoid excessive traceroute calls:
+---
 
-- **Default TTL**: 10 minutes
-- **Max cache size**: 1000 paths
-- **Cleanup**: Expired paths removed automatically
+### 3. Get Top Paths
 
-## Discovery Modes
+Returns detailed path information for the top N lossy IP pairs.
 
-| Mode | Description |
-|------|-------------|
-| `top_loss` | Automatically discover paths for top lossy pairs |
-| `on_demand` | Only discover when explicitly requested via API |
-| `periodic` | Run discovery at regular intervals |
-| `both` | Combine `top_loss` and `on_demand` |
+**Request:**
+```http
+GET /api/v1/discover/top?limit=5
+```
+
+**Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 10 | Maximum number of paths to return (1-20) |
+
+**Response:**
+```json
+{
+  "paths": [
+    {
+      "path_id": "path-10.181.208.50-10.179.64.39",
+      "src_ip": "10.181.208.50",
+      "dst_ip": "10.179.64.39",
+      "loss_count": 1301,
+      "hops": [...],
+      "bottleneck": {...}
+    }
+  ],
+  "generated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Status Codes:**
+- `200 OK` - Success
+- `400 Bad Request` - Invalid limit parameter
+
+---
+
+## Traceroute Configuration
+
+The traceroute behavior can be configured in `config.yaml`:
+
+```yaml
+discovery:
+  traceroute:
+    enabled: true
+    top_n: 10
+    mode: both  # both | top_loss | on_demand | periodic
+    interval: 5m
+    
+    # Traceroute-specific settings
+    protocol: icmp        # icmp | udp | tcp
+    max_hops: 30          # Maximum TTL
+    timeout: 3s           # Per-probe timeout
+    probes_per_hop: 3     # Probes per TTL value
+    dst_port: 33434       # Destination port for UDP/TCP
+    tcp_flags: S          # TCP flags for TCP traceroute
+```
+
+### Protocol Selection
+
+| Protocol | Use Case | Firewall Traversal |
+|----------|----------|-------------------|
+| **ICMP** | Internal networks | Poor |
+| **UDP** | Legacy compatibility | Fair |
+| **TCP** | **Production (recommended)** | **Excellent** |
+
+TCP traceroute uses SYN packets that look like normal connection attempts, making it ideal for traversing firewalls.
+
+---
+
+## Metrics
+
+The Discovery service exports the following Prometheus metrics:
+
+```prometheus
+# Total number of discovered paths
+netmon_discovery_paths_total
+
+# Timestamp of last discovery run
+netmon_discovery_last_run_seconds
+
+# Path hop count
+netmon_path_hops{src_ip="...", dst_ip="..."}
+
+# Path RTT in seconds
+netmon_path_rtt_seconds{src_ip="...", dst_ip="..."}
+
+# Bottleneck loss percentage
+netmon_path_bottleneck_loss_percent{src_ip="...", dst_ip="..."}
+```
+
+---
+
+## Error Responses
+
+### 400 Bad Request
+```json
+{
+  "error": "invalid src_ip format"
+}
+```
+
+### 500 Internal Server Error
+```json
+{
+  "error": "traceroute failed: operation not permitted"
+}
+```
+
+---
 
 ## Examples
 
 ### cURL Examples
 
 ```bash
+# Get top lossy pairs
+curl http://localhost:9876/api/v1/loss/top?limit=5
+
 # Discover path
 curl -X POST http://localhost:9876/api/v1/discover \
   -H "Content-Type: application/json" \
-  -d '{"src_ip": "192.168.1.10", "dst_ip": "192.168.2.20"}'
+  -d '{"src_ip": "10.181.208.50", "dst_ip": "10.179.64.39"}'
 
-# Get top lossy paths
-curl http://localhost:9876/api/v1/discover/top
-
-# Get top loss pairs
-curl http://localhost:9876/api/v1/loss/top?limit=20
+# Get top paths
+curl http://localhost:9876/api/v1/discover/top?limit=5
 ```
 
-### Go Examples
+### Python Example
+
+```python
+import requests
+
+# Discover path
+response = requests.post(
+    'http://localhost:9876/api/v1/discover',
+    json={'src_ip': '10.181.208.50', 'dst_ip': '10.179.64.39'}
+)
+
+if response.status_code == 200:
+    path = response.json()
+    print(f"Path has {path['total_hops']} hops")
+    print(f"Bottleneck: {path['bottleneck']['hop_ip']}")
+    print(f"Total loss: {path['total_loss_percent']}%")
+```
+
+### Go Example
 
 ```go
-import "github.com/vponomarev/network-monitor/internal/discovery"
+package main
 
-// Create service
-service := discovery.DefaultDiscoveryService()
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+)
 
-// Discover path
-resp, err := service.Discover(ctx, "192.168.1.10", "192.168.2.20")
+type DiscoverRequest struct {
+    SrcIP string `json:"src_ip"`
+    DstIP string `json:"dst_ip"`
+}
 
-// Get top lossy pairs
-pairs := service.GetLossTracker().GetTopPairs(10)
+type DiscoverResponse struct {
+    PathID          string  `json:"path_id"`
+    SrcIP           string  `json:"src_ip"`
+    DstIP           string  `json:"dst_ip"`
+    TotalHops       int     `json:"total_hops"`
+    TotalLossPercent float64 `json:"total_loss_percent"`
+}
 
-// Record loss (called by collector)
-service.RecordLoss("192.168.1.10", "192.168.2.20")
+func discoverPath(srcIP, dstIP string) (*DiscoverResponse, error) {
+    req := &DiscoverRequest{SrcIP: srcIP, DstIP: dstIP}
+    body, _ := json.Marshal(req)
+    
+    resp, err := http.Post(
+        "http://localhost:9876/api/v1/discover",
+        "application/json",
+        bytes.NewReader(body),
+    )
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var result DiscoverResponse
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, err
+    }
+    
+    return &result, nil
+}
 ```
 
-## Integration with Collector
+---
 
-The discovery service integrates with the trace_pipe collector:
+## Best Practices
 
-```go
-// In main.go
-collector := collector.NewTracePipeCollector(cfg.Global.TracePipePath, exporter, logger)
-exporter.SetDiscoveryService(service)
+1. **Rate Limiting**: Limit on-demand discovery requests to avoid network congestion
+2. **Caching**: Use cached paths when possible (TTL: 10 minutes by default)
+3. **Error Handling**: Always check for error responses and handle gracefully
+4. **Monitoring**: Monitor `netmon_discovery_last_run_seconds` to ensure discovery is running
 
-// When collector detects retransmit:
-exporter.RecordRetransmit(srcIP, dstIP)
-// This also calls:
-service.RecordLoss(srcIP, dstIP)
-```
+---
 
-## Error Handling
-
-| HTTP Status | Meaning |
-|-------------|---------|
-| 200 | Success |
-| 400 | Invalid request (missing fields) |
-| 405 | Method not allowed |
-| 500 | Internal error (traceroute failed) |
-
-## Performance Considerations
-
-- Traceroute operations are expensive (1-5 seconds each)
-- Use caching to reduce duplicate lookups
-- Limit concurrent discovery operations
-- Consider rate limiting for API endpoints
+*API Version: 1.0*
+*Last Updated: 2026-04-27*

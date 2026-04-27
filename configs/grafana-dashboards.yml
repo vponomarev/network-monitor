@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning for Network Monitor
+# Place this file in: /etc/grafana/provisioning/dashboards/
+
+apiVersion: 1
+
+providers:
+  - name: 'Network Monitor'
+    orgId: 1
+    folder: 'Network'
+    folderUid: 'network'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

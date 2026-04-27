@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/vponomarev/network-monitor/internal/bandwidth"
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/internal/dns"
@@ -33,7 +32,7 @@ func TestBandwidth_Integration(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.BandwidthConfig{
 		Interfaces: []string{"lo"},
-		Interval:   100 * time.Millisecond,
+		Interval:   "100ms",
 	}
 
 	monitor := bandwidth.NewMonitor(cfg, logger)
@@ -62,11 +61,13 @@ func TestBandwidth_Integration(t *testing.T) {
 
 // TestLatency_Integration tests latency monitoring with real targets
 func TestLatency_Integration(t *testing.T) {
+	skipIfNotRoot(t)
+	
 	logger := zap.NewNop()
 	cfg := config.LatencyConfig{
 		Targets:  []string{"127.0.0.1"},
-		Interval: 100 * time.Millisecond,
-		Timeout:  500 * time.Millisecond,
+		Interval: "100ms",
+		Timeout:  "500ms",
 	}
 
 	monitor := latency.NewMonitor(cfg, logger)
@@ -91,7 +92,7 @@ func TestLatency_Integration(t *testing.T) {
 func TestDNS_Integration(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := config.DNSConfig{
-		Interval: 100 * time.Millisecond,
+		Interval: "100ms",
 	}
 
 	monitor := dns.NewMonitor(cfg, logger)
@@ -126,7 +127,7 @@ func TestMonitor_Integration(t *testing.T) {
 	// Test bandwidth
 	bwCfg := config.BandwidthConfig{
 		Interfaces: []string{"lo"},
-		Interval:   50 * time.Millisecond,
+		Interval:   "50ms",
 	}
 	bwMonitor := bandwidth.NewMonitor(bwCfg, logger)
 

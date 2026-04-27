@@ -5,89 +5,195 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/vponomarev/network-monitor)](https://goreportcard.com/report/github.com/vponomarev/network-monitor)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Linux network monitoring suite for tracking TCP packet loss using `/sys/kernel/tracing/trace_pipe` with path discovery and traceroute capabilities.
+**Linux network monitoring suite** consisting of two applications:
 
-## Features
+| Application | Description | Technology |
+|-------------|-------------|------------|
+| **netmon** | TCP packet loss monitoring with path discovery | trace_pipe + traceroute |
+| **conntrack** | Connection tracking with eBPF | eBPF kprobes + tracepoints |
 
-- **TCP Retransmit Tracking** - Real-time monitoring via trace_pipe
-- **Path Discovery** - Automatic network path discovery with traceroute
-- **Traceroute Support** - ICMP, UDP, and TCP traceroute (firewall-friendly)
-- **Location/Role Mapping** - Best-match IP to location/role lookup
-- **Prometheus Metrics** - Export to Prometheus with rich labels
-- **HTTP API** - RESTful API for path discovery and loss analysis
-- **Grafana Dashboard** - Ready-to-use dashboard included
-- **SIGHUP Reload** - Reload configuration without restart
+---
 
-## Quick Start
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Quick Start](#-quick-start)
+- [Architecture](#-architecture)
+- [Installation](#-installation)
+- [Configuration](#-configuration)
+- [API Reference](#-api-reference)
+- [Metrics](#-metrics)
+- [Documentation](#-documentation)
+- [Development](#-development)
+
+---
+
+## ✨ Features
+
+### Netmon (TCP Loss Monitoring)
+
+- **TCP Retransmit Tracking** — Real-time monitoring via `/sys/kernel/tracing/trace_pipe`
+- **Path Discovery** — Automatic network path discovery with traceroute (ICMP/UDP/TCP)
+- **Location/Role Mapping** — Best-match IP to location/role lookup
+- **Prometheus Metrics** — Export with rich labels (location, role, network)
+- **HTTP API** — RESTful API for path discovery and loss analysis
+- **Grafana Dashboard** — Ready-to-use dashboard included
+- **SIGHUP Reload** — Reload configuration without restart
+
+### Conntrack (Connection Tracking)
+
+- **TCP Handshake Tracking** — Monitor SYN → SYN+ACK → ESTABLISHED
+- **Incoming/Outgoing** — Separate tracking by direction
+- **Process Identification** — Track which process owns each connection
+- **Syslog Logging** — Structured messages in RFC 5424 format
+- **Prometheus Metrics** — Connection states, events, bytes, duration
+- **HTTP API** — View active connections and statistics
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Linux kernel with tracefs support
-- Go 1.21+ (for building)
-- Root access (for trace_pipe)
+- Linux kernel 4.9+ (for eBPF support)
+- Go 1.24+ (for building)
+- Root access (for trace_pipe and eBPF)
 - Docker (optional, for containerized deployment)
 
-### Installation
-
-#### Option 1: Build from Source
+### Option 1: Docker Compose (Recommended)
 
 ```bash
-# Mount tracefs (if not already mounted)
-sudo mount -t tracefs none /sys/kernel/tracing
-
-# Build
-make build
+# Clone repository
+git clone https://github.com/vponomarev/network-monitor.git
+cd network-monitor
 
 # Copy example configs
 cp configs/*.yaml .
-```
 
-#### Option 2: Docker (Recommended for Production)
-
-```bash
-# Build image
-docker build -t netmon:latest .
-
-# Run with required capabilities
-docker run -d \
-  --name netmon \
-  --network host \
-  --cap-add CAP_SYS_ADMIN \
-  --cap-add CAP_NET_RAW \
-  -v /sys/kernel/tracing:/sys/kernel/tracing:ro \
-  -v $(pwd)/config.yaml:/etc/netmon/config.yaml:ro \
-  netmon:latest
-
-# Or use Docker Compose
+# Start services
 docker-compose up -d
+
+# View logs
+docker-compose logs -f netmon
 ```
 
-#### Option 3: Kubernetes
+### Option 2: Binary Installation
 
 ```bash
-# Deploy DaemonSet
-kubectl apply -f k8s/daemonset.yaml
-kubectl apply -f k8s/configmap.yaml
+# Download latest release
+wget https://github.com/vponomarev/network-monitor/releases/latest/download/netmon-linux-amd64
+chmod +x netmon-linux-amd64
+sudo mv netmon-linux-amd64 /usr/local/bin/netmon
+
+# Mount tracefs
+sudo mount -t tracefs none /sys/kernel/tracing
+
+# Run with config
+sudo netmon --config config.yaml
 ```
 
-#### Option 4: Systemd (Production Linux)
+### Option 3: Build from Source
 
 ```bash
-# One-line install
-curl -sL https://github.com/vponomarev/network-monitor/releases/latest/download/install.sh | sudo bash
-
-# Or manual installation
+# Clone and build
+git clone https://github.com/vponomarev/network-monitor.git
+cd network-monitor
 make build
-sudo make install
 
-# Manage service
-sudo systemctl status netmon
-sudo journalctl -u netmon -f
+# Run
+sudo ./bin/netmon
 ```
 
-### Configuration
+### Verify Installation
 
-Edit `config.yaml`:
+```bash
+# Check health
+curl http://localhost:9876/health
+
+# Get metrics
+curl http://localhost:9876/metrics
+
+# Get top lossy pairs (netmon API)
+curl http://localhost:9876/api/v1/loss/top?limit=5
+
+# Get connections (conntrack API)
+curl http://localhost:9876/api/v1/conntrack/connections?limit=10
+```
+
+---
+
+## 🏗 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Network Monitor Suite                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────────┐         ┌─────────────────────┐       │
+│  │      NETMON         │         │    CONNTRACK        │       │
+│  │                     │         │                     │       │
+│  │  ┌───────────────┐  │         │  ┌───────────────┐  │       │
+│  │  │ trace_pipe    │  │         │  │ eBPF kprobes  │  │       │
+│  │  │ collector     │  │         │  │ tcp_connect   │  │       │
+│  │  └───────────────┘  │         │  │ tcp_v4_rcv    │  │       │
+│  │                     │         │  │ tcp_close     │  │       │
+│  │  ┌───────────────┐  │         │  └───────────────┘  │       │
+│  │  │ Discovery     │  │         │                     │       │
+│  │  │ Traceroute    │  │         │  ┌───────────────┐  │       │
+│  │  │ (ICMP/UDP/TCP)│  │         │  │ State Machine │  │       │
+│  │  └───────────────┘  │         │  │ (TCP FSM)     │  │       │
+│  │                     │         │  └───────────────┘  │       │
+│  │  ┌───────────────┐  │         │                     │       │
+│  │  │ Metadata      │  │         │  ┌───────────────┐  │       │
+│  │  │ Location/Role │  │         │  │ Syslog Writer │  │       │
+│  │  └───────────────┘  │         │  └───────────────┘  │       │
+│  │                     │         │                     │       │
+│  └──────────┬──────────┘         └──────────┬──────────┘       │
+│             │                                │                  │
+│             └────────────┬───────────────────┘                  │
+│                          │                                      │
+│              ┌───────────▼────────────┐                        │
+│              │   Prometheus Metrics   │                        │
+│              │   HTTP API (9876)      │                        │
+│              └────────────────────────┘                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📦 Installation
+
+### System Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| OS | Linux (kernel 4.9+) |
+| Memory | 128MB minimum, 512MB recommended |
+| CPU | 0.25 cores minimum, 1 core recommended |
+| Disk | 50MB for binary, variable for logs |
+
+### Capabilities Required
+
+#### Netmon
+- `CAP_SYS_ADMIN` — For trace_pipe access
+- `CAP_NET_RAW` — For traceroute (ICMP/UDP/TCP)
+
+#### Conntrack
+- `CAP_BPF` — For eBPF programs
+- `CAP_PERFMON` — For eBPF perf events
+- `CAP_NET_RAW` — For raw socket access
+- `CAP_SYS_ADMIN` — For various kernel operations
+
+### Installation Methods
+
+See [Installation Guide](docs/installation.md) for detailed instructions.
+
+---
+
+## ⚙️ Configuration
+
+### Main Configuration (config.yaml)
 
 ```yaml
 global:
@@ -100,199 +206,164 @@ metadata:
     path: locations.yaml
   roles:
     path: roles.yaml
-```
 
-Edit `locations.yaml` and `roles.yaml` with your IP mappings.
-
-### Run
-
-```bash
-# Run with sudo (required for trace_pipe access)
-sudo ./bin/netmon
-
-# Or with custom config
-sudo ./bin/netmon --config /path/to/config.yaml
-```
-
-### Verify
-
-```bash
-# Check metrics
-curl http://localhost:9876/metrics
-
-# Check health
-curl http://localhost:9876/health
-
-# Get top lossy pairs (Discovery API)
-curl http://localhost:9876/api/v1/loss/top?limit=5
-
-# Discover path for specific pair
-curl -X POST http://localhost:9876/api/v1/discover \
-  -H "Content-Type: application/json" \
-  -d '{"src_ip": "10.181.208.50", "dst_ip": "10.179.64.39"}'
-```
-
-## HTTP API
-
-### Discovery Endpoints
-
-#### Get Top Lossy Pairs
-
-```bash
-GET /api/v1/loss/top?limit=10
-```
-
-**Response:**
-```json
-[
-  {
-    "src_ip": "10.181.208.50",
-    "dst_ip": "10.179.64.39",
-    "loss_count": 1301,
-    "first_seen": "2024-01-15T10:00:00Z",
-    "last_seen": "2024-01-15T10:30:00Z"
-  }
-]
-```
-
-#### Discover Path
-
-```bash
-POST /api/v1/discover
-Content-Type: application/json
-
-{
-  "src_ip": "10.181.208.50",
-  "dst_ip": "10.179.64.39"
-}
-```
-
-**Response:**
-```json
-{
-  "path_id": "path-10.181.208.50-10.179.64.39",
-  "src_ip": "10.181.208.50",
-  "dst_ip": "10.179.64.39",
-  "hops": [
-    {"ttl": 1, "ip": "10.181.208.1", "rtt": "0.5ms", "hostname": "gw1.local"},
-    {"ttl": 2, "ip": "10.181.208.254", "rtt": "1.2ms"},
-    {"ttl": 3, "ip": "10.179.64.1", "rtt": "2.8ms"}
-  ],
-  "bottleneck": {
-    "hop_ip": "10.179.64.1",
-    "hop_ttl": 3,
-    "loss_percent": 15.5
-  },
-  "total_loss": 10.5,
-  "avg_rtt": "1.5ms"
-}
-```
-
-#### Get Top Paths
-
-```bash
-GET /api/v1/discover/top
-```
-
-Returns detailed path information for top N lossy IP pairs.
-
-## Traceroute Modes
-
-Configure traceroute protocol in `config.yaml`:
-
-```yaml
 discovery:
   traceroute:
     enabled: true
-    protocol: tcp        # icmp | udp | tcp
-    dst_port: 443        # For TCP/UDP traceroute
-    tcp_flags: S         # SYN flag for TCP traceroute
+    top_n: 10
+    mode: both  # both | top_loss | on_demand | periodic
+    interval: 5m
+    protocol: icmp  # icmp | udp | tcp
+    max_hops: 30
+    timeout: 3s
+
+connections:
+  enabled: true
+  track_incoming: true
+  track_outgoing: true
+  filter_ports: []
+
+logging:
+  level: info
+  format: json
 ```
 
-### Protocol Selection
+### Locations (locations.yaml)
 
-| Protocol | Use Case | Firewall Traversal |
-|----------|----------|-------------------|
-| **ICMP** | Internal networks | Poor |
-| **UDP** | Legacy compatibility | Fair |
-| **TCP** | **Production (recommended)** | **Excellent** |
+```yaml
+locations:
+  - network: 10.179.64.0/22
+    location: IX-M5-SM13
+  - network: 10.181.208.0/22
+    location: IX-M3-SM10
+```
 
-TCP traceroute uses SYN packets that look like normal connection attempts, making it ideal for traversing firewalls.
+### Roles (roles.yaml)
 
-## Metrics
+```yaml
+roles:
+  - network: 10.179.64.32/32
+    role: s3-dwh05
+  - network: 10.179.65.31/32
+    role: dwh-lb
+```
 
-### Main Metric
+See [Configuration Guide](docs/configuration.md) for all options.
+
+---
+
+## 🔌 API Reference
+
+### Netmon Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/metrics` | GET | Prometheus metrics |
+| `/health` | GET | Health check |
+| `/ready` | GET | Readiness check |
+| `/api/v1/loss/top` | GET | Top lossy IP pairs |
+| `/api/v1/discover` | POST | Discover path for IP pair |
+| `/api/v1/discover/top` | GET | Top paths with details |
+
+### Conntrack Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/conntrack/connections` | GET | List active connections |
+| `/api/v1/conntrack/stats` | GET | Connection statistics |
+
+See [Discovery API Reference](docs/DISCOVERY_API.md) for details.
+
+---
+
+## 📊 Metrics
+
+### Netmon Metrics
 
 ```prometheus
-# HELP netmon_tcp_loss_total Total number of TCP retransmissions by connection pair
-# TYPE netmon_tcp_loss_total counter
+# TCP retransmits by connection pair
 netmon_tcp_loss_total{
-    src_ip="192.168.1.10",
-    dst_ip="192.168.1.20",
+    src_ip="10.179.64.32",
+    dst_ip="10.181.208.50",
     src_location="IX-M5-SM13",
     dst_location="IX-M3-SM10",
     src_role="s3-dwh05",
-    dst_role="dwh-lb",
-    src_network="10.179.64.0/22",
-    dst_network="10.181.208.0/22"
-} 15
+    dst_role="dwh-lb"
+}
+
+# Discovery metrics
+netmon_discovery_paths_total
+netmon_discovery_last_run_seconds
+netmon_path_hops{src_ip="...", dst_ip="..."}
+netmon_path_rtt_seconds{src_ip="...", dst_ip="..."}
+netmon_path_bottleneck_loss_percent{src_ip="...", dst_ip="..."}
 ```
 
-### Labels
+### Conntrack Metrics
 
-| Label | Description |
-|-------|-------------|
-| `src_ip` | Source IP address |
-| `dst_ip` | Destination IP address |
-| `src_location` | Source location (from locations.yaml) |
-| `dst_location` | Destination location |
-| `src_role` | Source role (from roles.yaml) |
-| `dst_role` | Destination role |
-| `src_network` | Source /24 network |
-| `dst_network` | Destination /24 network |
+```prometheus
+# Connection states
+conntrack_connections{state="established", direction="outgoing"}
 
-## Grafana Dashboard
+# Events
+conntrack_events_total{event="NEW", direction="outgoing"}
+conntrack_events_total{event="ESTABLISHED", direction="outgoing"}
+conntrack_events_total{event="CLOSED", direction="outgoing"}
 
-Import the included dashboard:
+# Handshake duration
+conntrack_handshake_duration_seconds{direction="outgoing"}
 
-```bash
-# Import via Grafana UI
-# Dashboard → Import → Upload JSON file
-# Select: dashboards/tcp-loss-analysis.json
+# Connection duration
+conntrack_connection_duration_seconds{direction="outgoing"}
+
+# Bytes transferred
+conntrack_bytes_total{direction="outgoing", type="sent"}
+conntrack_bytes_total{direction="outgoing", type="received"}
+conntrack_bytes_per_connection{direction="outgoing"}
 ```
 
-Or via API:
+---
 
-```bash
-curl -X POST http://grafana:3000/api/dashboards/db \
-  -H "Content-Type: application/json" \
-  -d @dashboards/tcp-loss-analysis.json
-```
+## 📚 Documentation
 
-## Configuration Reload
+| Document | Description |
+|----------|-------------|
+| [Status & Plan](docs/STATUS_AND_PLAN.md) | Current development status |
+| [Discovery API](docs/DISCOVERY_API.md) | API reference for path discovery |
+| [Conntrack Guide](docs/CONNTRACK.md) | Connection tracking documentation |
+| [Configuration](docs/configuration.md) | Full configuration reference |
+| [Deployment](docs/DOCKER_DEPLOYMENT.md) | Docker deployment guide |
+| [Architecture](docs/architecture.md) | System architecture details |
 
-Send SIGHUP to reload configuration without restart:
+---
 
-```bash
-# Get PID
-pidof netmon
-
-# Send SIGHUP
-kill -HUP <pid>
-```
-
-## Development
+## 🛠 Development
 
 ### Build
 
 ```bash
+# Build all
 make build
+
+# Build specific binary
+make build-netmon
+make build-conntrack
+
+# Build eBPF programs
+make -C bpf all
 ```
 
 ### Test
 
 ```bash
+# Run all tests
 make test
+
+# Run with coverage
+make test-coverage
+
+# Run integration tests (requires root)
+sudo go test -v ./tests/integration/...
 ```
 
 ### Lint
@@ -301,44 +372,41 @@ make test
 make lint
 ```
 
-## Project Structure
+### Project Structure
 
 ```
 network-monitor/
-├── cmd/netmon/           # Main application
+├── cmd/
+│   ├── netmon/           # Netmon application
+│   └── conntrack/        # Conntrack application
 ├── internal/
-│   ├── collector/        # trace_pipe reader
+│   ├── collector/        # trace_pipe collector
+│   ├── conntrack/        # Connection tracking
+│   ├── discovery/        # Path discovery & traceroute
 │   ├── metadata/         # Location/Role matching
 │   ├── metrics/          # Prometheus exporter
-│   ├── discovery/        # Path discovery & traceroute
-│   │   ├── api.go       # Discovery service
-│   │   ├── path.go      # Path model
-│   │   ├── cache.go     # Path cache
-│   │   ├── top_loss.go  # Loss tracker
-│   │   └── traceroute_linux.go  # ICMP/UDP/TCP traceroute
-│   └── config/          # Configuration
-├── configs/              # Example configs
+│   ├── config/           # Configuration
+│   ├── topology/         # Network topology
+│   ├── packetloss/       # Packet loss monitor
+│   ├── bandwidth/        # Bandwidth monitor
+│   ├── latency/          # Latency monitor
+│   └── dns/              # DNS monitor
+├── bpf/                  # eBPF programs
+├── configs/              # Example configurations
 ├── dashboards/           # Grafana dashboards
-├── scripts/              # Utility scripts
-│   └── collect_trace_data.sh  # Collect trace_pipe samples
-├── testdata/             # Test data files
-└── docs/                 # Documentation
-    ├── PHASE2B_TRACEROUTE.md    # Traceroute implementation
-    ├── PHASE2C_INTEGRATION.md   # Integration guide
-    ├── TCP_TRACEROUTE.md        # TCP traceroute guide
-    ├── REAL_DATA_ANALYSIS.md    # Production data analysis
-    └── TEST_COVERAGE.md         # Test coverage report
+├── docs/                 # Documentation
+├── tests/                # Integration tests
+└── pkg/                  # Shared packages
 ```
 
-## Migration from Python Version
+---
 
-If you're migrating from the Python TCP loss exporter:
+## 📄 License
 
-1. Copy your `locations.csv` and `roles.csv` format to YAML
-2. Use the same best-match logic (most specific prefix wins)
-3. Metric name changed from `tcp_retransmits_total` to `netmon_tcp_loss_total`
-4. Update Prometheus scrape config to new port (default: 9876)
+MIT License — see [LICENSE](LICENSE) for details.
 
-## License
+---
 
-MIT License
+## 🤝 Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.

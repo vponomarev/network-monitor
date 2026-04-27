@@ -1,6 +1,21 @@
-.PHONY: all build test clean lint help deps docker-build docker-run docker-stop docker-logs install uninstall
+# Network Monitor - Build System
+# Supports building both netmon and conntrack applications
+#
+# Usage: make [target]
+# Examples:
+#   make build          - Build both applications
+#   make build-netmon   - Build only netmon
+#   make build-conntrack - Build only conntrack
+#   make all            - Build everything (default)
 
+.PHONY: all build build-netmon build-conntrack test clean lint help deps \
+        docker-build docker-build-netmon docker-build-conntrack \
+        docker-run docker-stop docker-logs docker-clean \
+        ebpf-build ebpf-clean install uninstall package
+
+# =============================================================================
 # Go parameters
+# =============================================================================
 GOCMD=go
 GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
@@ -8,27 +23,71 @@ GOMOD=$(GOCMD) mod
 GOFMT=gofmt
 GOVET=$(GOCMD) vet
 
-# Binary name
-BINARY=netmon
+# Build directory
 BUILD_DIR=bin
 
-# Docker parameters
-DOCKER_IMAGE=netmon
-DOCKER_TAG=latest
-
-# Version
+# Version info
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
+BUILD_TIME=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)"
+LDFLAGS=-ldflags "-w -s -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)"
 
+# Docker parameters
+DOCKER_IMAGE=ghcr.io/vponomarev/network-monitor
+DOCKER_TAG=latest
+
+# =============================================================================
+# Default target
+# =============================================================================
 all: build
 
-## build: Build the binary
-build:
+# =============================================================================
+# Build targets
+# =============================================================================
+
+## build: Build both netmon and conntrack binaries
+build: build-netmon build-conntrack
+	@echo "✓ Built both applications"
+
+## build-netmon: Build netmon binary
+build-netmon:
 	@mkdir -p $(BUILD_DIR)
-	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/netmon
+	@echo "Building netmon..."
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/netmon ./cmd/netmon
+	@echo "✓ Built $(BUILD_DIR)/netmon"
+
+## build-conntrack: Build conntrack binary (Linux only)
+build-conntrack: ebpf-build
+	@mkdir -p $(BUILD_DIR)
+	@echo "Building conntrack..."
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/conntrack ./cmd/conntrack
+	@echo "✓ Built $(BUILD_DIR)/conntrack"
+
+## build-all: Build all binaries for current platform
+build-all: build
+
+# =============================================================================
+# eBPF targets
+# =============================================================================
+
+## ebpf-build: Build eBPF programs
+ebpf-build:
+	@echo "Building eBPF programs..."
+	@mkdir -p $(BUILD_DIR)/bpf
+	$(MAKE) -C bpf all
+	@cp bpf/*.o $(BUILD_DIR)/bpf/ 2>/dev/null || true
+	@echo "✓ Built eBPF programs"
+
+## ebpf-clean: Clean eBPF build artifacts
+ebpf-clean:
+	@echo "Cleaning eBPF artifacts..."
+	$(MAKE) -C bpf clean
+	rm -rf $(BUILD_DIR)/bpf
+
+# =============================================================================
+# Test targets
+# =============================================================================
 
 ## test: Run all tests
 test:
@@ -38,76 +97,205 @@ test:
 test-coverage:
 	$(GOTEST) -v -race -coverprofile=coverage.out ./...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
-	@echo "Coverage report generated: coverage.html"
+	@echo "✓ Coverage report generated: coverage.html"
 
-## clean: Clean build artifacts
-clean:
-	rm -rf $(BUILD_DIR)
-	rm -f coverage.out coverage.html
+## test-integration: Run integration tests (requires root)
+test-integration:
+	@echo "Running integration tests (requires root)..."
+	sudo $(GOTEST) -v ./tests/integration/...
+
+## test-e2e: Run end-to-end tests (requires root)
+test-e2e:
+	@echo "Running e2e tests (requires root)..."
+	sudo $(GOTEST) -v ./tests/e2e/...
+
+# =============================================================================
+# Code quality targets
+# =============================================================================
 
 ## lint: Run linters
 lint:
+	@echo "Running linters..."
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 		golangci-lint run ./...; \
 	else \
-		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+		echo "golangci-lint not installed. Install with:"; \
+		echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
 	fi
 
 ## fmt: Format code
 fmt:
+	@echo "Formatting code..."
 	$(GOFMT) -s -w .
 
 ## vet: Run go vet
 vet:
+	@echo "Running go vet..."
 	$(GOVET) ./...
+
+## check: Run all checks (lint, vet, test)
+check: lint vet test
+
+# =============================================================================
+# Dependency targets
+# =============================================================================
 
 ## deps: Download and tidy dependencies
 deps:
+	@echo "Downloading dependencies..."
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-## run: Run the application (requires sudo for trace_pipe)
-run: build
-	sudo ./$(BUILD_DIR)/$(BINARY)
+## deps-upgrade: Upgrade all dependencies
+deps-upgrade:
+	@echo "Upgrading dependencies..."
+	$(GOMOD) get -u ./...
+	$(GOMOD) tidy
 
-## docker-build: Build Docker image
-docker-build:
-	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+# =============================================================================
+# Docker targets
+# =============================================================================
 
-## docker-run: Run Docker container (requires sudo)
+## docker-build: Build all Docker images
+docker-build: docker-build-netmon docker-build-conntrack
+	@echo "✓ Built all Docker images"
+
+## docker-build-netmon: Build netmon Docker image
+docker-build-netmon:
+	@echo "Building netmon Docker image..."
+	docker build --target netmon -t $(DOCKER_IMAGE)/netmon:$(DOCKER_TAG) .
+
+## docker-build-conntrack: Build conntrack Docker image
+docker-build-conntrack:
+	@echo "Building conntrack Docker image..."
+	docker build --target conntrack -t $(DOCKER_IMAGE)/conntrack:$(DOCKER_TAG) .
+
+## docker-build-combined: Build combined Docker image
+docker-build-combined:
+	@echo "Building combined Docker image..."
+	docker build --target combined -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+
+## docker-run: Start Docker Compose services
 docker-run:
+	@echo "Starting Docker Compose services..."
 	docker-compose up -d
 
-## docker-stop: Stop Docker container
+## docker-run-monitoring: Start with Prometheus and Grafana
+docker-run-monitoring:
+	@echo "Starting Docker Compose with monitoring stack..."
+	docker-compose --profile monitoring up -d
+
+## docker-stop: Stop Docker Compose services
 docker-stop:
+	@echo "Stopping Docker Compose services..."
 	docker-compose down
 
-## docker-logs: Show Docker container logs
+## docker-logs: Show Docker Compose logs
 docker-logs:
-	docker-compose logs -f netmon
+	docker-compose logs -f
 
-## docker-clean: Remove Docker image and container
+## docker-clean: Remove Docker images and volumes
 docker-clean:
+	@echo "Cleaning Docker artifacts..."
 	docker-compose down -v
+	docker rmi $(DOCKER_IMAGE)/netmon:$(DOCKER_TAG) 2>/dev/null || true
+	docker rmi $(DOCKER_IMAGE)/conntrack:$(DOCKER_TAG) 2>/dev/null || true
 	docker rmi $(DOCKER_IMAGE):$(DOCKER_TAG) 2>/dev/null || true
 
-## install: Install as systemd service (Linux only)
-install: build
-	sudo ./packaging/install.sh local
+# =============================================================================
+# Installation targets
+# =============================================================================
 
-## uninstall: Remove systemd service
+## install: Install both applications locally
+install: build
+	@echo "Installing applications..."
+	sudo mkdir -p /usr/local/bin
+	sudo cp $(BUILD_DIR)/netmon /usr/local/bin/
+	sudo cp $(BUILD_DIR)/conntrack /usr/local/bin/
+	sudo chmod +x /usr/local/bin/netmon /usr/local/bin/conntrack
+	@echo "✓ Installed to /usr/local/bin/"
+
+## install-netmon: Install netmon locally
+install-netmon: build-netmon
+	@echo "Installing netmon..."
+	sudo mkdir -p /usr/local/bin
+	sudo cp $(BUILD_DIR)/netmon /usr/local/bin/
+	sudo chmod +x /usr/local/bin/netmon
+	@echo "✓ Installed netmon to /usr/local/bin/"
+
+## install-conntrack: Install conntrack locally
+install-conntrack: build-conntrack
+	@echo "Installing conntrack..."
+	sudo mkdir -p /usr/local/bin /usr/share/conntrack/bpf
+	sudo cp $(BUILD_DIR)/conntrack /usr/local/bin/
+	sudo cp $(BUILD_DIR)/bpf/*.o /usr/share/conntrack/bpf/
+	sudo chmod +x /usr/local/bin/conntrack
+	@echo "✓ Installed conntrack to /usr/local/bin/"
+
+## uninstall: Remove installed applications
 uninstall:
-	sudo ./packaging/uninstall.sh
+	@echo "Uninstalling applications..."
+	sudo rm -f /usr/local/bin/netmon /usr/local/bin/conntrack
+	sudo rm -rf /usr/share/conntrack
+	@echo "✓ Uninstalled"
+
+# =============================================================================
+# Package targets
+# =============================================================================
 
 ## package: Create release package
-package: build
+package: build ebpf-build
 	@echo "Creating release package..."
 	@mkdir -p dist
-	cp bin/netmon dist/
+	cp $(BUILD_DIR)/netmon dist/
+	cp $(BUILD_DIR)/conntrack dist/
+	cp -r $(BUILD_DIR)/bpf dist/
 	cp configs/*.yaml dist/
-	cp packaging/*.sh dist/
 	cp README.md dist/
-	@echo "Package created in dist/"
+	cp LICENSE dist/ 2>/dev/null || true
+	@echo "✓ Package created in dist/"
+
+## package-tar: Create tarball for release
+package-tar: package
+	@echo "Creating tarball..."
+	tar -czvf network-monitor-$(VERSION).tar.gz -C dist .
+	@echo "✓ Created network-monitor-$(VERSION).tar.gz"
+
+# =============================================================================
+# Clean targets
+# =============================================================================
+
+## clean: Clean all build artifacts
+clean: ebpf-clean
+	@echo "Cleaning build artifacts..."
+	rm -rf $(BUILD_DIR)
+	rm -f coverage.out coverage.html
+	rm -rf dist/
+	@echo "✓ Cleaned"
+
+## distclean: Clean everything including downloaded dependencies
+distclean: clean
+	@echo "Cleaning all artifacts including dependencies..."
+	rm -rf vendor/
+	@echo "✓ Cleaned all"
+
+# =============================================================================
+# Run targets
+# =============================================================================
+
+## run-netmon: Run netmon (requires sudo)
+run-netmon: build-netmon
+	@echo "Starting netmon (requires sudo)..."
+	sudo $(BUILD_DIR)/netmon
+
+## run-conntrack: Run conntrack (requires sudo)
+run-conntrack: build-conntrack
+	@echo "Starting conntrack (requires sudo)..."
+	sudo $(BUILD_DIR)/conntrack
+
+# =============================================================================
+# Help target
+# =============================================================================
 
 ## help: Show this help message
 help:
@@ -115,4 +303,25 @@ help:
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
-	@sed -n 's/^##//p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/ /'
+	@echo "Build Targets:"
+	@sed -n 's/^## \([a-z-]*\):/\1/p' $(MAKEFILE_LIST) | grep -E "^(build|ebpf)" | column -t -s ':' | sed 's/^/  /'
+	@echo ""
+	@echo "Test Targets:"
+	@sed -n 's/^## \(test[a-z-]*\):/\1/p' $(MAKEFILE_LIST) | column -t -s ':' | sed 's/^/  /'
+	@echo ""
+	@echo "Code Quality:"
+	@sed -n 's/^## \(lint\|fmt\|vet\|check\):/\1/p' $(MAKEFILE_LIST) | column -t -s ':' | sed 's/^/  /'
+	@echo ""
+	@echo "Docker Targets:"
+	@sed -n 's/^## \(docker[a-z-]*\):/\1/p' $(MAKEFILE_LIST) | column -t -s ':' | sed 's/^/  /'
+	@echo ""
+	@echo "Install Targets:"
+	@sed -n 's/^## \(install[a-z-]*\|uninstall\):/\1/p' $(MAKEFILE_LIST) | column -t -s ':' | sed 's/^/  /'
+	@echo ""
+	@echo "Other Targets:"
+	@sed -n 's/^## \(deps\|clean\|package\|help\|run\):/\1/p' $(MAKEFILE_LIST) | column -t -s ':' | sed 's/^/  /'
+	@echo ""
+	@echo "Variables:"
+	@echo "  VERSION=$(VERSION)"
+	@echo "  BUILD_TIME=$(BUILD_TIME)"
+	@echo "  GIT_COMMIT=$(GIT_COMMIT)"
