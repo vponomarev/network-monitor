@@ -222,17 +222,4 @@ struct trace_event_raw_inet_sock_set_state {
     __u32 daddr_v6[4];
 };
 
-/* BPF helpers - declared as external */
-extern void *bpf_map_lookup_elem(void *map, const void *key) __attribute__((weak));
-extern int bpf_map_update_elem(void *map, const void *key, const void *value, __u64 flags) __attribute__((weak));
-extern int bpf_map_delete_elem(void *map, const void *key) __attribute__((weak));
-extern __u64 bpf_ktime_get_ns(void) __attribute__((weak));
-extern __u64 bpf_get_current_pid_tgid(void) __attribute__((weak));
-extern long bpf_get_current_comm(void *buf, __u32 size) __attribute__((weak));
-extern __u64 bpf_get_current_task(void) __attribute__((weak));
-extern int bpf_probe_read_kernel(void *dst, __u32 size, const void *unsafe_ptr) __attribute__((weak));
-extern int bpf_probe_read_user(void *dst, __u32 size, const void *unsafe_ptr) __attribute__((weak));
-extern __u32 bpf_ntohl(__u32 x) __attribute__((weak));
-extern __u16 bpf_ntohs(__u16 x) __attribute__((weak));
-
 #endif /* __VMLINUX_H__ */
