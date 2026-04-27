@@ -16,10 +16,46 @@ typedef signed int __s32;
 typedef signed long long __s64;
 typedef long __kernel_long_t;
 typedef __kernel_long_t pid_t;
+typedef _Bool bool;
 
 /* Big endian types */
 typedef __u16 __be16;
 typedef __u32 __be32;
+
+/* Kernel types */
+typedef __u32 __wsum;
+typedef __u16 __sum16;
+
+/* BPF map types */
+enum bpf_map_type {
+    BPF_MAP_TYPE_UNSPEC = 0,
+    BPF_MAP_TYPE_HASH = 1,
+    BPF_MAP_TYPE_ARRAY = 2,
+    BPF_MAP_TYPE_PROG_ARRAY = 3,
+    BPF_MAP_TYPE_PERF_EVENT_ARRAY = 4,
+    BPF_MAP_TYPE_PERCPU_HASH = 5,
+    BPF_MAP_TYPE_PERCPU_ARRAY = 6,
+    BPF_MAP_TYPE_STACK_TRACE = 7,
+    BPF_MAP_TYPE_CGROUP_ARRAY = 8,
+    BPF_MAP_TYPE_LRU_HASH = 9,
+    BPF_MAP_TYPE_LRU_PERCPU_HASH = 10,
+    BPF_MAP_TYPE_LPM_TRIE = 11,
+    BPF_MAP_TYPE_ARRAY_OF_MAPS = 12,
+    BPF_MAP_TYPE_HASH_OF_MAPS = 13,
+    BPF_MAP_TYPE_STACK = 14,
+    BPF_MAP_TYPE_QUEUE = 15,
+    BPF_MAP_TYPE_RINGBUF = 27,
+};
+
+/* BPF flags */
+#define BPF_ANY     0
+#define BPF_NOEXIST 1
+#define BPF_EXIST   2
+#define BPF_F_LOCK  4
+
+/* bool constants */
+#define true 1
+#define false 0
 
 /* Kernel types */
 typedef __u32 __wsum;
@@ -138,6 +174,32 @@ struct tcphdr {
     __u16 window;
     __sum16 check;
     __u32 urg_ptr;
+};
+
+/* pt_regs for tracepoints */
+struct pt_regs {
+    unsigned long r15;
+    unsigned long r14;
+    unsigned long r13;
+    unsigned long r12;
+    unsigned long rbp;
+    unsigned long rbx;
+    unsigned long r11;
+    unsigned long r10;
+    unsigned long r9;
+    unsigned long r8;
+    unsigned long rax;
+    unsigned long rcx;
+    unsigned long rdx;
+    unsigned long rsi;
+    unsigned long rdi;
+    unsigned long orig_rax;
+    unsigned long rip;
+    unsigned long cs;
+    unsigned long eflags;
+    unsigned long rsp;
+    unsigned long ss;
+    unsigned long orig_ax;
 };
 
 /* IPv4 header */

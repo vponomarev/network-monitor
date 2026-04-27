@@ -13,13 +13,13 @@
 #define IPPROTO_UDP     17
 #define IPPROTO_ICMP    1
 
-/* TCP flags */
-#define TCP_FLAG_FIN    0x01
-#define TCP_FLAG_SYN    0x02
-#define TCP_FLAG_RST    0x04
-#define TCP_FLAG_PSH    0x08
-#define TCP_FLAG_ACK    0x10
-#define TCP_FLAG_URG    0x20
+/* TCP flags - defined in vmlinux.h for eBPF */
+/* #define TCP_FLAG_FIN    0x01 */
+/* #define TCP_FLAG_SYN    0x02 */
+/* #define TCP_FLAG_RST    0x04 */
+/* #define TCP_FLAG_PSH    0x08 */
+/* #define TCP_FLAG_ACK    0x10 */
+/* #define TCP_FLAG_URG    0x20 */
 
 /* Connection states */
 #define CONN_STATE_NEW          0  /* Just created */
