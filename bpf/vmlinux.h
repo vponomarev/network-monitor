@@ -17,6 +17,10 @@ typedef signed long long __s64;
 typedef long __kernel_long_t;
 typedef __kernel_long_t pid_t;
 
+/* Big endian types */
+typedef __u16 __be16;
+typedef __u32 __be32;
+
 /* Kernel types */
 typedef __u32 __wsum;
 typedef __u16 __sum16;
