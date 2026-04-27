@@ -73,7 +73,7 @@ jobs:
   build:
     name: Build ${{ matrix.app }}-${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ubuntu-latest
-    needs: [validate, build-ebpf]
+    needs: [validate]
     strategy:
       matrix:
         app: [netmon, conntrack]
@@ -94,7 +94,8 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Download eBPF artifacts
+      - name: Download eBPF artifacts (conntrack only)
+        if: matrix.app == 'conntrack'
         uses: actions/download-artifact@v4
         with:
           name: ebpf-programs
