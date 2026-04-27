@@ -197,7 +197,8 @@ int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
     th = (struct tcphdr *)BPF_CORE_READ(skb, data);
     if (!th)
         return 0;
-    
+
+    // Read TCP flags - use union field to avoid bitfield address issues
     bpf_probe_read_kernel(&tcp_flags, sizeof(tcp_flags), &th->tcp_flags);
     bpf_probe_read_kernel(&th_len, sizeof(th_len), &th->doff);
     th_len = (th_len >> 4) * 4;
