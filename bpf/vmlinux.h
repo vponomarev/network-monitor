@@ -155,7 +155,7 @@ struct sock {
     __u8 sk_state;
 };
 
-/* TCP header */
+/* TCP header - without bitfields to avoid address-of issues */
 struct tcphdr {
     __u16 source;
     __u16 dest;
@@ -163,32 +163,23 @@ struct tcphdr {
     __u32 ack_seq;
     __u16 res1:4;
     __u16 doff:4;
-    __u16 fin:1;
-    __u16 syn:1;
-    __u16 rst:1;
-    __u16 psh:1;
-    __u16 ack:1;
-    __u16 urg:1;
-    __u16 ece:1;
-    __u16 cwr:1;
+    /* TCP flags as separate byte for easy access */
+    __u8 flags;
+    __u8 reserved;
     __u16 window;
     __sum16 check;
     __u32 urg_ptr;
-    /* Compatibility field for tcp_flags access */
-    union {
-        __u8 tcp_flags;
-        struct {
-            __u8 fin2:1;
-            __u8 syn2:1;
-            __u8 rst2:1;
-            __u8 psh2:1;
-            __u8 ack2:1;
-            __u8 urg2:1;
-            __u8 ece2:1;
-            __u8 cwr2:1;
-        };
-    };
 };
+
+/* TCP flag bits */
+#define TCP_FIN 0x01
+#define TCP_SYN 0x02
+#define TCP_RST 0x04
+#define TCP_PSH 0x08
+#define TCP_ACK 0x10
+#define TCP_URG 0x20
+#define TCP_ECE 0x40
+#define TCP_CWR 0x80
 
 /* pt_regs for tracepoints - x86_64 */
 struct pt_regs {

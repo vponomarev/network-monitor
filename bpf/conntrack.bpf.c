@@ -156,7 +156,7 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     evt.direction = DIR_OUTGOING;
     evt.state = CONN_STATE_SYN_SENT;
     evt.event_type = CONN_EVENT_NEW;
-    evt.tcp_flags = TCP_FLAG_SYN;
+    evt.tcp_flags = TCP_SYN;
     
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
     
@@ -172,7 +172,7 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     entry.pid = evt.pid;
     entry.direction = DIR_OUTGOING;
     entry.state = CONN_STATE_SYN_SENT;
-    entry.tcp_flags = TCP_FLAG_SYN;
+    entry.tcp_flags = TCP_SYN;
     bpf_get_current_comm(&entry.comm, sizeof(entry.comm));
     
     bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
@@ -198,14 +198,13 @@ int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
     if (!th)
         return 0;
 
-    // Read TCP flags - use union field to avoid bitfield address issues
-    // tcp_flags is a union with individual flag bits in vmlinux.h
-    tcp_flags = th->tcp_flags;
+    // Read TCP flags byte and data offset
+    tcp_flags = th->flags;
     bpf_probe_read_kernel(&th_len, sizeof(th_len), &th->doff);
     th_len = (th_len >> 4) * 4;
     
     // Only interested in SYN or SYN+ACK
-    if ((tcp_flags & TCP_FLAG_SYN) == 0)
+    if ((tcp_flags & TCP_SYN) == 0)
         return 0;
     
     struct connection_event evt = {};
@@ -238,7 +237,7 @@ int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
     evt.dst_port = bpf_ntohs(evt.dst_port);
     
     // Determine if this is incoming SYN or SYN+ACK
-    if (tcp_flags & TCP_FLAG_ACK) {
+    if (tcp_flags & TCP_ACK) {
         // SYN+ACK: response to our outgoing SYN
         evt.direction = DIR_OUTGOING;
         evt.state = CONN_STATE_ESTABLISHED;
@@ -306,7 +305,7 @@ int BPF_KPROBE(tcp_v4_accept, struct sock *sk, struct sk_buff *skb)
     entry = bpf_map_lookup_elem(&connections, &key);
     if (entry) {
         entry->state = CONN_STATE_ESTABLISHED;
-        entry->tcp_flags = TCP_FLAG_SYN | TCP_FLAG_ACK;
+        entry->tcp_flags = TCP_SYN | TCP_ACK;
         __builtin_memcpy(entry->comm, evt.comm, TASK_COMM_LEN);
     }
     
