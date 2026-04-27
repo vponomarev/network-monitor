@@ -155,15 +155,13 @@ struct sock {
     __u8 sk_state;
 };
 
-/* TCP header - without bitfields to avoid address-of issues */
+/* TCP header - all fields as bytes to avoid bitfield issues */
 struct tcphdr {
     __u16 source;
     __u16 dest;
     __u32 seq;
     __u32 ack_seq;
-    __u16 res1:4;
-    __u16 doff:4;
-    /* TCP flags as separate byte for easy access */
+    __u16 __pad1;  /* res1:4 + doff:4 packed */
     __u8 flags;
     __u8 reserved;
     __u16 window;

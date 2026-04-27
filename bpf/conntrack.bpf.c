@@ -198,10 +198,9 @@ int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
     if (!th)
         return 0;
 
-    // Read TCP flags byte and data offset
+    // Read TCP flags byte and data offset (upper 4 bits of __pad1)
     tcp_flags = th->flags;
-    bpf_probe_read_kernel(&th_len, sizeof(th_len), &th->doff);
-    th_len = (th_len >> 4) * 4;
+    th_len = (th->__pad1 >> 4) * 4;
     
     // Only interested in SYN or SYN+ACK
     if ((tcp_flags & TCP_SYN) == 0)
