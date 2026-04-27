@@ -199,7 +199,8 @@ int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
         return 0;
 
     // Read TCP flags - use union field to avoid bitfield address issues
-    bpf_probe_read_kernel(&tcp_flags, sizeof(tcp_flags), &th->tcp_flags);
+    // tcp_flags is a union with individual flag bits in vmlinux.h
+    tcp_flags = th->tcp_flags;
     bpf_probe_read_kernel(&th_len, sizeof(th_len), &th->doff);
     th_len = (th_len >> 4) * 4;
     
