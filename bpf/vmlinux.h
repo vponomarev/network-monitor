@@ -174,9 +174,23 @@ struct tcphdr {
     __u16 window;
     __sum16 check;
     __u32 urg_ptr;
+    /* Compatibility field for tcp_flags access */
+    union {
+        __u8 tcp_flags;
+        struct {
+            __u8 fin2:1;
+            __u8 syn2:1;
+            __u8 rst2:1;
+            __u8 psh2:1;
+            __u8 ack2:1;
+            __u8 urg2:1;
+            __u8 ece2:1;
+            __u8 cwr2:1;
+        };
+    };
 };
 
-/* pt_regs for tracepoints */
+/* pt_regs for tracepoints - x86_64 */
 struct pt_regs {
     unsigned long r15;
     unsigned long r14;
@@ -200,6 +214,9 @@ struct pt_regs {
     unsigned long rsp;
     unsigned long ss;
     unsigned long orig_ax;
+    /* Compatibility aliases */
+    unsigned long di;
+    unsigned long si;
 };
 
 /* IPv4 header */
