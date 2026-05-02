@@ -399,6 +399,10 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     if (protocol != IPPROTO_TCP)
         return 0;
 
+    // Debug: print state transition
+    bpf_printk("inet_sock: sport=%d dport=%d oldstate=%d newstate=%d", 
+               sport, dport, ctx->oldstate, ctx->newstate);
+
     struct connection_event evt = {};
     struct connection_key key = {};
 
@@ -416,9 +420,15 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     bpf_probe_read_kernel(&saddr32, sizeof(saddr32), &ctx->saddr);
     bpf_probe_read_kernel(&daddr32, sizeof(daddr32), &ctx->daddr);
 
+    // Debug: print raw IP values
+    bpf_printk("inet_sock: saddr_raw=0x%x daddr_raw=0x%x", saddr32, daddr32);
+
     // Convert from network byte order to host byte order
     __u32 saddr_host = bpf_ntohl(saddr32);
     __u32 daddr_host = bpf_ntohl(daddr32);
+
+    // Debug: print host order IP values
+    bpf_printk("inet_sock: saddr_host=0x%x daddr_host=0x%x", saddr_host, daddr_host);
 
     // Extract bytes from host-order __u32
     // For 192.168.5.165: saddr_host = 0xC0A805A5
@@ -436,10 +446,16 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_ip[14] = (__u8)((daddr_host >> 8) & 0xFF);
     evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
 
+    // Debug: print extracted IP bytes
+    bpf_printk("inet_sock: src_ip=%d.%d.%d.%d dst_ip=%d.%d.%d.%d",
+               evt.src_ip[12], evt.src_ip[13], evt.src_ip[14], evt.src_ip[15],
+               evt.dst_ip[12], evt.dst_ip[13], evt.dst_ip[14], evt.dst_ip[15]);
+
     // Determine event type and direction based on state transition
     __u32 newstate = ctx->newstate;
     switch (newstate) {
         case TCP_ESTABLISHED:
+            bpf_printk("inet_sock: TCP_ESTABLISHED");
             // Determine direction: if src_port is ephemeral (>1024), it's outgoing
             // If dst_port is well-known (<=1024), it's incoming
             if (evt.dst_port <= 1024 && evt.src_port > 1024) {
@@ -452,6 +468,7 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
             break;
         case TCP_CLOSE:
         case TCP_CLOSE_WAIT:
+            bpf_printk("inet_sock: TCP_CLOSE");
             // Determine direction same way
             if (evt.dst_port <= 1024 && evt.src_port > 1024) {
                 evt.direction = DIR_INCOMING;
@@ -462,12 +479,14 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
             evt.event_type = CONN_EVENT_CLOSED;
             break;
         case TCP_SYN_RECV:
+            bpf_printk("inet_sock: TCP_SYN_RECV - incoming");
             // Incoming connection in SYN_RECV state
             evt.direction = DIR_INCOMING;
             evt.state = CONN_STATE_SYN_RECEIVED;
             evt.event_type = CONN_EVENT_NEW;
             break;
         case TCP_SYN_SENT:
+            bpf_printk("inet_sock: TCP_SYN_SENT - outgoing");
             // Outgoing connection SYN sent (backup to tcp_connect)
             evt.direction = DIR_OUTGOING;
             evt.state = CONN_STATE_SYN_SENT;
@@ -475,10 +494,12 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
             break;
         default:
             // Unknown state - skip
+            bpf_printk("inet_sock: unknown state %d", newstate);
             return 0;
     }
 
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
+    bpf_printk("inet_sock: submitting event for %s", evt.comm);
     submit_event(&evt);
     return 0;
 }
