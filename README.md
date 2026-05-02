@@ -74,14 +74,29 @@
 
 ## 🚀 Quick Start
 
+### ⚡ Fast Installation
+
+**Netmon:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scripts/install-netmon.sh | sudo bash
+```
+
+**Conntrack:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scripts/install-conntrack.sh | sudo bash
+```
+
 ### Prerequisites
 
 - Linux kernel 4.9+ (for eBPF support)
-- Go 1.24+ (for building)
 - Root access (for trace_pipe and eBPF)
 - Docker (optional, for containerized deployment)
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: Binary Installation (Recommended)
+
+See [INSTALL.md](INSTALL.md) for detailed instructions.
+
+### Option 2: Docker Compose
 
 ```bash
 # Clone repository
@@ -409,6 +424,8 @@ netmon_dns_latency_seconds{domain="google.com"}
 
 | Document | Description |
 |----------|-------------|
+| **[QUICKSTART.md](QUICKSTART.md)** | 🚀 Быстрый старт — установка и запуск |
+| **[INSTALL.md](INSTALL.md)** | 📦 Полное руководство по установке |
 | [Status & Plan](docs/STATUS_AND_PLAN.md) | Current development status |
 | [Discovery API](docs/DISCOVERY_API.md) | API reference for path discovery |
 | [Conntrack Guide](docs/CONNTRACK.md) | Connection tracking documentation |

@@ -16,7 +16,11 @@
       "Bash(sleep *)",
       "Bash(gofmt *)",
       "Bash(sed *)",
-      "Bash(make *)"
+      "Bash(make *)",
+      "Bash(ls *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(unzip *)"
     ]
   },
   "$version": 3
