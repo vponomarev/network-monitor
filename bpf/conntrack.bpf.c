@@ -411,8 +411,7 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint
-    // ctx->saddr/daddr are __u8[4] arrays in network byte order (big-endian)
-    // Read as __u32 and convert
+    // ctx->saddr/daddr are __u32 in network byte order
     __u32 saddr32, daddr32;
     bpf_probe_read_kernel(&saddr32, sizeof(saddr32), &ctx->saddr);
     bpf_probe_read_kernel(&daddr32, sizeof(daddr32), &ctx->daddr);
@@ -438,7 +437,8 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
 
     // Determine event type and direction based on state transition
-    switch (ctx->newstate) {
+    __u32 newstate = ctx->newstate;
+    switch (newstate) {
         case TCP_ESTABLISHED:
             // Determine direction: if src_port is ephemeral (>1024), it's outgoing
             // If dst_port is well-known (<=1024), it's incoming
@@ -474,6 +474,7 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
             evt.event_type = CONN_EVENT_NEW;
             break;
         default:
+            // Unknown state - skip
             return 0;
     }
 
