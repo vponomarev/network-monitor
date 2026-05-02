@@ -145,16 +145,14 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
     key->protocol = IPPROTO_TCP;
 }
 
-/* Trace tcp_connect - outgoing connection initiation (SYN sent) */
+/* Trace tcp_connect - outgoing connection initiation (SYN sent)
+ * Note: No family check here - skc_family may not be set yet for outgoing.
+ * IPv4/IPv6 filtering is done in extract_ipv4_addrs (returns 0.0.0.0 for IPv6).
+ */
 SEC("kprobe/tcp_connect")
 int BPF_KPROBE(tcp_connect, struct sock *sk)
 {
     if (!track_outgoing)
-        return 0;
-
-    // Check socket family - only IPv4 supported
-    __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    if (family != AF_INET)
         return 0;
 
     struct connection_event evt = {};
