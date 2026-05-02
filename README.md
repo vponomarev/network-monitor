@@ -92,6 +92,20 @@ curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scr
 - Root access (for trace_pipe and eBPF)
 - Docker (optional, for containerized deployment)
 
+### Tested Kernels
+
+| Kernel Version | Distribution | Status | Notes |
+|----------------|--------------|--------|-------|
+| **6.12.85** | Debian 13 (trixie) | ✅ Tested | fentry/fexit |
+| **6.8.12** | Debian 12 / Proxmox 8.4 | ✅ Tested | fentry/fexit |
+| **6.5.x** | Ubuntu 22.04 HWE | ✅ Supported | fentry/fexit |
+| **6.2.x** | Ubuntu 22.04 HWE | ✅ Supported | fentry/fexit |
+| **5.15.x** | Ubuntu 22.04 GA | ✅ Supported | fentry/fexit |
+
+**Requirements:**
+- BTF enabled: `/sys/kernel/btf/vmlinux` (present in Debian 12+, Ubuntu 22.04+)
+- For kernels 6.8+: Uses fentry/fexit with automatic fallback to kprobe
+
 ### Option 1: Binary Installation (Recommended)
 
 See [INSTALL.md](INSTALL.md) for detailed instructions.
