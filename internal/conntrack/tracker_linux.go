@@ -177,64 +177,40 @@ func (t *Tracker) loadEBPF() error {
 
 // attachPrograms attaches eBPF programs to kernel hooks
 func (t *Tracker) attachPrograms() error {
-	// Attach tcp_connect for outgoing connections
-	// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
+	// Attach tcp_connect for outgoing connections (kprobe)
 	if t.config.TrackOutgoing {
 		if prog, ok := t.colls.Programs["tcp_connect"]; ok {
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			l, err := link.Kprobe("tcp_connect", prog, nil)
 			if err != nil {
-				t.logger.Debug("fentry tcp_connect failed, trying kprobe", zap.Error(err))
-				l, err = link.Kprobe("tcp_connect", prog, nil)
-				if err != nil {
-					return fmt.Errorf("linking tcp_connect: %w", err)
-				}
+				return fmt.Errorf("linking kprobe/tcp_connect: %w", err)
 			}
 			t.links = append(t.links, l)
-			t.logger.Info("Attached tcp_connect for outgoing connections")
+			t.logger.Info("Attached kprobe/tcp_connect for outgoing connections")
 		}
 	}
 
-	// Attach inet_csk_accept for incoming connections
-	// Try fexit first (kernel 5.5+ with BTF), fallback to kretprobe
+	// Attach inet_csk_accept for incoming connections (kretprobe)
 	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["inet_csk_accept"]; ok {
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			l, err := link.Kretprobe("inet_csk_accept", prog, nil)
 			if err != nil {
-				t.logger.Debug("fexit inet_csk_accept failed, trying kretprobe", zap.Error(err))
-				l, err = link.Kretprobe("inet_csk_accept", prog, nil)
-				if err != nil {
-					t.logger.Warn("Failed to attach inet_csk_accept", zap.Error(err))
-				} else {
-					t.links = append(t.links, l)
-					t.logger.Info("Attached kretprobe/inet_csk_accept for incoming connections")
-				}
+				t.logger.Warn("Failed to attach kretprobe/inet_csk_accept", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
-				t.logger.Info("Attached fexit/inet_csk_accept for incoming connections")
+				t.logger.Info("Attached kretprobe/inet_csk_accept for incoming connections")
 			}
 		}
 	}
 
-	// Attach tcp_close for connection closing
-	// Try fexit first (kernel 5.5+ with BTF), fallback to kretprobe
+	// Attach tcp_close for connection closing (kretprobe)
 	if t.config.TrackCloses {
 		if prog, ok := t.colls.Programs["tcp_close"]; ok {
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			l, err := link.Kretprobe("tcp_close", prog, nil)
 			if err != nil {
-				t.logger.Debug("fexit tcp_close failed, trying kretprobe", zap.Error(err))
-				l, err = link.Kretprobe("tcp_close", prog, nil)
-				if err != nil {
-					return fmt.Errorf("linking tcp_close: %w", err)
-				}
+				return fmt.Errorf("linking kretprobe/tcp_close: %w", err)
 			}
 			t.links = append(t.links, l)
-			t.logger.Info("Attached tcp_close for connection closing")
+			t.logger.Info("Attached kretprobe/tcp_close for connection closing")
 		}
 	}
 
