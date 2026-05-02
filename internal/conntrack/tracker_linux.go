@@ -197,9 +197,10 @@ func (t *Tracker) attachPrograms() error {
 	}
 
 	// Attach tcp_v4_rcv for incoming SYN detection
-	if t.config.TrackIncoming {
+	// NOTE: Disabled due to unreliable IP address reading from sk_buff
+	// Use inet_sock_set_state tracepoint instead
+	if false && t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_rcv"]; ok {
-			// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
 			l, err := link.AttachTracing(link.TracingOptions{
 				Program: prog,
 			})
