@@ -416,17 +416,17 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint
-    // ctx->saddr/daddr are in host byte order on little-endian
-    // For 192.168.5.214: stored as 0xD605A8C0
-    evt.src_ip[12] = (__u8)(ctx->saddr & 0xFF);
-    evt.src_ip[13] = (__u8)((ctx->saddr >> 8) & 0xFF);
-    evt.src_ip[14] = (__u8)((ctx->saddr >> 16) & 0xFF);
-    evt.src_ip[15] = (__u8)((ctx->saddr >> 24) & 0xFF);
+    // ctx->saddr/daddr are in network byte order
+    // For 192.168.5.214: ctx->saddr = 0xC0A805D6
+    evt.src_ip[12] = (__u8)((ctx->saddr >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((ctx->saddr >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((ctx->saddr >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(ctx->saddr & 0xFF);
     
-    evt.dst_ip[12] = (__u8)(ctx->daddr & 0xFF);
-    evt.dst_ip[13] = (__u8)((ctx->daddr >> 8) & 0xFF);
-    evt.dst_ip[14] = (__u8)((ctx->daddr >> 16) & 0xFF);
-    evt.dst_ip[15] = (__u8)((ctx->daddr >> 24) & 0xFF);
+    evt.dst_ip[12] = (__u8)((ctx->daddr >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((ctx->daddr >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((ctx->daddr >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(ctx->daddr & 0xFF);
     
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
