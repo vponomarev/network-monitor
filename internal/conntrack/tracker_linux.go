@@ -177,92 +177,54 @@ func (t *Tracker) loadEBPF() error {
 
 // attachPrograms attaches eBPF programs to kernel hooks
 func (t *Tracker) attachPrograms() error {
-	// Attach tcp_connect for outgoing connections
+	// Attach tcp_connect for outgoing connections (kprobe)
 	if t.config.TrackOutgoing {
 		if prog, ok := t.colls.Programs["tcp_connect"]; ok {
-			// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			l, err := link.Kprobe("tcp_connect", prog, nil)
 			if err != nil {
-				t.logger.Debug("fentry tcp_connect failed, trying kprobe", zap.Error(err))
-				l, err = link.Kprobe("tcp_connect", prog, nil)
-				if err != nil {
-					return fmt.Errorf("linking tcp_connect: %w", err)
-				}
+				return fmt.Errorf("linking kprobe/tcp_connect: %w", err)
 			}
 			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_connect (fentry/kprobe)")
+			t.logger.Info("Attached kprobe/tcp_connect for outgoing connections")
 		}
 	}
 
-	// Attach tcp_v4_rcv for incoming SYN detection
-	// NOTE: Disabled - IP address reading from sk_buff produces incorrect results
-	// inet_sock_set_state tracepoint handles incoming connections
-	if false && t.config.TrackIncoming {
-		if prog, ok := t.colls.Programs["tcp_v4_rcv"]; ok {
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
-			if err != nil {
-				t.logger.Debug("fentry tcp_v4_rcv failed", zap.Error(err))
-			} else {
-				t.links = append(t.links, l)
-				t.logger.Info("Attached tcp_v4_rcv (fentry) for incoming SYN detection")
-			}
-		}
-	}
-
-	// Attach tcp_v4_accept for incoming connection acceptance (if available)
+	// Attach tcp_v4_accept for incoming IPv4 connections (kretprobe)
 	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_accept"]; ok {
-			// Try fentry first, fallback to kprobe
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			l, err := link.Kretprobe("tcp_v4_accept", prog, nil)
 			if err != nil {
-				t.logger.Debug("fentry/tcp_v4_accept failed, trying kprobe", zap.Error(err))
-				l, err = link.Kprobe("tcp_v4_accept", prog, nil)
-				if err != nil {
-					t.logger.Warn("tcp_v4_accept not available, skipping", zap.Error(err))
-				} else {
-					t.links = append(t.links, l)
-					t.logger.Debug("Attached tcp_v4_accept (kprobe)")
-				}
+				t.logger.Warn("Failed to attach kretprobe/tcp_v4_accept", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
-				t.logger.Debug("Attached tcp_v4_accept (fentry)")
+				t.logger.Info("Attached kretprobe/tcp_v4_accept for incoming IPv4 connections")
 			}
 		}
 	}
 
-	// Attach tcp_close for connection closing
+	// Attach tcp_v6_accept for incoming IPv6 connections (kretprobe)
+	if t.config.TrackIncoming {
+		if prog, ok := t.colls.Programs["tcp_v6_accept"]; ok {
+			l, err := link.Kretprobe("tcp_v6_accept", prog, nil)
+			if err != nil {
+				t.logger.Debug("kretprobe/tcp_v6_accept not available, skipping", zap.Error(err))
+			} else {
+				t.links = append(t.links, l)
+				t.logger.Info("Attached kretprobe/tcp_v6_accept for incoming IPv6 connections")
+			}
+		}
+	}
+
+	// Attach tcp_close for connection closing (kretprobe)
 	if t.config.TrackCloses {
 		if prog, ok := t.colls.Programs["tcp_close"]; ok {
-			// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			l, err := link.Kretprobe("tcp_close", prog, nil)
 			if err != nil {
-				t.logger.Debug("fentry tcp_close failed, trying kprobe", zap.Error(err))
-				l, err = link.Kprobe("tcp_close", prog, nil)
-				if err != nil {
-					return fmt.Errorf("linking tcp_close: %w", err)
-				}
+				return fmt.Errorf("linking kretprobe/tcp_close: %w", err)
 			}
 			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_close (fentry/kprobe)")
+			t.logger.Info("Attached kretprobe/tcp_close for connection closing")
 		}
-	}
-
-	// Attach inet_sock_set_state tracepoint
-	if prog, ok := t.colls.Programs["inet_sock_set_state"]; ok {
-		l, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
-		if err != nil {
-			return fmt.Errorf("linking inet_sock_set_state: %w", err)
-		}
-		t.links = append(t.links, l)
-		t.logger.Info("Attached inet_sock_set_state tracepoint for incoming connections")
 	}
 
 	return nil
