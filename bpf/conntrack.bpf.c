@@ -403,6 +403,9 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     if (protocol != IPPROTO_TCP)
         return 0;
 
+    // Debug: print state transition
+    bpf_printk("inet_sock: old=%d new=%d sport=%d dport=%d", ctx->oldstate, ctx->newstate, sport, dport);
+
     struct connection_event evt = {};
     struct connection_key key = {};
 
