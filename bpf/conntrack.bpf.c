@@ -141,10 +141,13 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
 
 /* Trace tcp_connect - outgoing connection initiation (SYN sent) */
 SEC("kprobe/tcp_connect")
-int BPF_KPROBE(tcp_connect, struct sock *sk)
+int BPF_KPROBE(tcp_connect)
 {
     if (!track_outgoing)
         return 0;
+
+    // Extract sock pointer from pt_regs (kernel 6.8+ compatibility)
+    struct sock *sk = (struct sock *)PT_REGS_PARM1_CORE(ctx);
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -189,7 +192,7 @@ int BPF_KPROBE(tcp_v4_rcv)
         return 0;
 
     // Extract parameters from pt_regs (kernel 6.8+ compatibility)
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
+    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1_CORE(ctx);
 
     // Read TCP header
     struct tcphdr *th;
@@ -279,7 +282,7 @@ int BPF_KPROBE(tcp_v4_accept)
         return 0;
 
     // Extract parameters from pt_regs (kernel 6.8+ compatibility)
-    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
+    struct sock *sk = (struct sock *)PT_REGS_PARM1_CORE(ctx);
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -315,10 +318,13 @@ int BPF_KPROBE(tcp_v4_accept)
 
 /* Trace tcp_close - connection closing */
 SEC("kprobe/tcp_close")
-int BPF_KPROBE(tcp_close, struct sock *sk)
+int BPF_KPROBE(tcp_close)
 {
     if (!track_closes)
         return 0;
+
+    // Extract sock pointer from pt_regs (kernel 6.8+ compatibility)
+    struct sock *sk = (struct sock *)PT_REGS_PARM1_CORE(ctx);
 
     struct connection_event evt = {};
     struct connection_key key = {};
