@@ -220,22 +220,27 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 
     struct iphdr *iph = (struct iphdr *)data;
 
-    // Read source and dest IP from IP header (network byte order in packet)
+    // Read source and dest IP from IP header
+    // Kernel stores these in network byte order
     __u32 saddr4, daddr4;
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &iph->saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &iph->daddr);
 
-    // Extract bytes from network-order __u32 (as stored in packet)
-    // For 192.168.5.214: saddr4 = 0xC0A805D6
-    evt.src_ip[12] = (__u8)((saddr4 >> 24) & 0xFF);
-    evt.src_ip[13] = (__u8)((saddr4 >> 16) & 0xFF);
-    evt.src_ip[14] = (__u8)((saddr4 >> 8) & 0xFF);
-    evt.src_ip[15] = (__u8)(saddr4 & 0xFF);
+    // Convert from network byte order and extract bytes
+    __u32 saddr_host = bpf_ntohl(saddr4);
+    __u32 daddr_host = bpf_ntohl(daddr4);
 
-    evt.dst_ip[12] = (__u8)((daddr4 >> 24) & 0xFF);
-    evt.dst_ip[13] = (__u8)((daddr4 >> 16) & 0xFF);
-    evt.dst_ip[14] = (__u8)((daddr4 >> 8) & 0xFF);
-    evt.dst_ip[15] = (__u8)(daddr4 & 0xFF);
+    // Extract bytes from host-order __u32
+    // For 192.168.5.165: saddr_host = 0xC0A805A5
+    evt.src_ip[12] = (__u8)((saddr_host >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((saddr_host >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((saddr_host >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(saddr_host & 0xFF);
+
+    evt.dst_ip[12] = (__u8)((daddr_host >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((daddr_host >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((daddr_host >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
 
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
