@@ -259,20 +259,12 @@ func (t *Tracker) attachPrograms() error {
 
 	// Attach inet_sock_set_state tracepoint
 	if prog, ok := t.colls.Programs["inet_sock_set_state"]; ok {
-		// Try raw_tracepoint first (more reliable), fallback to tracepoint
-		l, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-			Name:    "inet_sock_set_state",
-			Program: prog,
-		})
+		l, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
 		if err != nil {
-			t.logger.Debug("raw_tracepoint inet_sock_set_state failed, trying tracepoint", zap.Error(err))
-			l, err = link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
-			if err != nil {
-				return fmt.Errorf("linking inet_sock_set_state: %w", err)
-			}
+			return fmt.Errorf("linking inet_sock_set_state: %w", err)
 		}
 		t.links = append(t.links, l)
-		t.logger.Info("Attached inet_sock_set_state (raw)tracepoint for incoming connections")
+		t.logger.Info("Attached inet_sock_set_state tracepoint for incoming connections")
 	}
 
 	return nil
