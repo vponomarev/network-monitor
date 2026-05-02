@@ -201,22 +201,6 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     if (!track_incoming)
         return 0;
 
-    // Read TCP header
-    struct tcphdr *th;
-    __u8 tcp_flags;
-
-    // Get TCP header from skb
-    th = (struct tcphdr *)BPF_CORE_READ(skb, data);
-    if (!th)
-        return 0;
-
-    // Read TCP flags byte
-    tcp_flags = th->flags;
-
-    // Only interested in SYN or SYN+ACK
-    if ((tcp_flags & TCP_SYN) == 0)
-        return 0;
-
     struct connection_event evt = {};
     struct connection_key key = {};
 
@@ -224,15 +208,16 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     evt.pid_tgid = bpf_get_current_pid_tgid();
     evt.pid = evt.pid_tgid >> 32;
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.tcp_flags = tcp_flags;
     evt.protocol = IPPROTO_TCP;
 
-    // Read IP header to get addresses
-    struct iphdr *iph;
-    iph = (struct iphdr *)BPF_CORE_READ(skb, data);
-    if (!iph)
+    // Read IP header directly from skb->data using bpf_probe_read_kernel
+    void *data;
+    bpf_probe_read_kernel(&data, sizeof(data), &skb->data);
+    if (!data)
         return 0;
 
+    struct iphdr *iph = (struct iphdr *)data;
+    
     // Read source and dest IP from IP header
     bpf_probe_read_kernel(&evt.src_ip[12], 4, &iph->saddr);
     bpf_probe_read_kernel(&evt.dst_ip[12], 4, &iph->daddr);
@@ -240,6 +225,21 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     evt.src_ip[11] = 0xff;
     evt.dst_ip[10] = 0xff;
     evt.dst_ip[11] = 0xff;
+
+    // Read TCP header (IP header is 20 bytes for IPv4 without options)
+    struct tcphdr *th = (struct tcphdr *)(data + sizeof(struct iphdr));
+    if (!th)
+        return 0;
+
+    // Read TCP flags
+    __u8 tcp_flags;
+    bpf_probe_read_kernel(&tcp_flags, sizeof(tcp_flags), &th->flags);
+
+    // Only interested in SYN or SYN+ACK
+    if ((tcp_flags & TCP_SYN) == 0)
+        return 0;
+
+    evt.tcp_flags = tcp_flags;
 
     // Read ports from TCP header
     bpf_probe_read_kernel(&evt.src_port, sizeof(evt.src_port), &th->source);
