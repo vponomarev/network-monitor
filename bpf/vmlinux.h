@@ -191,7 +191,10 @@ struct pt_regs {
     unsigned long r10;
     unsigned long r9;
     unsigned long r8;
-    unsigned long rax;
+    union {
+        unsigned long rax;
+        unsigned long __PT_RC_REG;  /* For libbpf PT_REGS_RC */
+    };
     unsigned long rcx;
     unsigned long rdx;
     unsigned long rsi;
