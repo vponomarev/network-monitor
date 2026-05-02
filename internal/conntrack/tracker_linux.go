@@ -207,11 +207,15 @@ func (t *Tracker) attachPrograms() error {
 				t.logger.Debug("fentry tcp_v4_rcv failed, trying kprobe", zap.Error(err))
 				l, err = link.Kprobe("tcp_v4_rcv", prog, nil)
 				if err != nil {
-					return fmt.Errorf("linking tcp_v4_rcv: %w", err)
+					t.logger.Warn("tcp_v4_rcv not available, skipping incoming SYN detection", zap.Error(err))
+				} else {
+					t.links = append(t.links, l)
+					t.logger.Info("Attached tcp_v4_rcv (kprobe) for incoming SYN detection")
 				}
+			} else {
+				t.links = append(t.links, l)
+				t.logger.Info("Attached tcp_v4_rcv (fentry) for incoming SYN detection")
 			}
-			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_v4_rcv (fentry/kprobe)")
 		}
 	}
 

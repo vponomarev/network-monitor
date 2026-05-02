@@ -197,11 +197,7 @@ int BPF_PROG(tcp_connect, struct sock *sk)
     return 0;
 }
 
-/* Trace tcp_v4_rcv - check for incoming SYN
- * NOTE: Disabled due to unreliable sk_buff access in fentry
- * Use inet_sock_set_state tracepoint for incoming connection tracking
- */
-#if 0
+/* Trace tcp_v4_rcv - check for incoming SYN */
 SEC("fentry/tcp_v4_rcv")
 int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 {
@@ -223,24 +219,24 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
         return 0;
 
     struct iphdr *iph = (struct iphdr *)data;
-    
+
     // Read source and dest IP from IP header (network byte order in packet)
     __u32 saddr4, daddr4;
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &iph->saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &iph->daddr);
-    
+
     // Extract bytes from network-order __u32 (as stored in packet)
     // For 192.168.5.214: saddr4 = 0xC0A805D6
     evt.src_ip[12] = (__u8)((saddr4 >> 24) & 0xFF);
     evt.src_ip[13] = (__u8)((saddr4 >> 16) & 0xFF);
     evt.src_ip[14] = (__u8)((saddr4 >> 8) & 0xFF);
     evt.src_ip[15] = (__u8)(saddr4 & 0xFF);
-    
+
     evt.dst_ip[12] = (__u8)((daddr4 >> 24) & 0xFF);
     evt.dst_ip[13] = (__u8)((daddr4 >> 16) & 0xFF);
     evt.dst_ip[14] = (__u8)((daddr4 >> 8) & 0xFF);
     evt.dst_ip[15] = (__u8)(daddr4 & 0xFF);
-    
+
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
     evt.dst_ip[10] = 0xff;
@@ -300,7 +296,6 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     submit_event(&evt);
     return 0;
 }
-#endif /* tcp_v4_rcv disabled */
 
 /* Trace tcp_v4_accept - server accepts incoming connection
  * NOTE: Disabled - tcp_v4_rcv + inet_sock_set_state provide equivalent functionality
