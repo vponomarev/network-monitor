@@ -264,7 +264,7 @@ func (t *Tracker) attachPrograms() error {
 			return fmt.Errorf("linking inet_sock_set_state: %w", err)
 		}
 		t.links = append(t.links, l)
-		t.logger.Debug("Attached inet_sock_set_state tracepoint")
+		t.logger.Info("Attached inet_sock_set_state tracepoint for incoming connections")
 	}
 
 	return nil

@@ -422,12 +422,12 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.src_ip[13] = (__u8)((ctx->saddr >> 16) & 0xFF);
     evt.src_ip[14] = (__u8)((ctx->saddr >> 8) & 0xFF);
     evt.src_ip[15] = (__u8)(ctx->saddr & 0xFF);
-    
+
     evt.dst_ip[12] = (__u8)((ctx->daddr >> 24) & 0xFF);
     evt.dst_ip[13] = (__u8)((ctx->daddr >> 16) & 0xFF);
     evt.dst_ip[14] = (__u8)((ctx->daddr >> 8) & 0xFF);
     evt.dst_ip[15] = (__u8)(ctx->daddr & 0xFF);
-    
+
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
     evt.dst_ip[10] = 0xff;
@@ -461,6 +461,12 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
             // Incoming connection in SYN_RECV state
             evt.direction = DIR_INCOMING;
             evt.state = CONN_STATE_SYN_RECEIVED;
+            evt.event_type = CONN_EVENT_NEW;
+            break;
+        case TCP_SYN_SENT:
+            // Outgoing connection SYN sent (backup to tcp_connect)
+            evt.direction = DIR_OUTGOING;
+            evt.state = CONN_STATE_SYN_SENT;
             evt.event_type = CONN_EVENT_NEW;
             break;
         default:
