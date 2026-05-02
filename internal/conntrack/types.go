@@ -38,6 +38,7 @@ type Direction int
 const (
 	DirectionIncoming Direction = iota
 	DirectionOutgoing
+	DirectionUnknown  // Used when connection was not tracked from start
 )
 
 func (d Direction) String() string {

@@ -51,14 +51,14 @@ struct connection_key {
 } __attribute__((packed));
 
 struct connection_entry {
-    __u64 timestamp_ns;
-    __u32 pid;
-    __u8 direction;
-    __u8 state;
-    __u8 tcp_flags;
-    __u8 _pad[5];              /* Explicit padding for alignment */
-    char comm[TASK_COMM_LEN];
-};
+    __u64 timestamp_ns;   /* offset 0, size 8 */
+    __u32 pid;            /* offset 8, size 4 */
+    __u8 direction;       /* offset 12, size 1 */
+    __u8 state;           /* offset 13, size 1 */
+    __u8 tcp_flags;       /* offset 14, size 1 */
+    __u8 _pad;            /* offset 15, size 1 (align comm to 4-byte boundary) */
+    char comm[TASK_COMM_LEN];  /* offset 16, size 16 */
+};                        /* total: 32 bytes (naturally aligned to 8) */
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -312,11 +312,14 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
         bpf_map_delete_elem(&connections, &key);
     } else {
         // Connection not found - extract from socket anyway
+        // Cases: A) Tracker started after connection opened (most common)
+        //        B) Map overflow - entry was evicted
+        //        C) Race condition during concurrent close
         // comm = process that is closing (already set above)
         extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
         extract_ports(sk, &evt.src_port, &evt.dst_port);
         evt.protocol = IPPROTO_TCP;  // tcp_close() only called for TCP
-        evt.direction = DIR_OUTGOING;  // Default assumption
+        evt.direction = DIR_UNKNOWN;  // Unknown: connection not tracked from start
     }
 
     submit_event(&evt);

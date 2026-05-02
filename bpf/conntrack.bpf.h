@@ -7,6 +7,7 @@
 /* Direction constants */
 #define DIR_INCOMING    0
 #define DIR_OUTGOING    1
+#define DIR_UNKNOWN     2  /* Used when connection was not tracked from start */
 
 /* Protocol constants */
 #define IPPROTO_TCP     6
