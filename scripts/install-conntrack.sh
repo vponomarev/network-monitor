@@ -77,17 +77,17 @@ if ! curl -fsSL "$EBPF_URL" -o "$EBPF_DIR/conntrack.bpf.o" 2>/dev/null; then
     if ! command -v clang &> /dev/null || ! command -v make &> /dev/null; then
         log_info "Installing build dependencies..."
         if command -v apt-get &> /dev/null; then
-            apt-get update -qq && apt-get install -y -qq clang llvm make linux-headers-$(uname -r) || {
+            apt-get update -qq && apt-get install -y -qq clang llvm make libbpf-dev linux-headers-$(uname -r) || {
                 log_error "Failed to install dependencies"
                 exit 1
             }
         elif command -v yum &> /dev/null; then
-            yum install -y -q clang llvm make kernel-headers || {
+            yum install -y -q clang llvm make libbpf-devel kernel-headers || {
                 log_error "Failed to install dependencies"
                 exit 1
             }
         else
-            log_error "Cannot install dependencies automatically. Please install clang, llvm, make manually."
+            log_error "Cannot install dependencies automatically. Please install clang, llvm, make, libbpf-dev manually."
             exit 1
         fi
     fi
