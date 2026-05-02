@@ -111,11 +111,11 @@ static __always_inline void submit_event(struct connection_event *evt)
 static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u8 *daddr)
 {
     __u32 saddr4, daddr4;
-    
+
     // Read source and dest IPv4 addresses
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &sk->__sk_common.skc_rcv_saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &sk->__sk_common.skc_daddr);
-    
+
     // Convert to IPv4-mapped IPv6 format for consistency
     __builtin_memset(saddr, 0, 16);
     __builtin_memset(daddr, 0, 16);
@@ -123,17 +123,17 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     saddr[11] = 0xff;
     daddr[10] = 0xff;
     daddr[11] = 0xff;
-    
-    // Network byte order to host byte order, then store
-    saddr[12] = (saddr4 >> 24) & 0xff;
-    saddr[13] = (saddr4 >> 16) & 0xff;
-    saddr[14] = (saddr4 >> 8) & 0xff;
-    saddr[15] = saddr4 & 0xff;
-    
-    daddr[12] = (daddr4 >> 24) & 0xff;
-    daddr[13] = (daddr4 >> 16) & 0xff;
-    daddr[14] = (daddr4 >> 8) & 0xff;
-    daddr[15] = daddr4 & 0xff;
+
+    // Store in network byte order (as-is from kernel)
+    saddr[12] = (saddr4 >> 0) & 0xff;
+    saddr[13] = (saddr4 >> 8) & 0xff;
+    saddr[14] = (saddr4 >> 16) & 0xff;
+    saddr[15] = (saddr4 >> 24) & 0xff;
+
+    daddr[12] = (daddr4 >> 0) & 0xff;
+    daddr[13] = (daddr4 >> 8) & 0xff;
+    daddr[14] = (daddr4 >> 16) & 0xff;
+    daddr[15] = (daddr4 >> 24) & 0xff;
 }
 
 /* Extract ports from sock */
@@ -210,17 +210,29 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
     evt.protocol = IPPROTO_TCP;
 
-    // Read IP header directly from skb->data using bpf_probe_read_kernel
-    void *data;
-    bpf_probe_read_kernel(&data, sizeof(data), &skb->data);
+    // Read IP header directly from skb->data using BPF_CORE_READ
+    void *data = (void *)BPF_CORE_READ(skb, data);
     if (!data)
         return 0;
 
     struct iphdr *iph = (struct iphdr *)data;
     
-    // Read source and dest IP from IP header
-    bpf_probe_read_kernel(&evt.src_ip[12], 4, &iph->saddr);
-    bpf_probe_read_kernel(&evt.dst_ip[12], 4, &iph->daddr);
+    // Read source and dest IP from IP header (network byte order)
+    __u32 saddr4, daddr4;
+    bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &iph->saddr);
+    bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &iph->daddr);
+    
+    // Store in network byte order (as-is from kernel)
+    evt.src_ip[12] = (saddr4 >> 0) & 0xff;
+    evt.src_ip[13] = (saddr4 >> 8) & 0xff;
+    evt.src_ip[14] = (saddr4 >> 16) & 0xff;
+    evt.src_ip[15] = (saddr4 >> 24) & 0xff;
+    
+    evt.dst_ip[12] = (daddr4 >> 0) & 0xff;
+    evt.dst_ip[13] = (daddr4 >> 8) & 0xff;
+    evt.dst_ip[14] = (daddr4 >> 16) & 0xff;
+    evt.dst_ip[15] = (daddr4 >> 24) & 0xff;
+    
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
     evt.dst_ip[10] = 0xff;
@@ -394,9 +406,21 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_port = bpf_ntohs(dport);
     evt.protocol = IPPROTO_TCP;
 
-    // Read IP addresses
-    bpf_probe_read_kernel(&evt.src_ip[12], 4, &ctx->saddr);
-    bpf_probe_read_kernel(&evt.dst_ip[12], 4, &ctx->daddr);
+    // Read IP addresses from tracepoint context (network byte order)
+    __u32 saddr4 = ctx->saddr;
+    __u32 daddr4 = ctx->daddr;
+    
+    // Store in network byte order (as-is from kernel)
+    evt.src_ip[12] = (saddr4 >> 0) & 0xff;
+    evt.src_ip[13] = (saddr4 >> 8) & 0xff;
+    evt.src_ip[14] = (saddr4 >> 16) & 0xff;
+    evt.src_ip[15] = (saddr4 >> 24) & 0xff;
+    
+    evt.dst_ip[12] = (daddr4 >> 0) & 0xff;
+    evt.dst_ip[13] = (daddr4 >> 8) & 0xff;
+    evt.dst_ip[14] = (daddr4 >> 16) & 0xff;
+    evt.dst_ip[15] = (daddr4 >> 24) & 0xff;
+    
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
     evt.dst_ip[10] = 0xff;
