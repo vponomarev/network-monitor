@@ -180,48 +180,77 @@ func (t *Tracker) attachPrograms() error {
 	// Attach tcp_connect for outgoing connections
 	if t.config.TrackOutgoing {
 		if prog, ok := t.colls.Programs["tcp_connect"]; ok {
-			l, err := link.Kprobe("tcp_connect", prog, nil)
+			// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
+			l, err := link.AttachTracing(link.TracingOptions{
+				Program: prog,
+			})
 			if err != nil {
-				return fmt.Errorf("linking tcp_connect: %w", err)
+				t.logger.Debug("fentry tcp_connect failed, trying kprobe", zap.Error(err))
+				l, err = link.Kprobe("tcp_connect", prog, nil)
+				if err != nil {
+					return fmt.Errorf("linking tcp_connect: %w", err)
+				}
 			}
 			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_connect probe")
+			t.logger.Debug("Attached tcp_connect (fentry/kprobe)")
 		}
 	}
 
 	// Attach tcp_v4_rcv for incoming SYN detection
 	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_rcv"]; ok {
-			l, err := link.Kprobe("tcp_v4_rcv", prog, nil)
+			// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
+			l, err := link.AttachTracing(link.TracingOptions{
+				Program: prog,
+			})
 			if err != nil {
-				return fmt.Errorf("linking tcp_v4_rcv: %w", err)
+				t.logger.Debug("fentry tcp_v4_rcv failed, trying kprobe", zap.Error(err))
+				l, err = link.Kprobe("tcp_v4_rcv", prog, nil)
+				if err != nil {
+					return fmt.Errorf("linking tcp_v4_rcv: %w", err)
+				}
 			}
 			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_v4_rcv probe")
+			t.logger.Debug("Attached tcp_v4_rcv (fentry/kprobe)")
 		}
 	}
 
-	// Attach tcp_v4_accept for incoming connection acceptance
+	// Attach tcp_v4_accept for incoming connection acceptance (if available)
 	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_accept"]; ok {
-			l, err := link.Kprobe("tcp_v4_accept", prog, nil)
+			// Try fentry first, fallback to kprobe
+			l, err := link.AttachTracing(link.TracingOptions{
+				Program: prog,
+			})
 			if err != nil {
-				return fmt.Errorf("linking tcp_v4_accept: %w", err)
+				t.logger.Debug("fentry/tcp_v4_accept failed, trying kprobe", zap.Error(err))
+				l, err = link.Kprobe("tcp_v4_accept", prog, nil)
+				if err != nil {
+					t.logger.Warn("tcp_v4_accept not available", zap.Error(err))
+					continue // Skip this program
+				}
 			}
 			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_v4_accept probe")
+			t.logger.Debug("Attached tcp_v4_accept (fentry/kprobe)")
 		}
 	}
 
 	// Attach tcp_close for connection closing
 	if t.config.TrackCloses {
 		if prog, ok := t.colls.Programs["tcp_close"]; ok {
-			l, err := link.Kprobe("tcp_close", prog, nil)
+			// Try fentry first (kernel 5.5+ with BTF), fallback to kprobe
+			l, err := link.AttachTracing(link.TracingOptions{
+				Program: prog,
+			})
 			if err != nil {
-				return fmt.Errorf("linking tcp_close: %w", err)
+				t.logger.Debug("fentry tcp_close failed, trying kprobe", zap.Error(err))
+				l, err = link.Kprobe("tcp_close", prog, nil)
+				if err != nil {
+					return fmt.Errorf("linking tcp_close: %w", err)
+				}
 			}
 			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_close probe")
+			t.logger.Debug("Attached tcp_close (fentry/kprobe)")
 		}
 	}
 
