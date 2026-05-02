@@ -124,18 +124,20 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[10] = 0xff;
     daddr[11] = 0xff;
 
-    // Copy bytes directly preserving network byte order
-    // On little-endian: saddr4=0xD605A8C0 for 192.168.5.214
-    // We need: saddr[12]=192, saddr[13]=168, saddr[14]=5, saddr[15]=214
-    saddr[12] = (__u8)(saddr4 >> 24);
-    saddr[13] = (__u8)(saddr4 >> 16);
-    saddr[14] = (__u8)(saddr4 >> 8);
-    saddr[15] = (__u8)(saddr4 >> 0);
+    // Convert from network byte order and extract bytes
+    // After bpf_ntohl: 192.168.5.214 = 0xC0A805D6
+    __u32 saddr_host = bpf_ntohl(saddr4);
+    __u32 daddr_host = bpf_ntohl(daddr4);
     
-    daddr[12] = (__u8)(daddr4 >> 24);
-    daddr[13] = (__u8)(daddr4 >> 16);
-    daddr[14] = (__u8)(daddr4 >> 8);
-    daddr[15] = (__u8)(daddr4 >> 0);
+    saddr[12] = (__u8)((saddr_host >> 24) & 0xFF);
+    saddr[13] = (__u8)((saddr_host >> 16) & 0xFF);
+    saddr[14] = (__u8)((saddr_host >> 8) & 0xFF);
+    saddr[15] = (__u8)(saddr_host & 0xFF);
+    
+    daddr[12] = (__u8)((daddr_host >> 24) & 0xFF);
+    daddr[13] = (__u8)((daddr_host >> 16) & 0xFF);
+    daddr[14] = (__u8)((daddr_host >> 8) & 0xFF);
+    daddr[15] = (__u8)(daddr_host & 0xFF);
 }
 
 /* Extract ports from sock */
@@ -224,19 +226,19 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &iph->saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &iph->daddr);
     
-    // Store in IPv4-mapped IPv6 format (preserving network byte order)
-    // For 192.168.5.214: saddr4=0xC0A805D6 (network order)
-    // On little-endian read: 0xD605A8C0
-    // We need: [12]=192, [13]=168, [14]=5, [15]=214
-    evt.src_ip[12] = (__u8)(saddr4 >> 24);
-    evt.src_ip[13] = (__u8)(saddr4 >> 16);
-    evt.src_ip[14] = (__u8)(saddr4 >> 8);
-    evt.src_ip[15] = (__u8)(saddr4 >> 0);
+    // Convert from network byte order and extract bytes
+    __u32 saddr_host = bpf_ntohl(saddr4);
+    __u32 daddr_host = bpf_ntohl(daddr4);
     
-    evt.dst_ip[12] = (__u8)(daddr4 >> 24);
-    evt.dst_ip[13] = (__u8)(daddr4 >> 16);
-    evt.dst_ip[14] = (__u8)(daddr4 >> 8);
-    evt.dst_ip[15] = (__u8)(daddr4 >> 0);
+    evt.src_ip[12] = (__u8)((saddr_host >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((saddr_host >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((saddr_host >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(saddr_host & 0xFF);
+    
+    evt.dst_ip[12] = (__u8)((daddr_host >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((daddr_host >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((daddr_host >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
     
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
@@ -411,19 +413,20 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_port = bpf_ntohs(dport);
     evt.protocol = IPPROTO_TCP;
 
-    // Read IP addresses from tracepoint context (network byte order)
-    // For 192.168.5.214: ctx->saddr=0xC0A805D6 (network order)
-    // On little-endian read: 0xD605A8C0
-    // We need: [12]=192, [13]=168, [14]=5, [15]=214
-    evt.src_ip[12] = (__u8)(ctx->saddr >> 24);
-    evt.src_ip[13] = (__u8)(ctx->saddr >> 16);
-    evt.src_ip[14] = (__u8)(ctx->saddr >> 8);
-    evt.src_ip[15] = (__u8)(ctx->saddr >> 0);
+    // Read IP addresses from tracepoint (network byte order)
+    // Convert to host byte order and extract bytes
+    __u32 saddr_host = bpf_ntohl(ctx->saddr);
+    __u32 daddr_host = bpf_ntohl(ctx->daddr);
     
-    evt.dst_ip[12] = (__u8)(ctx->daddr >> 24);
-    evt.dst_ip[13] = (__u8)(ctx->daddr >> 16);
-    evt.dst_ip[14] = (__u8)(ctx->daddr >> 8);
-    evt.dst_ip[15] = (__u8)(ctx->daddr >> 0);
+    evt.src_ip[12] = (__u8)((saddr_host >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((saddr_host >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((saddr_host >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(saddr_host & 0xFF);
+    
+    evt.dst_ip[12] = (__u8)((daddr_host >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((daddr_host >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((daddr_host >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
     
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
