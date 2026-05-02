@@ -11,15 +11,16 @@
 /*
  * eBPF Connection Tracker - kprobe based
  *
- * Uses kprobe for maximum kernel compatibility:
+ * Uses kprobe/kretprobe for maximum kernel compatibility:
  * - kprobe/tcp_connect: исходящие соединения (SYN_SENT)
  * - kretprobe/inet_csk_accept: входящие соединения (ESTABLISHED)
  * - kprobe/tcp_close: закрытие соединений
  *
- * Supported kernels:
- * - 4.19.x+ (Debian 10/11, Ubuntu 18.04+)
- * - 5.15.x (Ubuntu 22.04 GA)
- * - 6.x+ (All modern kernels)
+ * Supported kernels: 4.19.x+ (Debian 10/11, Ubuntu 18.04+, all modern)
+ *
+ * Limitations:
+ * - Only IPv4 TCP connections are tracked (AF_INET + IPPROTO_TCP)
+ * - IPv6 support requires additional implementation
  */
 
 struct connection_event {
@@ -36,8 +37,9 @@ struct connection_event {
     __u8 state;
     __u8 event_type;
     __u8 tcp_flags;
-    char comm[TASK_COMM_LEN];
-};
+    __u8 _pad[7];              /* Explicit padding for 8-byte alignment */
+    char comm[TASK_COMM_LEN];  /* Aligned at offset 72 */
+} __attribute__((packed));
 
 /* Connection key - packed to avoid padding issues */
 struct connection_key {
@@ -139,6 +141,11 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     if (!track_outgoing)
         return 0;
 
+    // Check socket family - only IPv4 supported
+    __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    if (family != AF_INET)
+        return 0;
+
     struct connection_event evt = {};
     struct connection_key key = {};
 
@@ -179,9 +186,11 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
 
 /* Trace inet_csk_accept - server accepts incoming connection
  * Returns: struct sock * (new connection socket)
- * 
+ *
  * Key consistency: key is created from RAW socket values (local=src, remote=dst)
  * Event format: src=client (remote), dst=server (local) - swapped for user-facing format
+ *
+ * Note: tcp_flags are conditional - connection is already ESTABLISHED at accept() time
  */
 SEC("kretprobe/inet_csk_accept")
 int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
@@ -190,6 +199,11 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
         return 0;
 
     if (!ret_sk)
+        return 0;
+
+    // Check socket family - only IPv4 supported
+    __u16 family = BPF_CORE_READ(ret_sk, __sk_common.skc_family);
+    if (family != AF_INET)
         return 0;
 
     struct connection_event evt = {};
@@ -202,7 +216,7 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
     evt.direction = DIR_INCOMING;
     evt.state = CONN_STATE_ESTABLISHED;
     evt.event_type = CONN_EVENT_ESTABLISHED;
-    evt.tcp_flags = TCP_SYN | TCP_ACK;  // Conditional flags for accept
+    evt.tcp_flags = TCP_SYN | TCP_ACK;  // Conditional: connection already ESTABLISHED
     evt.protocol = IPPROTO_TCP;
 
     // Get process name once
@@ -245,11 +259,25 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 /* Trace tcp_close - connection closing
  * Use kprobe (not kretprobe) to get socket before it's freed
  * Signature: void tcp_close(struct sock *sk, long timeout)
+ *
+ * evt.comm semantics:
+ *   - If connection found in map: comm = process that OPENED the connection
+ *   - If not found: comm = process that is CLOSING the connection (fallback)
  */
 SEC("kprobe/tcp_close")
 int BPF_KPROBE(tcp_close, struct sock *sk)
 {
     if (!track_closes)
+        return 0;
+
+    // Check socket family - only IPv4 supported
+    __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    if (family != AF_INET)
+        return 0;
+
+    // Check protocol - only TCP supported
+    __u8 protocol = BPF_CORE_READ(sk, __sk_common.skc_protocol);
+    if (protocol != IPPROTO_TCP)
         return 0;
 
     struct connection_event evt = {};
@@ -273,7 +301,7 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
     entry = bpf_map_lookup_elem(&connections, &key);
     if (entry) {
         evt.direction = entry->direction;
-        __builtin_memcpy(evt.comm, entry->comm, TASK_COMM_LEN);
+        __builtin_memcpy(evt.comm, entry->comm, TASK_COMM_LEN);  // Process that opened
         __builtin_memcpy(evt.src_ip, key.src_ip, 16);
         __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
         evt.src_port = key.src_port;
@@ -284,6 +312,7 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
         bpf_map_delete_elem(&connections, &key);
     } else {
         // Connection not found - extract from socket anyway
+        // comm = process that is closing (already set above)
         extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
         extract_ports(sk, &evt.src_port, &evt.dst_port);
         evt.protocol = IPPROTO_TCP;
