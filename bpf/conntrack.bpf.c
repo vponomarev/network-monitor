@@ -146,8 +146,9 @@ int BPF_KPROBE(tcp_connect)
     if (!track_outgoing)
         return 0;
 
-    // Extract sock pointer from pt_regs (kernel 6.8+ compatibility)
-    struct sock *sk = (struct sock *)PT_REGS_PARM1_CORE(ctx);
+    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
+    struct sock *sk;
+    bpf_probe_read_kernel(&sk, sizeof(sk), (void *)&PT_REGS_PARM1(ctx));
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -191,8 +192,9 @@ int BPF_KPROBE(tcp_v4_rcv)
     if (!track_incoming)
         return 0;
 
-    // Extract parameters from pt_regs (kernel 6.8+ compatibility)
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1_CORE(ctx);
+    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
+    struct sk_buff *skb;
+    bpf_probe_read_kernel(&skb, sizeof(skb), (void *)&PT_REGS_PARM1(ctx));
 
     // Read TCP header
     struct tcphdr *th;
@@ -281,8 +283,9 @@ int BPF_KPROBE(tcp_v4_accept)
     if (!track_incoming)
         return 0;
 
-    // Extract parameters from pt_regs (kernel 6.8+ compatibility)
-    struct sock *sk = (struct sock *)PT_REGS_PARM1_CORE(ctx);
+    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
+    struct sock *sk;
+    bpf_probe_read_kernel(&sk, sizeof(sk), (void *)&PT_REGS_PARM1(ctx));
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -323,8 +326,9 @@ int BPF_KPROBE(tcp_close)
     if (!track_closes)
         return 0;
 
-    // Extract sock pointer from pt_regs (kernel 6.8+ compatibility)
-    struct sock *sk = (struct sock *)PT_REGS_PARM1_CORE(ctx);
+    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
+    struct sock *sk;
+    bpf_probe_read_kernel(&sk, sizeof(sk), (void *)&PT_REGS_PARM1(ctx));
 
     struct connection_event evt = {};
     struct connection_key key = {};
