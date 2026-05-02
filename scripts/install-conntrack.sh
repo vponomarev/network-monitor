@@ -66,12 +66,54 @@ log_info "Creating symlink in /usr/local/bin"
 ln -sf "$INSTALL_DIR/$BIN_NAME" /usr/local/bin/$BIN_NAME
 
 # Download eBPF program
-EBPF_URL="https://github.com/vponomarev/network-monitor/releases/${CONNTRACK_VERSION}/download/conntrack.bpf.o"
+EBPF_URL="https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack.bpf.o"
 log_info "Downloading eBPF program from $EBPF_URL"
-curl -fsSL "$EBPF_URL" -o "$EBPF_DIR/conntrack.bpf.o" || {
-    log_error "Failed to download eBPF program. Check if the release exists."
-    exit 1
-}
+
+if ! curl -fsSL "$EBPF_URL" -o "$EBPF_DIR/conntrack.bpf.o" 2>/dev/null; then
+    log_warn "Failed to download eBPF program from release"
+    log_info "Building eBPF program from source..."
+    
+    # Check if build tools are available
+    if ! command -v clang &> /dev/null || ! command -v make &> /dev/null; then
+        log_info "Installing build dependencies..."
+        if command -v apt-get &> /dev/null; then
+            apt-get update -qq && apt-get install -y -qq clang llvm make linux-headers-$(uname -r) || {
+                log_error "Failed to install dependencies"
+                exit 1
+            }
+        elif command -v yum &> /dev/null; then
+            yum install -y -q clang llvm make kernel-headers || {
+                log_error "Failed to install dependencies"
+                exit 1
+            }
+        else
+            log_error "Cannot install dependencies automatically. Please install clang, llvm, make manually."
+            exit 1
+        fi
+    fi
+    
+    # Clone and build eBPF
+    TEMP_DIR=$(mktemp -d)
+    log_info "Cloning repository to $TEMP_DIR..."
+    git clone --depth 1 https://github.com/vponomarev/network-monitor.git "$TEMP_DIR" || {
+        log_error "Failed to clone repository"
+        rm -rf "$TEMP_DIR"
+        exit 1
+    }
+    
+    log_info "Building eBPF program..."
+    make -C "$TEMP_DIR/bpf" all || {
+        log_error "Failed to build eBPF program"
+        rm -rf "$TEMP_DIR"
+        exit 1
+    }
+    
+    cp "$TEMP_DIR/bpf/conntrack.bpf.o" "$EBPF_DIR/"
+    rm -rf "$TEMP_DIR"
+    log_info "eBPF program built successfully"
+fi
+
+chmod 644 "$EBPF_DIR/conntrack.bpf.o"
 
 # Download configuration files
 log_info "Downloading configuration files..."
