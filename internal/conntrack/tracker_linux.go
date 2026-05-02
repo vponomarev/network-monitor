@@ -189,28 +189,15 @@ func (t *Tracker) attachPrograms() error {
 		}
 	}
 
-	// Attach tcp_v4_accept for incoming IPv4 connections (kretprobe)
+	// Attach inet_csk_accept for incoming connections (kretprobe)
 	if t.config.TrackIncoming {
-		if prog, ok := t.colls.Programs["tcp_v4_accept"]; ok {
-			l, err := link.Kretprobe("tcp_v4_accept", prog, nil)
+		if prog, ok := t.colls.Programs["inet_csk_accept"]; ok {
+			l, err := link.Kretprobe("inet_csk_accept", prog, nil)
 			if err != nil {
-				t.logger.Warn("Failed to attach kretprobe/tcp_v4_accept", zap.Error(err))
+				t.logger.Warn("Failed to attach kretprobe/inet_csk_accept", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
-				t.logger.Info("Attached kretprobe/tcp_v4_accept for incoming IPv4 connections")
-			}
-		}
-	}
-
-	// Attach tcp_v6_accept for incoming IPv6 connections (kretprobe)
-	if t.config.TrackIncoming {
-		if prog, ok := t.colls.Programs["tcp_v6_accept"]; ok {
-			l, err := link.Kretprobe("tcp_v6_accept", prog, nil)
-			if err != nil {
-				t.logger.Debug("kretprobe/tcp_v6_accept not available, skipping", zap.Error(err))
-			} else {
-				t.links = append(t.links, l)
-				t.logger.Info("Attached kretprobe/tcp_v6_accept for incoming IPv6 connections")
+				t.logger.Info("Attached kretprobe/inet_csk_accept for incoming connections")
 			}
 		}
 	}

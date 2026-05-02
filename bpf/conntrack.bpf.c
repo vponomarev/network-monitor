@@ -158,8 +158,8 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     return 0;
 }
 
-SEC("kretprobe/tcp_v4_accept")
-int BPF_KRETPROBE(tcp_v4_accept, struct sock *ret_sk)
+SEC("kretprobe/inet_csk_accept")
+int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 {
     if (!track_incoming)
         return 0;
