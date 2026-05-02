@@ -179,31 +179,29 @@ struct tcphdr {
 #define TCP_ECE 0x40
 #define TCP_CWR 0x80
 
-/* pt_regs for tracepoints - x86_64 */
+/* pt_regs for x86_64 - must match libbpf field names for __VMLINUX_H__ */
+/* libbpf expects: di, si, dx, cx, r8, r9, sp, bp, ax, ip */
 struct pt_regs {
     unsigned long r15;
     unsigned long r14;
     unsigned long r13;
     unsigned long r12;
-    unsigned long rbp;
-    unsigned long rbx;
+    union { unsigned long rbp; unsigned long bp; };
+    union { unsigned long rbx; unsigned long dx; };
     unsigned long r11;
-    unsigned long r10;
-    unsigned long r9;
-    unsigned long r8;
-    union {
-        unsigned long rax;
-        unsigned long __PT_RC_REG;  /* For libbpf PT_REGS_RC */
-    };
+    union { unsigned long r10; unsigned long cx; };
+    union { unsigned long r9; unsigned long r9_alias; };
+    union { unsigned long r8; unsigned long r8_alias; };
+    union { unsigned long rax; unsigned long ax; };
     unsigned long rcx;
-    unsigned long rdx;
-    unsigned long rsi;
+    union { unsigned long rdx; unsigned long si; };
+    union { unsigned long rsi; unsigned long di; };
     unsigned long rdi;
     unsigned long orig_rax;
-    unsigned long rip;
+    union { unsigned long rip; unsigned long ip; };
     unsigned long cs;
     unsigned long eflags;
-    unsigned long rsp;
+    union { unsigned long rsp; unsigned long sp; };
     unsigned long ss;
     unsigned long orig_ax;
 };
