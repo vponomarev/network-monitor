@@ -56,6 +56,7 @@ struct connection_entry {
     __u8 direction;
     __u8 state;
     __u8 tcp_flags;
+    __u8 _pad[5];              /* Explicit padding for alignment */
     char comm[TASK_COMM_LEN];
 };
 
@@ -260,6 +261,9 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
  * Use kprobe (not kretprobe) to get socket before it's freed
  * Signature: void tcp_close(struct sock *sk, long timeout)
  *
+ * Note: tcp_close() is only called for TCP sockets (net/ipv4/tcp.c),
+ * so protocol check is unnecessary. Only family check is needed.
+ *
  * evt.comm semantics:
  *   - If connection found in map: comm = process that OPENED the connection
  *   - If not found: comm = process that is CLOSING the connection (fallback)
@@ -271,17 +275,9 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
         return 0;
 
     // Check socket family - only IPv4 supported
+    // Note: tcp_close() is only called for TCP sockets, no protocol check needed
     __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
     if (family != AF_INET)
-        return 0;
-
-    // Check protocol - only TCP supported
-    // Note: skc_protocol may not be available via CO-RE on all kernels
-    // Using direct read as fallback
-    __u8 protocol;
-    if (bpf_probe_read_kernel(&protocol, sizeof(protocol), &sk->__sk_common.skc_protocol) != 0)
-        protocol = IPPROTO_TCP;  // Default to TCP if read fails
-    if (protocol != IPPROTO_TCP)
         return 0;
 
     struct connection_event evt = {};
@@ -319,7 +315,7 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
         // comm = process that is closing (already set above)
         extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
         extract_ports(sk, &evt.src_port, &evt.dst_port);
-        evt.protocol = IPPROTO_TCP;
+        evt.protocol = IPPROTO_TCP;  // tcp_close() only called for TCP
         evt.direction = DIR_OUTGOING;  // Default assumption
     }
 
