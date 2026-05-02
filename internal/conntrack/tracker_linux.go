@@ -202,15 +202,15 @@ func (t *Tracker) attachPrograms() error {
 		}
 	}
 
-	// Attach tcp_close for connection closing (kretprobe)
+	// Attach tcp_close for connection closing (kprobe, not kretprobe)
 	if t.config.TrackCloses {
 		if prog, ok := t.colls.Programs["tcp_close"]; ok {
-			l, err := link.Kretprobe("tcp_close", prog, nil)
+			l, err := link.Kprobe("tcp_close", prog, nil)
 			if err != nil {
-				return fmt.Errorf("linking kretprobe/tcp_close: %w", err)
+				return fmt.Errorf("linking kprobe/tcp_close: %w", err)
 			}
 			t.links = append(t.links, l)
-			t.logger.Info("Attached kretprobe/tcp_close for connection closing")
+			t.logger.Info("Attached kprobe/tcp_close for connection closing")
 		}
 	}
 

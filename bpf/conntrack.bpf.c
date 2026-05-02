@@ -9,12 +9,12 @@
 #include "conntrack.bpf.h"
 
 /*
- * eBPF Connection Tracker - kprobe/kretprobe based
+ * eBPF Connection Tracker - kprobe based
  *
- * Uses kprobe/kretprobe for maximum kernel compatibility:
+ * Uses kprobe for maximum kernel compatibility:
  * - kprobe/tcp_connect: исходящие соединения (SYN_SENT)
- * - kretprobe/tcp_v4_accept: входящие IPv4 (ESTABLISHED)
- * - kretprobe/tcp_close: закрытие соединений
+ * - kretprobe/inet_csk_accept: входящие соединения (ESTABLISHED)
+ * - kprobe/tcp_close: закрытие соединений
  *
  * Supported kernels:
  * - 4.19.x+ (Debian 10/11, Ubuntu 18.04+)
@@ -39,13 +39,14 @@ struct connection_event {
     char comm[TASK_COMM_LEN];
 };
 
+/* Connection key - packed to avoid padding issues */
 struct connection_key {
     __u8 src_ip[16];
     __u8 dst_ip[16];
     __u16 src_port;
     __u16 dst_port;
     __u8 protocol;
-};
+} __attribute__((packed));
 
 struct connection_entry {
     __u64 timestamp_ns;
@@ -81,20 +82,21 @@ static __always_inline void submit_event(struct connection_event *evt)
     bpf_ringbuf_submit(event, 0);
 }
 
+/* Extract IPv4 addresses from sock using BPF_CORE_READ */
 static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u8 *daddr)
 {
     __u32 saddr4, daddr4;
-    bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &sk->__sk_common.skc_rcv_saddr);
-    bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &sk->__sk_common.skc_daddr);
+
+    // Use BPF_CORE_READ for CO-RE compatibility
+    saddr4 = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+    daddr4 = BPF_CORE_READ(sk, __sk_common.skc_daddr);
 
     // Kernel stores these in NETWORK byte order (big-endian)
-    // For 192.168.5.165: saddr4 = 0xC0A805A5 (network order)
-    // Convert to host byte order first
+    // Convert to host byte order
     saddr4 = bpf_ntohl(saddr4);
     daddr4 = bpf_ntohl(daddr4);
-    
+
     // Convert to IPv4-mapped IPv6 format
-    // [12]=MSB, [13], [14], [15]=LSB
     __builtin_memset(saddr, 0, 16);
     __builtin_memset(daddr, 0, 16);
     saddr[10] = 0xff;
@@ -103,7 +105,6 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[11] = 0xff;
 
     // Extract bytes from host-order __u32
-    // For 192.168.5.165 (0xC0A805A5): [12]=192, [13]=168, [14]=5, [15]=165
     saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);
     saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);
     saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);
@@ -115,13 +116,15 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[15] = (__u8)(daddr4 & 0xFF);
 }
 
+/* Extract ports from sock */
 static __always_inline void extract_ports(struct sock *sk, __u16 *sport, __u16 *dport)
 {
-    bpf_probe_read_kernel(sport, sizeof(*sport), &sk->__sk_common.skc_num);
-    bpf_probe_read_kernel(dport, sizeof(*dport), &sk->__sk_common.skc_dport);
+    *sport = BPF_CORE_READ(sk, __sk_common.skc_num);
+    *dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
     *dport = bpf_ntohs(*dport);
 }
 
+/* Create connection key from sock - RAW socket values (no swap) */
 static __always_inline void make_key_from_sock(struct sock *sk, struct connection_key *key)
 {
     extract_ipv4_addrs(sk, key->src_ip, key->dst_ip);
@@ -129,9 +132,7 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
     key->protocol = IPPROTO_TCP;
 }
 
-/* Trace tcp_connect - outgoing connection initiation (SYN sent)
- * Attached as kprobe/tcp_connect
- */
+/* Trace tcp_connect - outgoing connection initiation (SYN sent) */
 SEC("kprobe/tcp_connect")
 int BPF_KPROBE(tcp_connect, struct sock *sk)
 {
@@ -150,20 +151,25 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     evt.event_type = CONN_EVENT_NEW;
     evt.tcp_flags = TCP_SYN;
 
+    // Get process name once
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
 
+    // Create key and extract connection info
     make_key_from_sock(sk, &key);
-    extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
-    extract_ports(sk, &evt.src_port, &evt.dst_port);
-    evt.protocol = IPPROTO_TCP;
+    __builtin_memcpy(evt.src_ip, key.src_ip, 16);
+    __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
+    evt.src_port = key.src_port;
+    evt.dst_port = key.dst_port;
+    evt.protocol = key.protocol;
 
+    // Store in connections map
     struct connection_entry entry = {};
     entry.timestamp_ns = evt.timestamp_ns;
     entry.pid = evt.pid;
     entry.direction = DIR_OUTGOING;
     entry.state = CONN_STATE_SYN_SENT;
     entry.tcp_flags = TCP_SYN;
-    bpf_get_current_comm(&entry.comm, sizeof(entry.comm));
+    __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
 
     bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
 
@@ -172,8 +178,10 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
 }
 
 /* Trace inet_csk_accept - server accepts incoming connection
- * Attached as kretprobe/inet_csk_accept
  * Returns: struct sock * (new connection socket)
+ * 
+ * Key consistency: key is created from RAW socket values (local=src, remote=dst)
+ * Event format: src=client (remote), dst=server (local) - swapped for user-facing format
  */
 SEC("kretprobe/inet_csk_accept")
 int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
@@ -194,15 +202,22 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
     evt.direction = DIR_INCOMING;
     evt.state = CONN_STATE_ESTABLISHED;
     evt.event_type = CONN_EVENT_ESTABLISHED;
-    evt.tcp_flags = TCP_SYN | TCP_ACK;
+    evt.tcp_flags = TCP_SYN | TCP_ACK;  // Conditional flags for accept
     evt.protocol = IPPROTO_TCP;
 
+    // Get process name once
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
 
-    extract_ipv4_addrs(ret_sk, evt.src_ip, evt.dst_ip);
-    extract_ports(ret_sk, &evt.src_port, &evt.dst_port);
+    // Create key FIRST from raw socket values (local=src, remote=dst)
+    make_key_from_sock(ret_sk, &key);
 
-    // Swap: src=client, dst=server
+    // Copy to event
+    __builtin_memcpy(evt.src_ip, key.src_ip, 16);
+    __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
+    evt.src_port = key.src_port;
+    evt.dst_port = key.dst_port;
+
+    // Swap for user-facing format: src=client (remote), dst=server (local)
     __u8 tmp_ip[16];
     __builtin_memcpy(tmp_ip, evt.src_ip, 16);
     __builtin_memcpy(evt.src_ip, evt.dst_ip, 16);
@@ -212,15 +227,14 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
     evt.src_port = evt.dst_port;
     evt.dst_port = tmp_port;
 
-    make_key_from_sock(ret_sk, &key);
-
+    // Store in connections map (key is in raw socket format)
     struct connection_entry entry = {};
     entry.timestamp_ns = evt.timestamp_ns;
     entry.pid = evt.pid;
     entry.direction = DIR_INCOMING;
     entry.state = CONN_STATE_ESTABLISHED;
     entry.tcp_flags = TCP_SYN | TCP_ACK;
-    bpf_get_current_comm(&entry.comm, sizeof(entry.comm));
+    __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
 
     bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
 
@@ -229,10 +243,11 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 }
 
 /* Trace tcp_close - connection closing
- * Attached as kretprobe/tcp_close
+ * Use kprobe (not kretprobe) to get socket before it's freed
+ * Signature: void tcp_close(struct sock *sk, long timeout)
  */
-SEC("kretprobe/tcp_close")
-int BPF_KRETPROBE(tcp_close, struct sock *sk)
+SEC("kprobe/tcp_close")
+int BPF_KPROBE(tcp_close, struct sock *sk)
 {
     if (!track_closes)
         return 0;
@@ -247,19 +262,32 @@ int BPF_KRETPROBE(tcp_close, struct sock *sk)
     evt.state = CONN_STATE_CLOSED;
     evt.event_type = CONN_EVENT_CLOSED;
 
+    // Get process name once
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
 
+    // Create key from raw socket values (must match how it was stored)
     make_key_from_sock(sk, &key);
-    extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
-    extract_ports(sk, &evt.src_port, &evt.dst_port);
-    evt.protocol = IPPROTO_TCP;
 
+    // Look up stored connection to get original direction
     struct connection_entry *entry;
     entry = bpf_map_lookup_elem(&connections, &key);
     if (entry) {
         evt.direction = entry->direction;
         __builtin_memcpy(evt.comm, entry->comm, TASK_COMM_LEN);
+        __builtin_memcpy(evt.src_ip, key.src_ip, 16);
+        __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
+        evt.src_port = key.src_port;
+        evt.dst_port = key.dst_port;
+        evt.protocol = key.protocol;
+
+        // Remove from tracking map
         bpf_map_delete_elem(&connections, &key);
+    } else {
+        // Connection not found - extract from socket anyway
+        extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
+        extract_ports(sk, &evt.src_port, &evt.dst_port);
+        evt.protocol = IPPROTO_TCP;
+        evt.direction = DIR_OUTGOING;  // Default assumption
     }
 
     submit_event(&evt);
