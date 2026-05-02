@@ -197,9 +197,9 @@ int BPF_PROG(tcp_connect, struct sock *sk)
     return 0;
 }
 
-/* Trace tcp_v4_rcv - check for incoming SYN using kprobe */
-SEC("kprobe/tcp_v4_rcv")
-int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
+/* Trace tcp_v4_rcv - check for incoming SYN using fentry */
+SEC("fentry/tcp_v4_rcv")
+int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 {
     if (!track_incoming)
         return 0;

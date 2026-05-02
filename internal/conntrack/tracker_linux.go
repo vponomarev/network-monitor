@@ -197,16 +197,17 @@ func (t *Tracker) attachPrograms() error {
 	}
 
 	// Attach tcp_v4_rcv for incoming SYN detection
-	// Use kprobe since fentry may not work reliably for sk_buff access
+	// Use fentry for kernel 5.5+ with BTF support
 	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_rcv"]; ok {
-			// Try kprobe first (more reliable for sk_buff access)
-			l, err := link.Kprobe("tcp_v4_rcv", prog, nil)
+			l, err := link.AttachTracing(link.TracingOptions{
+				Program: prog,
+			})
 			if err != nil {
-				t.logger.Warn("kprobe tcp_v4_rcv failed, skipping incoming SYN detection", zap.Error(err))
+				t.logger.Warn("fentry tcp_v4_rcv failed, skipping incoming SYN detection", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
-				t.logger.Info("Attached tcp_v4_rcv (kprobe) for incoming SYN detection")
+				t.logger.Info("Attached tcp_v4_rcv (fentry) for incoming SYN detection")
 			}
 		}
 	}
