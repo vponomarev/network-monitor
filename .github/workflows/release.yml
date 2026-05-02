@@ -292,7 +292,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ needs.validate.outputs.version }}
           body: |
@@ -364,10 +364,13 @@ jobs:
           draft: false
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           files: |
+            artifacts/*.sha256
             artifacts/netmon-*
             artifacts/conntrack-*
             artifacts/checksums.txt
           token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # =====================
   # Notify
