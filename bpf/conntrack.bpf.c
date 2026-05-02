@@ -129,8 +129,11 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
     key->protocol = IPPROTO_TCP;
 }
 
-SEC("kprobe/tcp_connect")
-int BPF_KPROBE(tcp_connect, struct sock *sk)
+/* Trace tcp_connect - outgoing connection initiation (SYN sent)
+ * Can be attached as fentry/tcp_connect or kprobe/tcp_connect
+ */
+SEC("fentry/tcp_connect")
+int BPF_PROG(tcp_connect, struct sock *sk)
 {
     if (!track_outgoing)
         return 0;
@@ -168,8 +171,12 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     return 0;
 }
 
-SEC("kretprobe/inet_csk_accept")
-int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
+/* Trace inet_csk_accept - server accepts incoming connection
+ * Can be attached as fexit/inet_csk_accept or kretprobe/inet_csk_accept
+ * Returns: struct sock * (new connection socket)
+ */
+SEC("fexit/inet_csk_accept")
+int BPF_PROG(inet_csk_accept, struct sock *ret_sk)
 {
     if (!track_incoming)
         return 0;
@@ -221,8 +228,11 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
     return 0;
 }
 
-SEC("kretprobe/tcp_close")
-int BPF_KRETPROBE(tcp_close, struct sock *sk)
+/* Trace tcp_close - connection closing
+ * Can be attached as fexit/tcp_close or kretprobe/tcp_close
+ */
+SEC("fexit/tcp_close")
+int BPF_PROG(tcp_close, struct sock *sk)
 {
     if (!track_closes)
         return 0;
