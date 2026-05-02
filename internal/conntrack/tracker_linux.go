@@ -226,12 +226,15 @@ func (t *Tracker) attachPrograms() error {
 				t.logger.Debug("fentry/tcp_v4_accept failed, trying kprobe", zap.Error(err))
 				l, err = link.Kprobe("tcp_v4_accept", prog, nil)
 				if err != nil {
-					t.logger.Warn("tcp_v4_accept not available", zap.Error(err))
-					continue // Skip this program
+					t.logger.Warn("tcp_v4_accept not available, skipping", zap.Error(err))
+				} else {
+					t.links = append(t.links, l)
+					t.logger.Debug("Attached tcp_v4_accept (kprobe)")
 				}
+			} else {
+				t.links = append(t.links, l)
+				t.logger.Debug("Attached tcp_v4_accept (fentry)")
 			}
-			t.links = append(t.links, l)
-			t.logger.Debug("Attached tcp_v4_accept (fentry/kprobe)")
 		}
 	}
 
