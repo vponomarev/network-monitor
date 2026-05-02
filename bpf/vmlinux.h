@@ -149,6 +149,14 @@ struct sock_common {
     __u8 skc_protocol;  /* Added for protocol check */
 };
 
+/* INET socket - for tcp_connect source address */
+struct inet_sock {
+    struct sock sk;
+    __u32 inet_daddr;
+    __u32 inet_rcv_saddr;
+    __u32 inet_saddr;  /* Source address for outgoing */
+};
+
 /* Socket */
 struct sock {
     struct sock_common __sk_common;

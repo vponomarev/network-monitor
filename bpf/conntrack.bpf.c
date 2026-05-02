@@ -85,14 +85,24 @@ static __always_inline void submit_event(struct connection_event *evt)
     bpf_ringbuf_submit(event, 0);
 }
 
-/* Extract IPv4 addresses from sock using BPF_CORE_READ */
+/* Extract IPv4 addresses from sock using BPF_CORE_READ
+ * For tcp_connect: uses inet_saddr/daddr (set before connect)
+ * For inet_csk_accept/tcp_close: uses skc_rcv_saddr/daddr
+ */
 static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u8 *daddr)
 {
     __u32 saddr4, daddr4;
 
-    // Use BPF_CORE_READ for CO-RE compatibility
+    // Try skc_rcv_saddr/skc_daddr first (works for established sockets)
     saddr4 = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
     daddr4 = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+
+    // For tcp_connect, skc_rcv_saddr may be 0 (not bound yet)
+    // Fall back to inet_saddr from inet_sock
+    if (saddr4 == 0) {
+        struct inet_sock *inet = (void *)sk;
+        saddr4 = BPF_CORE_READ(inet, inet_saddr);
+    }
 
     // Kernel stores these in NETWORK byte order (big-endian)
     // Convert to host byte order

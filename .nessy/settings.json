@@ -22,7 +22,9 @@
       "Bash(wget *)",
       "Bash(unzip *)",
       "Bash(git rm *)",
-      "Bash(ssh *)"
+      "Bash(ssh *)",
+      "Bash(git stash)",
+      "Bash(git show *)"
     ]
   },
   "$version": 3
