@@ -146,6 +146,7 @@ struct sock_common {
     __u16 skc_dport;
     __u16 skc_num;
     __u16 skc_family;
+    __u8 skc_protocol;  /* Added for protocol check */
 };
 
 /* Socket */
