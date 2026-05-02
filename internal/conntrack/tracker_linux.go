@@ -197,15 +197,14 @@ func (t *Tracker) attachPrograms() error {
 	}
 
 	// Attach tcp_v4_rcv for incoming SYN detection
-	// NOTE: Disabled - IP address reading from sk_buff is unreliable
-	// inet_sock_set_state provides incoming connection tracking
-	if false && t.config.TrackIncoming {
+	// Use fentry for kernel 5.5+ with BTF support
+	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_rcv"]; ok {
 			l, err := link.AttachTracing(link.TracingOptions{
 				Program: prog,
 			})
 			if err != nil {
-				t.logger.Warn("fentry tcp_v4_rcv failed, skipping incoming SYN detection", zap.Error(err))
+				t.logger.Debug("fentry tcp_v4_rcv failed", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
 				t.logger.Info("Attached tcp_v4_rcv (fentry) for incoming SYN detection")

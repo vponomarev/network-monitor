@@ -389,7 +389,8 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     // This provides additional state tracking
     // oldstate, newstate: TCP_ESTABLISHED, TCP_SYN_SENT, TCP_SYN_RECV, etc.
 
-    __u32 sport, dport, protocol;
+    __u16 sport, dport;
+    __u16 protocol;
 
     bpf_probe_read_kernel(&sport, sizeof(sport), &ctx->sport);
     bpf_probe_read_kernel(&dport, sizeof(dport), &ctx->dport);
@@ -405,32 +406,36 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.pid_tgid = bpf_get_current_pid_tgid();
     evt.pid = evt.pid_tgid >> 32;
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.src_port = (__u16)bpf_ntohs((__u16)sport);
-    evt.dst_port = (__u16)bpf_ntohs((__u16)dport);
+    evt.src_port = bpf_ntohs(sport);
+    evt.dst_port = bpf_ntohs(dport);
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint
-    // ctx->saddr/daddr are __u8[4] arrays in network byte order
-    // Read bytes directly: [0]=MSB, [3]=LSB for network order
-    __u8 saddr_bytes[4], daddr_bytes[4];
-    bpf_probe_read_kernel(&saddr_bytes, sizeof(saddr_bytes), &ctx->saddr);
-    bpf_probe_read_kernel(&daddr_bytes, sizeof(daddr_bytes), &ctx->daddr);
+    // ctx->saddr/daddr are __u8[4] arrays in network byte order (big-endian)
+    // Read as __u32 and convert
+    __u32 saddr32, daddr32;
+    bpf_probe_read_kernel(&saddr32, sizeof(saddr32), &ctx->saddr);
+    bpf_probe_read_kernel(&daddr32, sizeof(daddr32), &ctx->daddr);
 
-    // Copy to IPv4-mapped IPv6 format
-    // Network order: saddr_bytes[0]=192, [1]=168, [2]=5, [3]=165
+    // Convert from network byte order to host byte order
+    __u32 saddr_host = bpf_ntohl(saddr32);
+    __u32 daddr_host = bpf_ntohl(daddr32);
+
+    // Extract bytes from host-order __u32
+    // For 192.168.5.165: saddr_host = 0xC0A805A5
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
-    evt.src_ip[12] = saddr_bytes[0];
-    evt.src_ip[13] = saddr_bytes[1];
-    evt.src_ip[14] = saddr_bytes[2];
-    evt.src_ip[15] = saddr_bytes[3];
+    evt.src_ip[12] = (__u8)((saddr_host >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((saddr_host >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((saddr_host >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(saddr_host & 0xFF);
 
     evt.dst_ip[10] = 0xff;
     evt.dst_ip[11] = 0xff;
-    evt.dst_ip[12] = daddr_bytes[0];
-    evt.dst_ip[13] = daddr_bytes[1];
-    evt.dst_ip[14] = daddr_bytes[2];
-    evt.dst_ip[15] = daddr_bytes[3];
+    evt.dst_ip[12] = (__u8)((daddr_host >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((daddr_host >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((daddr_host >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
 
     // Determine event type and direction based on state transition
     switch (ctx->newstate) {
