@@ -394,8 +394,7 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     // This provides additional state tracking
     // oldstate, newstate: TCP_ESTABLISHED, TCP_SYN_SENT, TCP_SYN_RECV, etc.
 
-    __u16 sport, dport;
-    __u8 protocol;
+    __u32 sport, dport, protocol;
 
     bpf_probe_read_kernel(&sport, sizeof(sport), &ctx->sport);
     bpf_probe_read_kernel(&dport, sizeof(dport), &ctx->dport);
@@ -411,8 +410,8 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.pid_tgid = bpf_get_current_pid_tgid();
     evt.pid = evt.pid_tgid >> 32;
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.src_port = bpf_ntohs(sport);
-    evt.dst_port = bpf_ntohs(dport);
+    evt.src_port = (__u16)bpf_ntohs((__u16)sport);
+    evt.dst_port = (__u16)bpf_ntohs((__u16)dport);
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint
