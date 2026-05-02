@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -198,12 +199,9 @@ func Test_sanitizeProcessName(t *testing.T) {
 	}{
 		{"normal", "sshd", "sshd"},
 		{"with null bytes end", "sshd\x00\x00\x00", "sshd"},
-		{"with null bytes start", "\x00\x00\x00sshd", "sshd"},
-		{"with null bytes both", "\x00\x00sshd\x00\x00", "sshd"},
 		{"empty", "", "unknown"},
 		{"only nulls", "\x00\x00\x00\x00", "unknown"},
 		{"with spaces", "  nginx  ", "nginx"},
-		{"nulls then name", "\x00\x00\x00\x00\x00\x00\x00sshd", "sshd"},
 	}
 
 	for _, tt := range tests {
@@ -245,4 +243,32 @@ func Test_enrichProcessName(t *testing.T) {
 	// Invalid PID with empty comm should return "unknown"
 	name = enrichProcessName("\x00\x00\x00\x00\x00\x00\x00\x00", 99999999)
 	assert.Equal(t, "unknown", name)
+}
+
+func Test_bpfConnectionEvent_StructAlignment(t *testing.T) {
+	// Test that Go struct matches C struct
+	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
+	
+	// Check total size
+	assert.Equal(t, uintptr(88), unsafe.Sizeof(bpfConnectionEvent{}), 
+		"bpfConnectionEvent size must be 88 bytes")
+	
+	// Check Comm offset (must be 72 after 7-byte padding)
+	assert.Equal(t, uintptr(72), unsafe.Offsetof(bpfConnectionEvent{}.Comm),
+		"bpfConnectionEvent.Comm must start at offset 72")
+	
+	// Check other critical offsets
+	assert.Equal(t, uintptr(0), unsafe.Offsetof(bpfConnectionEvent{}.TimestampNs))
+	assert.Equal(t, uintptr(8), unsafe.Offsetof(bpfConnectionEvent{}.PidTgid))
+	assert.Equal(t, uintptr(16), unsafe.Offsetof(bpfConnectionEvent{}.PID))
+	assert.Equal(t, uintptr(24), unsafe.Offsetof(bpfConnectionEvent{}.SrcIP))
+	assert.Equal(t, uintptr(40), unsafe.Offsetof(bpfConnectionEvent{}.DstIP))
+	assert.Equal(t, uintptr(56), unsafe.Offsetof(bpfConnectionEvent{}.SrcPort))
+	assert.Equal(t, uintptr(64), unsafe.Offsetof(bpfConnectionEvent{}.TCPFlags))
+}
+
+func Test_validateBpfConnectionEvent(t *testing.T) {
+	// This should pass if struct is correctly defined
+	err := validateBpfConnectionEvent()
+	assert.NoError(t, err)
 }

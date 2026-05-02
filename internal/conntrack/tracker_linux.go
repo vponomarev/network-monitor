@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -53,25 +54,49 @@ type Tracker struct {
 }
 
 // eBPF event structure (must match C struct)
+// C struct has __u8 _pad[7] after tcp_flags for 8-byte alignment of comm
 type bpfConnectionEvent struct {
-	TimestampNs uint64
-	PidTgid     uint64
-	PID         uint32
-	TID         uint32
-	SrcIP       [16]byte
-	DstIP       [16]byte
-	SrcPort     uint16
-	DstPort     uint16
-	Protocol    uint8
-	Direction   uint8
-	State       uint8
-	EventType   uint8
-	TCPFlags    uint8
-	Comm        [16]byte
+	TimestampNs uint64    // offset 0
+	PidTgid     uint64    // offset 8
+	PID         uint32    // offset 16
+	TID         uint32    // offset 20
+	SrcIP       [16]byte  // offset 24
+	DstIP       [16]byte  // offset 40
+	SrcPort     uint16    // offset 56
+	DstPort     uint16    // offset 58
+	Protocol    uint8     // offset 60
+	Direction   uint8     // offset 61
+	State       uint8     // offset 62
+	EventType   uint8     // offset 63
+	TCPFlags    uint8     // offset 64
+	_           [7]byte   // offset 65-71 (padding for comm alignment)
+	Comm        [16]byte  // offset 72
+}
+
+// validateBpfConnectionEvent checks that Go struct matches C struct
+func validateBpfConnectionEvent() error {
+	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
+	if unsafe.Sizeof(bpfConnectionEvent{}) != 88 {
+		return fmt.Errorf("bpfConnectionEvent size mismatch: got %d, expected 88", 
+			unsafe.Sizeof(bpfConnectionEvent{}))
+	}
+	
+	// Comm must start at offset 72 (after 7-byte padding)
+	if unsafe.Offsetof(bpfConnectionEvent{}.Comm) != 72 {
+		return fmt.Errorf("bpfConnectionEvent.Comm offset mismatch: got %d, expected 72", 
+			unsafe.Offsetof(bpfConnectionEvent{}.Comm))
+	}
+	
+	return nil
 }
 
 // NewTracker creates a new connection tracker
 func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
+	// Validate eBPF event structure matches C struct
+	if err := validateBpfConnectionEvent(); err != nil {
+		return nil, fmt.Errorf("validating bpfConnectionEvent: %w", err)
+	}
+
 	// Remove resource limits for eBPF
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("removing memlock: %w", err)
@@ -261,8 +286,8 @@ func (t *Tracker) readEvents(ctx context.Context) {
 
 // parseConnectionEvent parses raw eBPF event data
 func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
-	// Minimum size: timestamp(8) + pid_tgid(8) + pid(4) + tid(4) + src_ip(16) + dst_ip(16) + ports(4) + protocol(1) + direction(1) + state(1) + event_type(1) + tcp_flags(1) + comm(16) = 81 bytes
-	if len(data) < 81 {
+	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
+	if len(data) < 88 {
 		t.logger.Debug("Event data too short", zap.Int("len", len(data)))
 		return nil
 	}
@@ -282,7 +307,8 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 	event.State = data[62]
 	event.EventType = data[63]
 	event.TCPFlags = data[64]
-	copy(event.Comm[:], data[65:81])
+	// Skip 7-byte padding (offset 65-71)
+	copy(event.Comm[:], data[72:88])
 
 	// Convert to Connection
 	conn := &Connection{
@@ -309,9 +335,10 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 }
 
 // sanitizeProcessName cleans up process name from eBPF
+// With proper struct alignment, null bytes should only be at the end
 func sanitizeProcessName(name string) string {
-	// Remove all null bytes (can be at start, middle or end)
-	name = strings.ReplaceAll(name, "\x00", "")
+	// Remove null bytes and trim whitespace
+	name = strings.TrimRight(name, "\x00")
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "unknown"
