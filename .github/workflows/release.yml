@@ -257,10 +257,22 @@ jobs:
           find . -type f -exec mv {} . \;
           find . -type d -empty -delete
           find . -type d -delete
-          
+
           # Create combined checksums file
           sha256sum * > checksums.txt || true
           ls -la
+
+      # Upload eBPF program as separate artifact
+      - name: Download eBPF programs
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf-programs
+          path: ./artifacts/bpf/
+
+      - name: Copy eBPF to release artifacts
+        run: |
+          cp artifacts/bpf/*.o artifacts/conntrack.bpf.o
+          ls -la artifacts/
 
       - name: Generate changelog
         id: changelog
@@ -367,6 +379,7 @@ jobs:
             artifacts/*.sha256
             artifacts/netmon-*
             artifacts/conntrack-*
+            artifacts/conntrack.bpf.o
             artifacts/checksums.txt
           token: ${{ secrets.GITHUB_TOKEN }}
         env:
