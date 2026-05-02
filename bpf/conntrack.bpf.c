@@ -198,7 +198,11 @@ int BPF_PROG(tcp_connect, struct sock *sk)
     return 0;
 }
 
-/* Trace tcp_v4_rcv - check for incoming SYN */
+/* Trace tcp_v4_rcv - check for incoming SYN
+ * NOTE: Disabled due to unreliable sk_buff access in fentry
+ * Use inet_sock_set_state tracepoint for incoming connection tracking
+ */
+#if 0
 SEC("fentry/tcp_v4_rcv")
 int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 {
@@ -299,6 +303,7 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     submit_event(&evt);
     return 0;
 }
+#endif /* tcp_v4_rcv disabled */
 
 /* Trace tcp_v4_accept - server accepts incoming connection
  * NOTE: Disabled - tcp_v4_rcv + inet_sock_set_state provide equivalent functionality
