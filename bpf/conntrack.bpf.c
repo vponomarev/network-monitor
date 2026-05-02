@@ -402,21 +402,41 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_ip[10] = 0xff;
     evt.dst_ip[11] = 0xff;
 
-    // Determine event type based on state transition
+    // Determine event type and direction based on state transition
     switch (ctx->newstate) {
         case TCP_ESTABLISHED:
+            // Determine direction: if src_port is ephemeral (>1024), it's outgoing
+            // If dst_port is well-known (<=1024), it's incoming
+            if (evt.dst_port <= 1024 && evt.src_port > 1024) {
+                evt.direction = DIR_INCOMING;
+            } else {
+                evt.direction = DIR_OUTGOING;
+            }
             evt.state = CONN_STATE_ESTABLISHED;
             evt.event_type = CONN_EVENT_ESTABLISHED;
             break;
         case TCP_CLOSE:
         case TCP_CLOSE_WAIT:
+            // Determine direction same way
+            if (evt.dst_port <= 1024 && evt.src_port > 1024) {
+                evt.direction = DIR_INCOMING;
+            } else {
+                evt.direction = DIR_OUTGOING;
+            }
             evt.state = CONN_STATE_CLOSED;
             evt.event_type = CONN_EVENT_CLOSED;
+            break;
+        case TCP_SYN_RECV:
+            // Incoming connection in SYN_RECV state
+            evt.direction = DIR_INCOMING;
+            evt.state = CONN_STATE_SYN_RECEIVED;
+            evt.event_type = CONN_EVENT_NEW;
             break;
         default:
             return 0;
     }
 
+    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
     submit_event(&evt);
     return 0;
 }
