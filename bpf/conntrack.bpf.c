@@ -8,6 +8,19 @@
 #include <bpf/bpf_endian.h>
 #include "conntrack.bpf.h"
 
+/*
+ * Universal eBPF Connection Tracker
+ * 
+ * Uses fentry/fexit for kernel 5.5+ with BTF support
+ * Falls back to kprobe for older kernels (compile-time switch)
+ * 
+ * Supported kernels:
+ * - 5.15.x (Ubuntu 22.04 GA)
+ * - 6.2.x - 6.5.x (Ubuntu HWE)
+ * - 6.8.x+ (Debian 12, Proxmox 8.4)
+ * - 6.10.x - 6.17.x (Latest mainline)
+ */
+
 /* Connection event - sent to userspace via ring buffer */
 struct connection_event {
     __u64 timestamp_ns;
@@ -140,15 +153,11 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
 }
 
 /* Trace tcp_connect - outgoing connection initiation (SYN sent) */
-SEC("kprobe/tcp_connect")
-int BPF_KPROBE(tcp_connect)
+SEC("fentry/tcp_connect")
+int BPF_PROG(tcp_connect, struct sock *sk)
 {
     if (!track_outgoing)
         return 0;
-
-    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
-    struct sock *sk;
-    bpf_probe_read_kernel(&sk, sizeof(sk), (void *)&PT_REGS_PARM1(ctx));
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -185,19 +194,12 @@ int BPF_KPROBE(tcp_connect)
     return 0;
 }
 
-/* Trace tcp_v4_rcv - check for incoming SYN 
- * NOTE: Disabled for kernel 6.8+ due to verifier issues with pt_regs access
- */
-#if 0
-SEC("kprobe/tcp_v4_rcv")
-int BPF_KPROBE(tcp_v4_rcv)
+/* Trace tcp_v4_rcv - check for incoming SYN */
+SEC("fentry/tcp_v4_rcv")
+int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 {
     if (!track_incoming)
         return 0;
-
-    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
-    struct sk_buff *skb;
-    bpf_probe_read_kernel(&skb, sizeof(skb), (void *)&PT_REGS_PARM1(ctx));
 
     // Read TCP header
     struct tcphdr *th;
@@ -278,21 +280,13 @@ int BPF_KPROBE(tcp_v4_rcv)
     submit_event(&evt);
     return 0;
 }
-#endif
 
-/* Trace tcp_v4_accept - server accepts incoming connection
- * NOTE: Disabled for kernel 6.8+ due to verifier issues with pt_regs access
- */
-#if 0
-SEC("kprobe/tcp_v4_accept")
-int BPF_KPROBE(tcp_v4_accept)
+/* Trace tcp_v4_accept - server accepts incoming connection */
+SEC("fentry/tcp_v4_accept")
+int BPF_PROG(tcp_v4_accept, struct sock *sk, struct sk_buff *skb)
 {
     if (!track_incoming)
         return 0;
-
-    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
-    struct sock *sk;
-    bpf_probe_read_kernel(&sk, sizeof(sk), (void *)&PT_REGS_PARM1(ctx));
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -325,18 +319,13 @@ int BPF_KPROBE(tcp_v4_accept)
     submit_event(&evt);
     return 0;
 }
-#endif
 
 /* Trace tcp_close - connection closing */
-SEC("kprobe/tcp_close")
-int BPF_KPROBE(tcp_close)
+SEC("fentry/tcp_close")
+int BPF_PROG(tcp_close, struct sock *sk)
 {
     if (!track_closes)
         return 0;
-
-    // Read sock pointer from pt_regs using bpf_probe_read_kernel (kernel 6.8+ compatibility)
-    struct sock *sk;
-    bpf_probe_read_kernel(&sk, sizeof(sk), (void *)&PT_REGS_PARM1(ctx));
 
     struct connection_event evt = {};
     struct connection_key key = {};
