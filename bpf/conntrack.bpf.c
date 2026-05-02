@@ -386,22 +386,21 @@ int BPF_PROG(tcp_close, struct sock *sk)
 SEC("tracepoint/sock/inet_sock_set_state")
 int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 {
-    // This provides additional state tracking
-    // oldstate, newstate: TCP_ESTABLISHED, TCP_SYN_SENT, TCP_SYN_RECV, etc.
-
-    __u16 sport, dport;
-    __u16 protocol;
-
-    bpf_probe_read_kernel(&sport, sizeof(sport), &ctx->sport);
-    bpf_probe_read_kernel(&dport, sizeof(dport), &ctx->dport);
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &ctx->protocol);
+    // Read fields using BPF_CORE_READ for CO-RE compatibility
+    __u32 oldstate = BPF_CORE_READ(ctx, oldstate);
+    __u32 newstate = BPF_CORE_READ(ctx, newstate);
+    __u16 sport = BPF_CORE_READ(ctx, sport);
+    __u16 dport = BPF_CORE_READ(ctx, dport);
+    __u16 protocol = BPF_CORE_READ(ctx, protocol);
+    __u32 saddr32 = BPF_CORE_READ(ctx, saddr);
+    __u32 daddr32 = BPF_CORE_READ(ctx, daddr);
 
     if (protocol != IPPROTO_TCP)
         return 0;
 
     // Debug: print state transition
     bpf_printk("inet_sock: sport=%d dport=%d oldstate=%d newstate=%d", 
-               sport, dport, ctx->oldstate, ctx->newstate);
+               sport, dport, oldstate, newstate);
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -413,15 +412,6 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.src_port = bpf_ntohs(sport);
     evt.dst_port = bpf_ntohs(dport);
     evt.protocol = IPPROTO_TCP;
-
-    // Read IP addresses from tracepoint
-    // ctx->saddr/daddr are __u32 in network byte order
-    __u32 saddr32, daddr32;
-    bpf_probe_read_kernel(&saddr32, sizeof(saddr32), &ctx->saddr);
-    bpf_probe_read_kernel(&daddr32, sizeof(daddr32), &ctx->daddr);
-
-    // Debug: print raw IP values
-    bpf_printk("inet_sock: saddr_raw=0x%x daddr_raw=0x%x", saddr32, daddr32);
 
     // Convert from network byte order to host byte order
     __u32 saddr_host = bpf_ntohl(saddr32);
@@ -452,7 +442,6 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
                evt.dst_ip[12], evt.dst_ip[13], evt.dst_ip[14], evt.dst_ip[15]);
 
     // Determine event type and direction based on state transition
-    __u32 newstate = ctx->newstate;
     switch (newstate) {
         case TCP_ESTABLISHED:
             bpf_printk("inet_sock: TCP_ESTABLISHED");
