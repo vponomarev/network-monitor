@@ -124,21 +124,19 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[10] = 0xff;
     daddr[11] = 0xff;
 
-    // Read bytes directly (kernel stores in network byte order)
-    // For 192.168.5.165: saddr4 = 0xC0A805A5 in memory
-    // On little-endian read: byte[0]=0xA5, byte[1]=0x05, byte[2]=0xA8, byte[3]=0xC0
-    __u8 *s = (__u8 *)&saddr4;
-    __u8 *d = (__u8 *)&daddr4;
+    // Extract bytes from network-order __u32
+    // For 192.168.5.214: saddr4 = 0xC0A805D6 (big-endian representation)
+    // On little-endian host: stored as 0xD605A8C0
+    // We want: [12]=192, [13]=168, [14]=5, [15]=214
+    saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);
+    saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);
+    saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);
+    saddr[15] = (__u8)(saddr4 & 0xFF);
     
-    saddr[12] = s[3];  // 192
-    saddr[13] = s[2];  // 168
-    saddr[14] = s[1];  // 5
-    saddr[15] = s[0];  // 165
-    
-    daddr[12] = d[3];
-    daddr[13] = d[2];
-    daddr[14] = d[1];
-    daddr[15] = d[0];
+    daddr[12] = (__u8)((daddr4 >> 24) & 0xFF);
+    daddr[13] = (__u8)((daddr4 >> 16) & 0xFF);
+    daddr[14] = (__u8)((daddr4 >> 8) & 0xFF);
+    daddr[15] = (__u8)(daddr4 & 0xFF);
 }
 
 /* Extract ports from sock */
@@ -231,19 +229,16 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &iph->saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &iph->daddr);
     
-    // Read bytes directly (kernel stores in network byte order)
-    __u8 *s = (__u8 *)&saddr4;
-    __u8 *d = (__u8 *)&daddr4;
+    // Extract bytes from network-order __u32
+    evt.src_ip[12] = (__u8)((saddr4 >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((saddr4 >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((saddr4 >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(saddr4 & 0xFF);
     
-    evt.src_ip[12] = s[3];
-    evt.src_ip[13] = s[2];
-    evt.src_ip[14] = s[1];
-    evt.src_ip[15] = s[0];
-    
-    evt.dst_ip[12] = d[3];
-    evt.dst_ip[13] = d[2];
-    evt.dst_ip[14] = d[1];
-    evt.dst_ip[15] = d[0];
+    evt.dst_ip[12] = (__u8)((daddr4 >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((daddr4 >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((daddr4 >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(daddr4 & 0xFF);
     
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
@@ -420,19 +415,16 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint (network byte order)
-    // Read bytes directly from __u32 values
-    __u8 *s = (__u8 *)&ctx->saddr;
-    __u8 *d = (__u8 *)&ctx->daddr;
+    // Extract bytes from network-order __u32
+    evt.src_ip[12] = (__u8)((ctx->saddr >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((ctx->saddr >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((ctx->saddr >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(ctx->saddr & 0xFF);
     
-    evt.src_ip[12] = s[3];
-    evt.src_ip[13] = s[2];
-    evt.src_ip[14] = s[1];
-    evt.src_ip[15] = s[0];
-    
-    evt.dst_ip[12] = d[3];
-    evt.dst_ip[13] = d[2];
-    evt.dst_ip[14] = d[1];
-    evt.dst_ip[15] = d[0];
+    evt.dst_ip[12] = (__u8)((ctx->daddr >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((ctx->daddr >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((ctx->daddr >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(ctx->daddr & 0xFF);
     
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
