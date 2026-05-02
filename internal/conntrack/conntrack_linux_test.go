@@ -197,7 +197,9 @@ func Test_sanitizeProcessName(t *testing.T) {
 		expected string
 	}{
 		{"normal", "sshd", "sshd"},
-		{"with null bytes", "sshd\x00\x00\x00", "sshd"},
+		{"with null bytes end", "sshd\x00\x00\x00", "sshd"},
+		{"with null bytes start", "\x00\x00\x00sshd", "sshd"},
+		{"with null bytes both", "\x00\x00sshd\x00\x00", "sshd"},
 		{"empty", "", "unknown"},
 		{"only nulls", "\x00\x00\x00\x00", "unknown"},
 		{"with spaces", "  nginx  ", "nginx"},

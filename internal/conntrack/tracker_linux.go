@@ -310,8 +310,8 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 
 // sanitizeProcessName cleans up process name from eBPF
 func sanitizeProcessName(name string) string {
-	// Remove null bytes and trim whitespace
-	name = strings.TrimRight(name, "\x00")
+	// Remove all null bytes (can be at start, middle or end)
+	name = strings.ReplaceAll(name, "\x00", "")
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "unknown"
