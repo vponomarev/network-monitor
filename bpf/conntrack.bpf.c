@@ -281,9 +281,11 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     return 0;
 }
 
-/* Trace tcp_v4_accept - server accepts incoming connection */
-SEC("fentry/tcp_v4_accept")
-int BPF_PROG(tcp_v4_accept, struct sock *sk, struct sk_buff *skb)
+/* Trace tcp_v4_accept - server accepts incoming connection
+ * NOTE: Uses kprobe as fentry is not supported for this function
+ */
+SEC("kprobe/tcp_v4_accept")
+int BPF_KPROBE(tcp_v4_accept, struct sock *sk, struct sk_buff *skb)
 {
     if (!track_incoming)
         return 0;
