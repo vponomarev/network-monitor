@@ -20,7 +20,8 @@
       "Bash(ls *)",
       "Bash(curl *)",
       "Bash(wget *)",
-      "Bash(unzip *)"
+      "Bash(unzip *)",
+      "Bash(git rm *)"
     ]
   },
   "$version": 3

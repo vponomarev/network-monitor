@@ -54,6 +54,7 @@ type Tracker struct {
 // eBPF event structure (must match C struct)
 type bpfConnectionEvent struct {
 	TimestampNs uint64
+	PidTgid     uint64
 	PID         uint32
 	TID         uint32
 	SrcIP       [16]byte
@@ -65,8 +66,6 @@ type bpfConnectionEvent struct {
 	State       uint8
 	EventType   uint8
 	TCPFlags    uint8
-	Seq         uint32
-	AckSeq      uint32
 	Comm        [16]byte
 }
 
@@ -282,7 +281,8 @@ func (t *Tracker) readEvents(ctx context.Context) {
 
 // parseConnectionEvent parses raw eBPF event data
 func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
-	if len(data) < 80 {
+	// Minimum size: timestamp(8) + pid_tgid(8) + pid(4) + tid(4) + src_ip(16) + dst_ip(16) + ports(4) + protocol(1) + direction(1) + state(1) + event_type(1) + tcp_flags(1) + comm(16) = 81 bytes
+	if len(data) < 81 {
 		t.logger.Debug("Event data too short", zap.Int("len", len(data)))
 		return nil
 	}
@@ -290,19 +290,19 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 	// Parse binary data (must match C struct layout)
 	event := &bpfConnectionEvent{}
 	event.TimestampNs = binary.LittleEndian.Uint64(data[0:8])
-	event.PID = binary.LittleEndian.Uint32(data[8:12])
-	event.TID = binary.LittleEndian.Uint32(data[12:16])
-	copy(event.SrcIP[:], data[16:32])
-	copy(event.DstIP[:], data[32:48])
-	event.SrcPort = binary.LittleEndian.Uint16(data[48:50])
-	event.DstPort = binary.LittleEndian.Uint16(data[50:52])
-	event.Protocol = data[52]
-	event.Direction = data[53]
-	event.State = data[54]
-	event.EventType = data[55]
-	event.TCPFlags = data[56]
-	// Bytes sent/received would be at offset 57-64 if tracked by eBPF
-	copy(event.Comm[:], data[64:80])
+	event.PidTgid = binary.LittleEndian.Uint64(data[8:16])
+	event.PID = binary.LittleEndian.Uint32(data[16:20])
+	event.TID = binary.LittleEndian.Uint32(data[20:24])
+	copy(event.SrcIP[:], data[24:40])
+	copy(event.DstIP[:], data[40:56])
+	event.SrcPort = binary.LittleEndian.Uint16(data[56:58])
+	event.DstPort = binary.LittleEndian.Uint16(data[58:60])
+	event.Protocol = data[60]
+	event.Direction = data[61]
+	event.State = data[62]
+	event.EventType = data[63]
+	event.TCPFlags = data[64]
+	copy(event.Comm[:], data[65:81])
 
 	// Convert to Connection
 	conn := &Connection{
