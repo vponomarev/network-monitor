@@ -185,7 +185,10 @@ int BPF_KPROBE(tcp_connect)
     return 0;
 }
 
-/* Trace tcp_v4_rcv - check for incoming SYN */
+/* Trace tcp_v4_rcv - check for incoming SYN 
+ * NOTE: Disabled for kernel 6.8+ due to verifier issues with pt_regs access
+ */
+#if 0
 SEC("kprobe/tcp_v4_rcv")
 int BPF_KPROBE(tcp_v4_rcv)
 {
@@ -275,8 +278,12 @@ int BPF_KPROBE(tcp_v4_rcv)
     submit_event(&evt);
     return 0;
 }
+#endif
 
-/* Trace tcp_v4_accept - server accepts incoming connection */
+/* Trace tcp_v4_accept - server accepts incoming connection
+ * NOTE: Disabled for kernel 6.8+ due to verifier issues with pt_regs access
+ */
+#if 0
 SEC("kprobe/tcp_v4_accept")
 int BPF_KPROBE(tcp_v4_accept)
 {
@@ -318,6 +325,7 @@ int BPF_KPROBE(tcp_v4_accept)
     submit_event(&evt);
     return 0;
 }
+#endif
 
 /* Trace tcp_close - connection closing */
 SEC("kprobe/tcp_close")
