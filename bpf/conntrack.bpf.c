@@ -397,15 +397,17 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     // field:__u8 saddr[4];	offset:32;	size:4;
     // field:__u8 daddr[4];	offset:36;	size:4;
     
-    __u32 oldstate, newstate, sport, dport, protocol, saddr32, daddr32;
+    __u32 oldstate, newstate;
+    __u16 sport, dport, protocol;
+    __u8 saddr_bytes[4], daddr_bytes[4];
     
     bpf_probe_read_kernel(&oldstate, sizeof(oldstate), (void *)ctx + 16);
     bpf_probe_read_kernel(&newstate, sizeof(newstate), (void *)ctx + 20);
     bpf_probe_read_kernel(&sport, sizeof(sport), (void *)ctx + 24);
     bpf_probe_read_kernel(&dport, sizeof(dport), (void *)ctx + 26);
     bpf_probe_read_kernel(&protocol, sizeof(protocol), (void *)ctx + 30);
-    bpf_probe_read_kernel(&saddr32, sizeof(saddr32), (void *)ctx + 32);
-    bpf_probe_read_kernel(&daddr32, sizeof(daddr32), (void *)ctx + 36);
+    bpf_probe_read_kernel(&saddr_bytes, sizeof(saddr_bytes), (void *)ctx + 32);
+    bpf_probe_read_kernel(&daddr_bytes, sizeof(daddr_bytes), (void *)ctx + 36);
 
     if (protocol != IPPROTO_TCP)
         return 0;
@@ -421,33 +423,26 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.pid_tgid = bpf_get_current_pid_tgid();
     evt.pid = evt.pid_tgid >> 32;
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.src_port = (__u16)bpf_ntohs((__u16)sport);
-    evt.dst_port = (__u16)bpf_ntohs((__u16)dport);
+    evt.src_port = bpf_ntohs(sport);
+    evt.dst_port = bpf_ntohs(dport);
     evt.protocol = IPPROTO_TCP;
 
-    // saddr/daddr are already in network byte order as stored in kernel
-    // Convert to host byte order
-    __u32 saddr_host = bpf_ntohl(saddr32);
-    __u32 daddr_host = bpf_ntohl(daddr32);
-
-    // Debug: print host order IP values
-    bpf_printk("inet_sock: saddr_host=0x%x daddr_host=0x%x", saddr_host, daddr_host);
-
-    // Extract bytes from host-order __u32
-    // For 192.168.5.165: saddr_host = 0xC0A805A5
+    // saddr_bytes/daddr_bytes are in network byte order (big-endian)
+    // saddr_bytes[0] = MSB, saddr_bytes[3] = LSB
+    // Convert to IPv4-mapped IPv6 format
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
-    evt.src_ip[12] = (__u8)((saddr_host >> 24) & 0xFF);
-    evt.src_ip[13] = (__u8)((saddr_host >> 16) & 0xFF);
-    evt.src_ip[14] = (__u8)((saddr_host >> 8) & 0xFF);
-    evt.src_ip[15] = (__u8)(saddr_host & 0xFF);
+    evt.src_ip[12] = saddr_bytes[0];
+    evt.src_ip[13] = saddr_bytes[1];
+    evt.src_ip[14] = saddr_bytes[2];
+    evt.src_ip[15] = saddr_bytes[3];
 
     evt.dst_ip[10] = 0xff;
     evt.dst_ip[11] = 0xff;
-    evt.dst_ip[12] = (__u8)((daddr_host >> 24) & 0xFF);
-    evt.dst_ip[13] = (__u8)((daddr_host >> 16) & 0xFF);
-    evt.dst_ip[14] = (__u8)((daddr_host >> 8) & 0xFF);
-    evt.dst_ip[15] = (__u8)(daddr_host & 0xFF);
+    evt.dst_ip[12] = daddr_bytes[0];
+    evt.dst_ip[13] = daddr_bytes[1];
+    evt.dst_ip[14] = daddr_bytes[2];
+    evt.dst_ip[15] = daddr_bytes[3];
 
     // Debug: print extracted IP bytes
     bpf_printk("inet_sock: src_ip=%d.%d.%d.%d dst_ip=%d.%d.%d.%d",
