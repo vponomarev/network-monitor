@@ -14,7 +14,6 @@
  * Uses kprobe/kretprobe for maximum kernel compatibility:
  * - kprobe/tcp_connect: исходящие соединения (SYN_SENT)
  * - kretprobe/tcp_v4_accept: входящие IPv4 (ESTABLISHED)
- * - kretprobe/tcp_v6_accept: входящие IPv6 (ESTABLISHED)
  * - kretprobe/tcp_close: закрытие соединений
  *
  * Supported kernels:
@@ -23,7 +22,6 @@
  * - 6.x+ (All modern kernels)
  */
 
-/* Connection event - sent to userspace via ring buffer */
 struct connection_event {
     __u64 timestamp_ns;
     __u64 pid_tgid;
@@ -161,7 +159,7 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
 }
 
 SEC("kretprobe/tcp_v4_accept")
-int BPF_KPROBE(tcp_v4_accept, struct pt_regs *ctx, struct sock *ret_sk)
+int BPF_KRETPROBE(tcp_v4_accept, struct sock *ret_sk)
 {
     if (!track_incoming)
         return 0;
@@ -214,7 +212,7 @@ int BPF_KPROBE(tcp_v4_accept, struct pt_regs *ctx, struct sock *ret_sk)
 }
 
 SEC("kretprobe/tcp_close")
-int BPF_KPROBE(tcp_close, struct pt_regs *ctx, struct sock *sk)
+int BPF_KRETPROBE(tcp_close, struct sock *sk)
 {
     if (!track_closes)
         return 0;
