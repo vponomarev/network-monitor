@@ -112,7 +112,8 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
 {
     __u32 saddr4, daddr4;
 
-    // Read source and dest IPv4 addresses (stored in network byte order)
+    // Read source and dest IPv4 addresses
+    // Kernel stores these in host byte order in skc_rcv_saddr/skc_daddr
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &sk->__sk_common.skc_rcv_saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &sk->__sk_common.skc_daddr);
 
@@ -124,19 +125,18 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[10] = 0xff;
     daddr[11] = 0xff;
 
-    // Extract bytes from network-order __u32
-    // For 192.168.5.214: saddr4 = 0xC0A805D6 (big-endian representation)
-    // On little-endian host: stored as 0xD605A8C0
+    // Extract bytes from host-order __u32
+    // For 192.168.5.214 in host order on little-endian: stored as 0xD605A8C0
     // We want: [12]=192, [13]=168, [14]=5, [15]=214
-    saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);
-    saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);
-    saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);
-    saddr[15] = (__u8)(saddr4 & 0xFF);
+    saddr[12] = (__u8)(saddr4 & 0xFF);
+    saddr[13] = (__u8)((saddr4 >> 8) & 0xFF);
+    saddr[14] = (__u8)((saddr4 >> 16) & 0xFF);
+    saddr[15] = (__u8)((saddr4 >> 24) & 0xFF);
     
-    daddr[12] = (__u8)((daddr4 >> 24) & 0xFF);
-    daddr[13] = (__u8)((daddr4 >> 16) & 0xFF);
-    daddr[14] = (__u8)((daddr4 >> 8) & 0xFF);
-    daddr[15] = (__u8)(daddr4 & 0xFF);
+    daddr[12] = (__u8)(daddr4 & 0xFF);
+    daddr[13] = (__u8)((daddr4 >> 8) & 0xFF);
+    daddr[14] = (__u8)((daddr4 >> 16) & 0xFF);
+    daddr[15] = (__u8)((daddr4 >> 24) & 0xFF);
 }
 
 /* Extract ports from sock */
@@ -224,12 +224,13 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 
     struct iphdr *iph = (struct iphdr *)data;
     
-    // Read source and dest IP from IP header (network byte order)
+    // Read source and dest IP from IP header (network byte order in packet)
     __u32 saddr4, daddr4;
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &iph->saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &iph->daddr);
     
-    // Extract bytes from network-order __u32
+    // Extract bytes from network-order __u32 (as stored in packet)
+    // For 192.168.5.214: saddr4 = 0xC0A805D6
     evt.src_ip[12] = (__u8)((saddr4 >> 24) & 0xFF);
     evt.src_ip[13] = (__u8)((saddr4 >> 16) & 0xFF);
     evt.src_ip[14] = (__u8)((saddr4 >> 8) & 0xFF);
@@ -414,17 +415,18 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_port = bpf_ntohs(dport);
     evt.protocol = IPPROTO_TCP;
 
-    // Read IP addresses from tracepoint (network byte order)
-    // Extract bytes from network-order __u32
-    evt.src_ip[12] = (__u8)((ctx->saddr >> 24) & 0xFF);
-    evt.src_ip[13] = (__u8)((ctx->saddr >> 16) & 0xFF);
-    evt.src_ip[14] = (__u8)((ctx->saddr >> 8) & 0xFF);
-    evt.src_ip[15] = (__u8)(ctx->saddr & 0xFF);
+    // Read IP addresses from tracepoint
+    // ctx->saddr/daddr are in host byte order on little-endian
+    // For 192.168.5.214: stored as 0xD605A8C0
+    evt.src_ip[12] = (__u8)(ctx->saddr & 0xFF);
+    evt.src_ip[13] = (__u8)((ctx->saddr >> 8) & 0xFF);
+    evt.src_ip[14] = (__u8)((ctx->saddr >> 16) & 0xFF);
+    evt.src_ip[15] = (__u8)((ctx->saddr >> 24) & 0xFF);
     
-    evt.dst_ip[12] = (__u8)((ctx->daddr >> 24) & 0xFF);
-    evt.dst_ip[13] = (__u8)((ctx->daddr >> 16) & 0xFF);
-    evt.dst_ip[14] = (__u8)((ctx->daddr >> 8) & 0xFF);
-    evt.dst_ip[15] = (__u8)(ctx->daddr & 0xFF);
+    evt.dst_ip[12] = (__u8)(ctx->daddr & 0xFF);
+    evt.dst_ip[13] = (__u8)((ctx->daddr >> 8) & 0xFF);
+    evt.dst_ip[14] = (__u8)((ctx->daddr >> 16) & 0xFF);
+    evt.dst_ip[15] = (__u8)((ctx->daddr >> 24) & 0xFF);
     
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
