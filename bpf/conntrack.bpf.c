@@ -282,8 +282,10 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 }
 
 /* Trace tcp_v4_accept - server accepts incoming connection
- * NOTE: Uses kprobe as fentry is not supported for this function
+ * NOTE: Disabled - tcp_v4_rcv + inet_sock_set_state provide equivalent functionality
+ * kprobe not supported on kernel 6.8+, fentry not available for this function
  */
+#if 0
 SEC("kprobe/tcp_v4_accept")
 int BPF_KPROBE(tcp_v4_accept, struct sock *sk, struct sk_buff *skb)
 {
@@ -321,6 +323,7 @@ int BPF_KPROBE(tcp_v4_accept, struct sock *sk, struct sk_buff *skb)
     submit_event(&evt);
     return 0;
 }
+#endif
 
 /* Trace tcp_close - connection closing */
 SEC("fentry/tcp_close")
