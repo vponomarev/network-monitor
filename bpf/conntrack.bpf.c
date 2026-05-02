@@ -276,7 +276,11 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
         return 0;
 
     // Check protocol - only TCP supported
-    __u8 protocol = BPF_CORE_READ(sk, __sk_common.skc_protocol);
+    // Note: skc_protocol may not be available via CO-RE on all kernels
+    // Using direct read as fallback
+    __u8 protocol;
+    if (bpf_probe_read_kernel(&protocol, sizeof(protocol), &sk->__sk_common.skc_protocol) != 0)
+        protocol = IPPROTO_TCP;  // Default to TCP if read fails
     if (protocol != IPPROTO_TCP)
         return 0;
 
