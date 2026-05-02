@@ -164,7 +164,7 @@ int BPF_KRETPROBE(tcp_v4_accept, struct sock *ret_sk)
     if (!track_incoming)
         return 0;
 
-    if (ret_sk == NULL)
+    if (!ret_sk)
         return 0;
 
     struct connection_event evt = {};
