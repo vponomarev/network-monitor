@@ -197,13 +197,9 @@ int BPF_PROG(tcp_connect, struct sock *sk)
     return 0;
 }
 
-/* Trace tcp_v4_rcv - check for incoming SYN
- * NOTE: Reading IP from sk_buff is unreliable due to byte order issues
- * Use inet_sock_set_state tracepoint for incoming connections
- */
-#if 0
-SEC("fentry/tcp_v4_rcv")
-int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
+/* Trace tcp_v4_rcv - check for incoming SYN using kprobe */
+SEC("kprobe/tcp_v4_rcv")
+int BPF_KPROBE(tcp_v4_rcv, struct sk_buff *skb)
 {
     if (!track_incoming)
         return 0;
@@ -224,14 +220,14 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
 
     struct iphdr *iph = (struct iphdr *)data;
 
-    // Read source and dest IP from IP header (network byte order in packet)
-    // Read bytes directly from iphdr structure
+    // Read source and dest IP from IP header as bytes
+    // Network byte order: [byte0][byte1][byte2][byte3] = [192][168][5][165]
     __u8 saddr_bytes[4], daddr_bytes[4];
     bpf_probe_read_kernel(&saddr_bytes, sizeof(saddr_bytes), &iph->saddr);
     bpf_probe_read_kernel(&daddr_bytes, sizeof(daddr_bytes), &iph->daddr);
 
-    // Copy to event (already in network byte order)
-    // For 192.168.5.165: saddr_bytes = [192, 168, 5, 165]
+    // Copy to IPv4-mapped IPv6 format
+    // saddr_bytes[0] = 192, [1] = 168, [2] = 5, [3] = 165
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
     evt.src_ip[12] = saddr_bytes[0];
@@ -300,7 +296,6 @@ int BPF_PROG(tcp_v4_rcv, struct sk_buff *skb)
     submit_event(&evt);
     return 0;
 }
-#endif /* tcp_v4_rcv disabled */
 
 /* Trace tcp_v4_accept - server accepts incoming connection
  * NOTE: Disabled - tcp_v4_rcv + inet_sock_set_state provide equivalent functionality
@@ -415,22 +410,26 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint
-    // ctx->saddr/daddr are in network byte order
-    // For 192.168.5.214: ctx->saddr = 0xC0A805D6
-    evt.src_ip[12] = (__u8)((ctx->saddr >> 24) & 0xFF);
-    evt.src_ip[13] = (__u8)((ctx->saddr >> 16) & 0xFF);
-    evt.src_ip[14] = (__u8)((ctx->saddr >> 8) & 0xFF);
-    evt.src_ip[15] = (__u8)(ctx->saddr & 0xFF);
+    // ctx->saddr/daddr are __u8[4] arrays in network byte order
+    // For 192.168.5.165: saddr = [192, 168, 5, 165]
+    __u8 saddr_bytes[4], daddr_bytes[4];
+    bpf_probe_read_kernel(&saddr_bytes, sizeof(saddr_bytes), &ctx->saddr);
+    bpf_probe_read_kernel(&daddr_bytes, sizeof(daddr_bytes), &ctx->daddr);
 
-    evt.dst_ip[12] = (__u8)((ctx->daddr >> 24) & 0xFF);
-    evt.dst_ip[13] = (__u8)((ctx->daddr >> 16) & 0xFF);
-    evt.dst_ip[14] = (__u8)((ctx->daddr >> 8) & 0xFF);
-    evt.dst_ip[15] = (__u8)(ctx->daddr & 0xFF);
-
+    // Copy to IPv4-mapped IPv6 format
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
+    evt.src_ip[12] = saddr_bytes[0];
+    evt.src_ip[13] = saddr_bytes[1];
+    evt.src_ip[14] = saddr_bytes[2];
+    evt.src_ip[15] = saddr_bytes[3];
+
     evt.dst_ip[10] = 0xff;
     evt.dst_ip[11] = 0xff;
+    evt.dst_ip[12] = daddr_bytes[0];
+    evt.dst_ip[13] = daddr_bytes[1];
+    evt.dst_ip[14] = daddr_bytes[2];
+    evt.dst_ip[15] = daddr_bytes[3];
 
     // Determine event type and direction based on state transition
     switch (ctx->newstate) {

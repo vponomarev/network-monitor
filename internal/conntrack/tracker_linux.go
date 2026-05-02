@@ -197,25 +197,16 @@ func (t *Tracker) attachPrograms() error {
 	}
 
 	// Attach tcp_v4_rcv for incoming SYN detection
-	// NOTE: Disabled due to unreliable IP address reading from sk_buff
-	// Use inet_sock_set_state tracepoint instead
-	if false && t.config.TrackIncoming {
+	// Use kprobe since fentry may not work reliably for sk_buff access
+	if t.config.TrackIncoming {
 		if prog, ok := t.colls.Programs["tcp_v4_rcv"]; ok {
-			l, err := link.AttachTracing(link.TracingOptions{
-				Program: prog,
-			})
+			// Try kprobe first (more reliable for sk_buff access)
+			l, err := link.Kprobe("tcp_v4_rcv", prog, nil)
 			if err != nil {
-				t.logger.Debug("fentry tcp_v4_rcv failed, trying kprobe", zap.Error(err))
-				l, err = link.Kprobe("tcp_v4_rcv", prog, nil)
-				if err != nil {
-					t.logger.Warn("tcp_v4_rcv not available, skipping incoming SYN detection", zap.Error(err))
-				} else {
-					t.links = append(t.links, l)
-					t.logger.Info("Attached tcp_v4_rcv (kprobe) for incoming SYN detection")
-				}
+				t.logger.Warn("kprobe tcp_v4_rcv failed, skipping incoming SYN detection", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
-				t.logger.Info("Attached tcp_v4_rcv (fentry) for incoming SYN detection")
+				t.logger.Info("Attached tcp_v4_rcv (kprobe) for incoming SYN detection")
 			}
 		}
 	}
