@@ -11,10 +11,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/vponomarev/network-monitor/internal/bandwidth"
 	"github.com/vponomarev/network-monitor/internal/collector"
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/internal/conntrack"
 	"github.com/vponomarev/network-monitor/internal/discovery"
+	"github.com/vponomarev/network-monitor/internal/dns"
+	"github.com/vponomarev/network-monitor/internal/latency"
 	"github.com/vponomarev/network-monitor/internal/metadata"
 	"github.com/vponomarev/network-monitor/internal/metrics"
 	"github.com/vponomarev/network-monitor/internal/topology"
@@ -183,6 +186,46 @@ func main() {
 		}
 	}
 
+	// Start bandwidth monitor (optional)
+	if cfg.Bandwidth.Enabled {
+		bwMonitor := bandwidth.NewMonitor(cfg.Bandwidth, logger)
+		go func() {
+			if err := bwMonitor.Run(ctx); err != nil {
+				logger.Error("Bandwidth monitor error", zap.Error(err))
+			}
+		}()
+		logger.Info("Bandwidth monitor started",
+			zap.Strings("interfaces", cfg.Bandwidth.Interfaces),
+			zap.Duration("interval", cfg.Bandwidth.IntervalDuration()))
+	}
+
+	// Start latency monitor (optional)
+	if cfg.Latency.Enabled {
+		latencyMonitor := latency.NewMonitor(cfg.Latency, logger)
+		go func() {
+			if err := latencyMonitor.Run(ctx); err != nil {
+				logger.Error("Latency monitor error", zap.Error(err))
+			}
+		}()
+		logger.Info("Latency monitor started",
+			zap.Strings("targets", cfg.Latency.Targets),
+			zap.Duration("interval", cfg.Latency.IntervalDuration()))
+	}
+
+	// Start DNS monitor (optional)
+	if cfg.DNS.Enabled {
+		dnsMonitor := dns.NewMonitor(cfg.DNS, logger)
+		go func() {
+			if err := dnsMonitor.Run(ctx); err != nil {
+				logger.Error("DNS monitor error", zap.Error(err))
+			}
+		}()
+		logger.Info("DNS monitor started",
+			zap.Strings("interfaces", cfg.DNS.Interfaces),
+			zap.Int("port", cfg.DNS.Port),
+			zap.Duration("interval", cfg.DNS.IntervalDuration()))
+	}
+
 	// Start HTTP server for metrics and API
 	mux := http.NewServeMux()
 
@@ -244,7 +287,10 @@ func main() {
 	logger.Info("Network Monitor started",
 		zap.Int("port", cfg.Global.MetricsPort),
 		zap.String("trace_pipe", cfg.Global.TracePipePath),
-		zap.Bool("discovery", cfg.Discovery.Traceroute.Enabled))
+		zap.Bool("discovery", cfg.Discovery.Traceroute.Enabled),
+		zap.Bool("bandwidth", cfg.Bandwidth.Enabled),
+		zap.Bool("latency", cfg.Latency.Enabled),
+		zap.Bool("dns", cfg.DNS.Enabled))
 
 	// Configuration reload loop
 	go func() {

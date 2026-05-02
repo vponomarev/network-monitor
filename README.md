@@ -49,6 +49,27 @@
 - **Prometheus Metrics** — Connection states, events, bytes, duration
 - **HTTP API** — View active connections and statistics
 
+### Bandwidth (Network Interface Monitoring)
+
+- **Interface Statistics** — RX/TX bytes, packets, errors, dropped
+- **Throughput Calculation** — Bytes per second rates
+- **Configurable Interval** — Customizable collection frequency
+- **Multi-Interface** — Monitor multiple interfaces simultaneously
+
+### Latency (RTT Monitoring)
+
+- **UDP Latency Checks** — Measure RTT to targets via UDP
+- **High Latency Alerts** — Detect performance degradation
+- **Timeout Detection** — Track unreachable targets
+- **Configurable Targets** — Monitor multiple endpoints
+
+### DNS (DNS Resolution Monitoring)
+
+- **DNS Query Testing** — Test resolution performance
+- **Slow Query Alerts** — Detect DNS issues
+- **Failure Detection** — Track resolution failures
+- **System Resolver** — Uses system DNS configuration
+
 ---
 
 ## 🚀 Quick Start
@@ -223,6 +244,25 @@ connections:
   track_outgoing: true
   filter_ports: []
 
+# Optional monitoring modules
+bandwidth:
+  enabled: false
+  interfaces:
+    - eth0
+  interval: 10s
+
+latency:
+  enabled: false
+  targets:
+    - 8.8.8.8
+    - 1.1.1.1
+  interval: 30s
+  timeout: 500ms
+
+dns:
+  enabled: false
+  interval: 1m
+
 logging:
   level: info
   format: json
@@ -320,6 +360,47 @@ conntrack_connection_duration_seconds{direction="outgoing"}
 conntrack_bytes_total{direction="outgoing", type="sent"}
 conntrack_bytes_total{direction="outgoing", type="received"}
 conntrack_bytes_per_connection{direction="outgoing"}
+```
+
+### Bandwidth Metrics
+
+```prometheus
+# Interface throughput
+netmon_bandwidth_bytes_per_sec{
+    interface="eth0",
+    direction="rx"  # or "tx"
+}
+
+# Interface errors
+netmon_bandwidth_errors_total{
+    interface="eth0",
+    type="rx_errors"  # or "tx_errors", "rx_dropped", "tx_dropped"
+}
+```
+
+### Latency Metrics
+
+```prometheus
+# RTT histogram
+netmon_latency_seconds_bucket{target="8.8.8.8",le="0.01"}
+netmon_latency_seconds_sum{target="8.8.8.8"}
+netmon_latency_seconds_count{target="8.8.8.8"}
+
+# Timeout counter
+netmon_latency_timeouts_total{target="8.8.8.8"}
+```
+
+### DNS Metrics
+
+```prometheus
+# DNS query results
+netmon_dns_queries_total{
+    domain="google.com",
+    status="success"  # or "failure"
+}
+
+# DNS latency
+netmon_dns_latency_seconds{domain="google.com"}
 ```
 
 ---

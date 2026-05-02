@@ -14,7 +14,9 @@
       "Bash(git commit *)",
       "Bash(git push *)",
       "Bash(sleep *)",
-      "Bash(gofmt *)"
+      "Bash(gofmt *)",
+      "Bash(sed *)",
+      "Bash(make *)"
     ]
   },
   "$version": 3

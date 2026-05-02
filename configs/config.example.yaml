@@ -52,3 +52,30 @@ metrics:
 logging:
   level: info
   format: json
+
+# Optional monitoring modules (disabled by default)
+# Uncomment and configure to enable
+
+# Bandwidth monitoring - tracks network interface throughput
+#bandwidth:
+#  enabled: true
+#  interfaces:
+#    - eth0
+#    - eth1
+#  interval: 10s
+
+# Latency monitoring - measures RTT to targets via UDP
+#latency:
+#  enabled: true
+#  targets:
+#    - 8.8.8.8
+#    - 1.1.1.1
+#  interval: 30s
+#  timeout: 500ms
+
+# DNS monitoring - tests DNS resolution performance
+#dns:
+#  enabled: true
+#  interfaces: []  # empty = use system resolver
+#  port: 53
+#  interval: 1m
