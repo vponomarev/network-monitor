@@ -87,6 +87,12 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     bpf_probe_read_kernel(&saddr4, sizeof(saddr4), &sk->__sk_common.skc_rcv_saddr);
     bpf_probe_read_kernel(&daddr4, sizeof(daddr4), &sk->__sk_common.skc_daddr);
 
+    // Kernel stores these in HOST byte order
+    // For 192.168.5.165: saddr4 = 0xC0A805A5 (host order)
+    // On little-endian, we read it directly as 0xC0A805A5
+    
+    // Convert to IPv4-mapped IPv6 format
+    // [12]=MSB, [13], [14], [15]=LSB
     __builtin_memset(saddr, 0, 16);
     __builtin_memset(daddr, 0, 16);
     saddr[10] = 0xff;
@@ -94,6 +100,8 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[10] = 0xff;
     daddr[11] = 0xff;
 
+    // Extract bytes from host-order __u32
+    // For 192.168.5.165 (0xC0A805A5): [12]=192, [13]=168, [14]=5, [15]=165
     saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);
     saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);
     saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);
