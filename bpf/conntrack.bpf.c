@@ -387,24 +387,24 @@ int BPF_PROG(tcp_close, struct sock *sk)
     return 0;
 }
 
-/* Trace inet_sock_set_state - generic state changes */
-SEC("tracepoint/sock/inet_sock_set_state")
-int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
+/* Trace inet_sock_set_state - generic state changes using raw_tracepoint */
+SEC("raw_tracepoint/sock/inet_sock_set_state")
+int inet_sock_set_state(struct bpf_raw_tracepoint_args *ctx)
 {
-    // This provides additional state tracking
-    // oldstate, newstate: TCP_ESTABLISHED, TCP_SYN_SENT, TCP_SYN_RECV, etc.
-
+    // Raw tracepoint provides direct access to tracepoint arguments
+    struct trace_event_raw_inet_sock_set_state *args = (void *)ctx->args;
+    
     __u32 sport, dport, protocol;
 
-    bpf_probe_read_kernel(&sport, sizeof(sport), &ctx->sport);
-    bpf_probe_read_kernel(&dport, sizeof(dport), &ctx->dport);
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &ctx->protocol);
+    bpf_probe_read_kernel(&sport, sizeof(sport), &args->sport);
+    bpf_probe_read_kernel(&dport, sizeof(dport), &args->dport);
+    bpf_probe_read_kernel(&protocol, sizeof(protocol), &args->protocol);
 
     if (protocol != IPPROTO_TCP)
         return 0;
 
     // Debug: print state transition
-    bpf_printk("inet_sock: old=%d new=%d sport=%d dport=%d", ctx->oldstate, ctx->newstate, sport, dport);
+    bpf_printk("inet_sock: old=%d new=%d sport=%d dport=%d", args->oldstate, args->newstate, sport, dport);
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -418,17 +418,17 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.protocol = IPPROTO_TCP;
 
     // Read IP addresses from tracepoint
-    // ctx->saddr/daddr are in network byte order
-    // For 192.168.5.214: ctx->saddr = 0xC0A805D6
-    evt.src_ip[12] = (__u8)((ctx->saddr >> 24) & 0xFF);
-    evt.src_ip[13] = (__u8)((ctx->saddr >> 16) & 0xFF);
-    evt.src_ip[14] = (__u8)((ctx->saddr >> 8) & 0xFF);
-    evt.src_ip[15] = (__u8)(ctx->saddr & 0xFF);
+    // args->saddr/daddr are in network byte order
+    // For 192.168.5.214: args->saddr = 0xC0A805D6
+    evt.src_ip[12] = (__u8)((args->saddr >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((args->saddr >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((args->saddr >> 8) & 0xFF);
+    evt.src_ip[15] = (__u8)(args->saddr & 0xFF);
 
-    evt.dst_ip[12] = (__u8)((ctx->daddr >> 24) & 0xFF);
-    evt.dst_ip[13] = (__u8)((ctx->daddr >> 16) & 0xFF);
-    evt.dst_ip[14] = (__u8)((ctx->daddr >> 8) & 0xFF);
-    evt.dst_ip[15] = (__u8)(ctx->daddr & 0xFF);
+    evt.dst_ip[12] = (__u8)((args->daddr >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((args->daddr >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((args->daddr >> 8) & 0xFF);
+    evt.dst_ip[15] = (__u8)(args->daddr & 0xFF);
 
     evt.src_ip[10] = 0xff;
     evt.src_ip[11] = 0xff;
@@ -436,7 +436,7 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_ip[11] = 0xff;
 
     // Determine event type and direction based on state transition
-    switch (ctx->newstate) {
+    switch (args->newstate) {
         case TCP_ESTABLISHED:
             // Determine direction: if src_port is ephemeral (>1024), it's outgoing
             // If dst_port is well-known (<=1024), it's incoming
