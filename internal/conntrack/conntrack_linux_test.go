@@ -6,6 +6,7 @@ package conntrack
 import (
 	"context"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -187,4 +188,59 @@ func TestTracker_simulateEvents(t *testing.T) {
 	case <-time.After(6 * time.Second):
 		t.Fatal("Expected simulated event not received")
 	}
+}
+
+func Test_sanitizeProcessName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"normal", "sshd", "sshd"},
+		{"with null bytes", "sshd\x00\x00\x00", "sshd"},
+		{"empty", "", "unknown"},
+		{"only nulls", "\x00\x00\x00\x00", "unknown"},
+		{"with spaces", "  nginx  ", "nginx"},
+		{"nulls then name", "\x00\x00\x00\x00\x00\x00\x00sshd", "sshd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, sanitizeProcessName(tt.input))
+		})
+	}
+}
+
+func Test_getProcessComm(t *testing.T) {
+	// Test with current process PID (should always exist)
+	pid := uint32(os.Getpid())
+	comm := getProcessComm(pid)
+	assert.NotEmpty(t, comm, "Should get comm for current process")
+	assert.NotEqual(t, "unknown", comm)
+}
+
+func Test_getProcessComm_invalid(t *testing.T) {
+	// Test with PID 0 (should return empty)
+	comm := getProcessComm(0)
+	assert.Empty(t, comm)
+
+	// Test with non-existent PID (should return empty)
+	comm = getProcessComm(99999999)
+	assert.Empty(t, comm)
+}
+
+func Test_enrichProcessName(t *testing.T) {
+	// Valid eBPF comm should be returned as-is
+	name := enrichProcessName("sshd", 1234)
+	assert.Equal(t, "sshd", name)
+
+	// Empty eBPF comm should trigger /proc lookup
+	pid := uint32(os.Getpid())
+	name = enrichProcessName("\x00\x00\x00\x00\x00\x00\x00\x00", pid)
+	assert.NotEmpty(t, name)
+	assert.NotEqual(t, "unknown", name)
+
+	// Invalid PID with empty comm should return "unknown"
+	name = enrichProcessName("\x00\x00\x00\x00\x00\x00\x00\x00", 99999999)
+	assert.Equal(t, "unknown", name)
 }

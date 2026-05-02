@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -294,7 +295,7 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 		Direction:   Direction(event.Direction),
 		State:       ConnectionState(event.State),
 		PID:         event.PID,
-		ProcessName: sanitizeProcessName(string(event.Comm[:])),
+		ProcessName: enrichProcessName(string(event.Comm[:]), event.PID),
 	}
 
 	// Generate connection ID
@@ -316,6 +317,49 @@ func sanitizeProcessName(name string) string {
 		return "unknown"
 	}
 	return name
+}
+
+// getProcessComm reads process name from /proc/{pid}/comm
+// Used to enrich comm field when eBPF kretprobe returns empty/invalid comm
+// Returns empty string if PID is 0 or /proc/{pid}/comm is not accessible
+func getProcessComm(pid uint32) string {
+	if pid == 0 {
+		return ""
+	}
+
+	commPath := fmt.Sprintf("/proc/%d/comm", pid)
+	data, err := os.ReadFile(commPath)
+	if err != nil {
+		// Process may have exited or permissions issue
+		return ""
+	}
+
+	// /proc/{pid}/comm contains just the process name + newline
+	name := strings.TrimSpace(string(data))
+	name = strings.TrimRight(name, "\x00")
+	
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
+// enrichProcessName attempts to get process name from /proc/{pid}/comm if eBPF comm is empty/invalid
+// Returns the original name if it's valid, otherwise tries to read from /proc
+func enrichProcessName(ebpfComm string, pid uint32) string {
+	// Check if eBPF comm is valid (non-empty after sanitization)
+	sanitized := sanitizeProcessName(ebpfComm)
+	if sanitized != "unknown" && sanitized != "" {
+		return sanitized
+	}
+
+	// eBPF comm was empty or invalid - try /proc/{pid}/comm lookup
+	procComm := getProcessComm(pid)
+	if procComm != "" {
+		return procComm
+	}
+
+	return "unknown"
 }
 
 // processConnection processes a connection event through state machine
