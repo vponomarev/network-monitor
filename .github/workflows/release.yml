@@ -238,7 +238,7 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [validate, build-netmon, build-conntrack, docker]
+    needs: [validate, build-netmon, build-conntrack]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -250,19 +250,7 @@ jobs:
         with:
           path: ./artifacts
 
-      - name: Prepare release assets
-        run: |
-          cd artifacts
-          # Flatten structure
-          find . -type f -exec mv {} . \;
-          find . -type d -empty -delete
-          find . -type d -delete
-
-          # Create combined checksums file
-          sha256sum * > checksums.txt || true
-          ls -la
-
-      # Upload eBPF program as separate artifact
+      # Download eBPF programs
       - name: Download eBPF programs
         uses: actions/download-artifact@v4
         with:
@@ -273,6 +261,19 @@ jobs:
         run: |
           cp artifacts/bpf/*.o artifacts/conntrack.bpf.o
           ls -la artifacts/
+
+      - name: Prepare release assets
+        run: |
+          cd artifacts
+          # Flatten structure (keep .o file)
+          find . -type f -name '*.o' -exec mv {} . \;
+          find . -type f ! -name '*.o' -exec mv {} . \;
+          find . -type d -empty -delete
+          find . -type d -delete
+
+          # Create combined checksums file
+          sha256sum * > checksums.txt || true
+          ls -la
 
       - name: Generate changelog
         id: changelog
@@ -396,13 +397,17 @@ jobs:
     steps:
       - name: Check release status
         run: |
-          if [[ "${{ needs.release.result }}" == "success" && "${{ needs.docker.result }}" == "success" ]]; then
+          if [[ "${{ needs.release.result }}" == "success" ]]; then
             echo "✅ Release published successfully!"
             echo "📦 https://github.com/${{ github.repository }}/releases"
-            echo "🐳 ghcr.io/${{ github.repository }}:${{ needs.validate.outputs.version }}"
+            echo ""
+            if [[ "${{ needs.docker.result }}" == "success" ]]; then
+              echo "🐳 Docker images: ghcr.io/${{ github.repository }}:${{ needs.validate.outputs.version }}"
+            else
+              echo "⚠️  Docker build failed, but release is available"
+            fi
           else
             echo "❌ Release failed"
             echo "Release result: ${{ needs.release.result }}"
-            echo "Docker result: ${{ needs.docker.result }}"
             exit 1
           fi
