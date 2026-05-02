@@ -39,7 +39,7 @@ struct connection_event {
     __u8 tcp_flags;
     __u8 _pad[7];              /* Explicit padding for 8-byte alignment */
     char comm[TASK_COMM_LEN];  /* Aligned at offset 72 */
-} __attribute__((packed));
+};
 
 /* Connection key - packed to avoid padding issues */
 struct connection_key {
