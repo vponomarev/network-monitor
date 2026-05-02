@@ -156,17 +156,8 @@ func (t *Tracker) loadEBPF() error {
 		return fmt.Errorf("loading collection spec from %s: %w", t.config.EBPFProgramPath, err)
 	}
 
-	// Prepare collection options with variable overrides
-	opts := &ebpf.CollectionOptions{
-		Variables: map[string]interface{}{
-			"track_incoming":  t.config.TrackIncoming,
-			"track_outgoing":  t.config.TrackOutgoing,
-			"track_closes":    t.config.TrackCloses,
-		},
-	}
-
-	// Create collection with options
-	colls, err := ebpf.NewCollectionWithOptions(spec, *opts)
+	// Create collection
+	colls, err := ebpf.NewCollection(spec)
 	if err != nil {
 		return fmt.Errorf("creating eBPF collection: %w", err)
 	}
@@ -350,6 +341,14 @@ func sanitizeProcessName(name string) string {
 
 // processConnection processes a connection event through state machine
 func (t *Tracker) processConnection(conn *Connection) {
+	// Determine event type from state
+	eventType := EventNew
+	if conn.State == StateEstablished {
+		eventType = EventEstablished
+	} else if conn.State == StateClosed {
+		eventType = EventClosed
+	}
+
 	// Create raw event for state machine
 	evt := &ConnectionEventRaw{
 		SourceIP:    conn.SourceIP,
@@ -358,7 +357,7 @@ func (t *Tracker) processConnection(conn *Connection) {
 		DestPort:    conn.DestPort,
 		Protocol:    conn.Protocol,
 		Direction:   conn.Direction,
-		EventType:   ConnectionEvent(conn.EventType),
+		EventType:   eventType,
 		State:       conn.State,
 		PID:         conn.PID,
 		ProcessName: conn.ProcessName,
