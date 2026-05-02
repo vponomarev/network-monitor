@@ -386,14 +386,26 @@ int BPF_PROG(tcp_close, struct sock *sk)
 SEC("tracepoint/sock/inet_sock_set_state")
 int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 {
-    // Read fields using BPF_CORE_READ for CO-RE compatibility
-    __u32 oldstate = BPF_CORE_READ(ctx, oldstate);
-    __u32 newstate = BPF_CORE_READ(ctx, newstate);
-    __u16 sport = BPF_CORE_READ(ctx, sport);
-    __u16 dport = BPF_CORE_READ(ctx, dport);
-    __u16 protocol = BPF_CORE_READ(ctx, protocol);
-    __u32 saddr32 = BPF_CORE_READ(ctx, saddr);
-    __u32 daddr32 = BPF_CORE_READ(ctx, daddr);
+    // Read fields using bpf_probe_read_kernel with explicit offsets
+    // Structure layout from /sys/kernel/debug/tracing/events/sock/inet_sock_set_state/format:
+    // field:int oldstate;	offset:16;	size:4;
+    // field:int newstate;	offset:20;	size:4;
+    // field:__u16 sport;	offset:24;	size:2;
+    // field:__u16 dport;	offset:26;	size:2;
+    // field:__u16 family;	offset:28;	size:2;
+    // field:__u16 protocol;	offset:30;	size:2;
+    // field:__u8 saddr[4];	offset:32;	size:4;
+    // field:__u8 daddr[4];	offset:36;	size:4;
+    
+    __u32 oldstate, newstate, sport, dport, protocol, saddr32, daddr32;
+    
+    bpf_probe_read_kernel(&oldstate, sizeof(oldstate), (void *)ctx + 16);
+    bpf_probe_read_kernel(&newstate, sizeof(newstate), (void *)ctx + 20);
+    bpf_probe_read_kernel(&sport, sizeof(sport), (void *)ctx + 24);
+    bpf_probe_read_kernel(&dport, sizeof(dport), (void *)ctx + 26);
+    bpf_probe_read_kernel(&protocol, sizeof(protocol), (void *)ctx + 30);
+    bpf_probe_read_kernel(&saddr32, sizeof(saddr32), (void *)ctx + 32);
+    bpf_probe_read_kernel(&daddr32, sizeof(daddr32), (void *)ctx + 36);
 
     if (protocol != IPPROTO_TCP)
         return 0;
@@ -409,11 +421,12 @@ int inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.pid_tgid = bpf_get_current_pid_tgid();
     evt.pid = evt.pid_tgid >> 32;
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.src_port = bpf_ntohs(sport);
-    evt.dst_port = bpf_ntohs(dport);
+    evt.src_port = (__u16)bpf_ntohs((__u16)sport);
+    evt.dst_port = (__u16)bpf_ntohs((__u16)dport);
     evt.protocol = IPPROTO_TCP;
 
-    // Convert from network byte order to host byte order
+    // saddr/daddr are already in network byte order as stored in kernel
+    // Convert to host byte order
     __u32 saddr_host = bpf_ntohl(saddr32);
     __u32 daddr_host = bpf_ntohl(daddr32);
 
