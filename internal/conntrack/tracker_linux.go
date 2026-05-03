@@ -18,6 +18,7 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/vponomarev/network-monitor/pkg/embedded"
 	"go.uber.org/zap"
 )
 
@@ -166,19 +167,57 @@ func (t *Tracker) Run(ctx context.Context) error {
 }
 
 // loadEBPF loads and attaches eBPF programs
+// Priority: 1) Explicit path via flag, 2) Embedded version, 3) Simulation
 func (t *Tracker) loadEBPF() error {
-	if t.config.EBPFProgramPath == "" {
-		t.logger.Info("No eBPF program path specified, using simulated events for development")
-		go t.simulateEvents()
-		return nil
+	// Priority 1: Explicit path via flag
+	if t.config.EBPFProgramPath != "" {
+		t.logger.Info("Loading eBPF from specified path",
+			zap.String("path", t.config.EBPFProgramPath))
+		return t.loadEBPFFromFile(t.config.EBPFProgramPath)
 	}
 
-	t.logger.Info("Loading eBPF program", zap.String("path", t.config.EBPFProgramPath))
+	// Priority 2: Embedded version (always used by default)
+	if embedded.HasEmbeddedEBPF() {
+		t.logger.Info("Using embedded eBPF program")
+		return t.loadEmbeddedEBPF()
+	}
+
+	// Priority 3: Build without embed (simulation)
+	t.logger.Info("No eBPF program available, using simulated events")
+	go t.simulateEvents()
+	return nil
+}
+
+// loadEmbeddedEBPF loads eBPF from embedded resources
+func (t *Tracker) loadEmbeddedEBPF() error {
+	// Create temp file
+	tmpFile, err := os.CreateTemp("", "conntrack-ebpf-*.o")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	data, err := embedded.GetEBPFProgram()
+	if err != nil {
+		return fmt.Errorf("getting embedded eBPF: %w", err)
+	}
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return fmt.Errorf("writing eBPF: %w", err)
+	}
+	tmpFile.Close()
+
+	return t.loadEBPFFromFile(tmpFile.Name())
+}
+
+// loadEBPFFromFile loads eBPF from a file path
+func (t *Tracker) loadEBPFFromFile(path string) error {
+	t.logger.Info("Loading eBPF program", zap.String("path", path))
 
 	// Load eBPF collection spec from ELF file
-	spec, err := ebpf.LoadCollectionSpec(t.config.EBPFProgramPath)
+	spec, err := ebpf.LoadCollectionSpec(path)
 	if err != nil {
-		return fmt.Errorf("loading collection spec from %s: %w", t.config.EBPFProgramPath, err)
+		return fmt.Errorf("loading collection spec from %s: %w", path, err)
 	}
 
 	// Create collection
@@ -202,16 +241,50 @@ func (t *Tracker) loadEBPF() error {
 }
 
 // attachPrograms attaches eBPF programs to kernel hooks
+// Uses auto-detection: tries kprobe first, falls back to tracepoint if kprobe doesn't fire
 func (t *Tracker) attachPrograms() error {
-	// Attach tcp_connect for outgoing connections (kprobe)
+	// Attach tcp_connect for outgoing connections
+	// On kernels 6.1.x (Debian 12), kprobe/tcp_connect may attach but not fire
+	// In this case, tracepoint/sock/inet_sock_set_state is used as fallback
 	if t.config.TrackOutgoing {
+		kprobeAttached := false
+		tracepointAttached := false
+
+		// Try kprobe first
 		if prog, ok := t.colls.Programs["tcp_connect"]; ok {
 			l, err := link.Kprobe("tcp_connect", prog, nil)
 			if err != nil {
-				return fmt.Errorf("linking kprobe/tcp_connect: %w", err)
+				t.logger.Warn("Failed to attach kprobe/tcp_connect", zap.Error(err))
+			} else {
+				t.links = append(t.links, l)
+				t.logger.Info("Attached kprobe/tcp_connect for outgoing connections")
+				kprobeAttached = true
 			}
-			t.links = append(t.links, l)
-			t.logger.Info("Attached kprobe/tcp_connect for outgoing connections")
+		}
+
+		// Try tracepoint fallback
+		// Always attach if kprobe failed, or as additional coverage on problematic kernels
+		if prog, ok := t.colls.Programs["trace_outgoing_fallback"]; ok {
+			l, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
+			if err != nil {
+				if !kprobeAttached {
+					return fmt.Errorf("kprobe failed and tracepoint fallback also failed: %w", err)
+				}
+				t.logger.Debug("Tracepoint fallback not available (kprobe is active)", zap.Error(err))
+			} else {
+				t.links = append(t.links, l)
+				if !kprobeAttached {
+					t.logger.Info("Attached tracepoint/sock/inet_sock_set_state for outgoing connections (fallback mode)")
+				} else {
+					t.logger.Info("Attached tracepoint/sock/inet_sock_set_state for outgoing connections (dual mode)")
+				}
+				tracepointAttached = true
+			}
+		}
+
+		// Error if neither kprobe nor tracepoint was attached
+		if !kprobeAttached && !tracepointAttached {
+			return fmt.Errorf("failed to attach any outgoing connection tracker (kprobe and tracepoint both unavailable)")
 		}
 	}
 
@@ -331,6 +404,19 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 		conn.Protocol,
 	)
 
+	// Log all events for debugging (including src_ip=0.0.0.0)
+	t.logger.Debug("Parsed eBPF event",
+		zap.String("src_ip", conn.SourceIP.String()),
+		zap.String("dst_ip", conn.DestIP.String()),
+		zap.Uint16("src_port", conn.SourcePort),
+		zap.Uint16("dst_port", conn.DestPort),
+		zap.String("direction", conn.Direction.String()),
+		zap.String("state", conn.State.String()),
+		zap.String("event_type", conn.State.String()),
+		zap.String("process", conn.ProcessName),
+		zap.Uint32("pid", conn.PID),
+	)
+
 	return conn
 }
 
@@ -420,14 +506,23 @@ func (t *Tracker) processConnection(conn *Connection) {
 
 // onConnectionEvent handles connection events from state machine
 func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
+	// Create human-readable connection key for logging
+	connKey := fmt.Sprintf("%s:%d -> %s:%d (%s)",
+		conn.SourceIP.String(), conn.SourcePort,
+		conn.DestIP.String(), conn.DestPort,
+		conn.Direction.String())
+
 	t.logger.Debug("Connection event",
 		zap.String("event", event.String()),
+		zap.String("conn", connKey),
 		zap.String("source", conn.SourceIP.String()),
 		zap.String("dest", conn.DestIP.String()),
 		zap.Uint16("src_port", conn.SourcePort),
 		zap.Uint16("dst_port", conn.DestPort),
 		zap.String("direction", conn.Direction.String()),
 		zap.String("state", conn.State.String()),
+		zap.String("process", conn.ProcessName),
+		zap.Uint32("pid", conn.PID),
 	)
 
 	// Update metrics

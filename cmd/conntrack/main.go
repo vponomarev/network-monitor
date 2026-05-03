@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/internal/conntrack"
+	"github.com/vponomarev/network-monitor/pkg/embedded"
 	"go.uber.org/zap"
 )
 
@@ -22,17 +23,20 @@ var (
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 
-	ebpfProgram    string
-	configFile     string
-	syslogNetwork  string
-	syslogAddress  string
-	syslogTag      string
-	syslogFacility string
-	syslogHostname bool
-	synTimeout     string
-	trackIncoming  bool
-	trackOutgoing  bool
-	trackCloses    bool
+	ebpfProgram      string
+	configFile       string
+	syslogNetwork    string
+	syslogAddress    string
+	syslogTag        string
+	syslogFacility   string
+	syslogHostname   bool
+	synTimeout       string
+	trackIncoming    bool
+	trackOutgoing    bool
+	trackCloses      bool
+	showConfig       bool
+	installPath      string
+	exportEBPFPath   string
 )
 
 func main() {
@@ -44,8 +48,17 @@ func main() {
 		RunE:    run,
 	}
 
+	// Основные флаги
 	rootCmd.Flags().StringVarP(&ebpfProgram, "ebpf-prog", "p", "", "Path to eBPF program object file")
 	rootCmd.Flags().StringVarP(&configFile, "config", "c", "", "Config file path")
+	rootCmd.Flags().BoolVar(&showConfig, "show-config", false, "Print sample configuration and exit")
+	rootCmd.Flags().StringVar(&installPath, "install-path", "/usr/local/bin", "Installation path")
+	rootCmd.Flags().StringVar(&exportEBPFPath, "export-ebpf-prog", "", "Export embedded eBPF program to file")
+
+	// Команды
+	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(deinstallCmd)
+	rootCmd.AddCommand(showConfigCmd)
 
 	// Syslog flags
 	rootCmd.Flags().StringVar(&syslogNetwork, "syslog-network", "", "Syslog network type (empty for local, 'udp' or 'tcp' for remote)")
@@ -70,6 +83,26 @@ func run(cmd *cobra.Command, args []string) error {
 	// Check platform
 	if err := checkPlatform(); err != nil {
 		return err
+	}
+
+	// Обработка --show-config (флаг)
+	if showConfig {
+		// Команда show-config обрабатывается отдельно, но флаг тоже поддерживается
+		data, err := embedded.GetSampleConfig()
+		if err != nil {
+			return fmt.Errorf("failed to get sample config: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	// Обработка --export-ebpf-prog
+	if exportEBPFPath != "" {
+		if err := embedded.ExportEBPFToFile(exportEBPFPath); err != nil {
+			return fmt.Errorf("exporting eBPF program: %w", err)
+		}
+		fmt.Printf("✓ Exported embedded eBPF program to: %s\n", exportEBPFPath)
+		return nil
 	}
 
 	// Load configuration
@@ -172,6 +205,18 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 	}
 
 	zapCfg.Level = zap.NewAtomicLevelAt(level)
+
+	// Configure output: file or stdout/stderr
+	if cfg.Logging.OutputPath != "" {
+		// File output
+		zapCfg.OutputPaths = []string{cfg.Logging.OutputPath}
+		zapCfg.ErrorOutputPaths = []string{cfg.Logging.OutputPath + ".err"}
+	} else {
+		// Default to stdout/stderr
+		zapCfg.OutputPaths = []string{"stdout"}
+		zapCfg.ErrorOutputPaths = []string{"stderr"}
+	}
+
 	return zapCfg.Build()
 }
 

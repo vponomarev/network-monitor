@@ -1,0 +1,3 @@
+# Placeholder for systemd unit file
+# This file is copied during build:
+#   cp packaging/systemd/conntrack.service pkg/embedded/systemd/

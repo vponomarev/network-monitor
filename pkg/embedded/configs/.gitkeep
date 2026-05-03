@@ -1,0 +1,3 @@
+# Placeholder for sample config
+# This file is copied during build:
+#   cp configs/config.example.yaml pkg/embedded/configs/

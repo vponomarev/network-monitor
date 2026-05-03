@@ -17,6 +17,9 @@ coverage.html
 *.o
 !*.go
 
+# Embedded eBPF (compiled during build, not stored in git)
+pkg/embedded/bpf/*.o
+
 # IDE
 .idea/
 .vscode/

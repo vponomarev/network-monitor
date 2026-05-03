@@ -8,10 +8,10 @@
 #   make build-conntrack - Build only conntrack
 #   make all            - Build everything (default)
 
-.PHONY: all build build-netmon build-conntrack test clean lint help deps \
+.PHONY: all build build-netmon build-conntrack build-conntrack-embedded test clean lint help deps \
         docker-build docker-build-netmon docker-build-conntrack \
         docker-run docker-stop docker-logs docker-clean \
-        ebpf-build ebpf-clean install uninstall package
+        ebpf-build ebpf-clean prepare-embedded install uninstall package release
 
 # =============================================================================
 # Go parameters
@@ -86,6 +86,42 @@ ebpf-clean:
 	rm -rf $(BUILD_DIR)/bpf
 
 # =============================================================================
+# Embedded resources targets
+# =============================================================================
+
+## prepare-embedded: Подготовить embedded ресурсы
+prepare-embedded:
+	@echo "Preparing embedded resources..."
+	@mkdir -p pkg/embedded/bpf pkg/embedded/configs pkg/embedded/systemd
+	@cp bpf/conntrack.bpf.o pkg/embedded/bpf/
+	@cp configs/config.example.yaml pkg/embedded/configs/
+	@cp packaging/systemd/conntrack.service pkg/embedded/systemd/ 2>/dev/null || true
+	@echo "✓ Embedded resources prepared"
+
+## build-conntrack-embedded: Сборка conntrack с embedded ресурсами
+build-conntrack-embedded: ebpf-build prepare-embedded
+	@mkdir -p $(BUILD_DIR)
+	@echo "Building conntrack with embedded resources..."
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/conntrack ./cmd/conntrack
+	@echo "✓ Built $(BUILD_DIR)/conntrack (single binary)"
+	@ls -lh $(BUILD_DIR)/conntrack
+
+## release-linux-amd64: Сборка релиза для linux/amd64
+release-linux-amd64:
+	@echo "Building release for linux/amd64..."
+	GOOS=linux GOARCH=amd64 $(MAKE) build-conntrack-embedded
+	@cp $(BUILD_DIR)/conntrack dist/conntrack-linux-amd64
+
+## release: Создать все релиз артефакты
+release: clean
+	@echo "Creating release artifacts..."
+	@mkdir -p dist
+	$(MAKE) release-linux-amd64
+	@cd dist && sha256sum conntrack-* > SHA256SUMS
+	@echo "✓ Release artifacts created in dist/"
+	@ls -lh dist/
+
+# =============================================================================
 # Test targets
 # =============================================================================
 
@@ -104,10 +140,35 @@ test-integration:
 	@echo "Running integration tests (requires root)..."
 	sudo $(GOTEST) -v ./tests/integration/...
 
+## test-conntrack: Run conntrack connection tests (requires root)
+test-conntrack:
+	@echo "Running conntrack connection tests (requires root)..."
+	sudo $(GOTEST) -v ./tests/integration/... -run "TestConntrack"
+
+## test-conntrack-outgoing: Test outgoing connections (requires root)
+test-conntrack-outgoing:
+	@echo "Testing outgoing connections..."
+	sudo $(GOTEST) -v ./tests/integration/... -run "TestConntrack_OutgoingConnections"
+
+## test-conntrack-incoming: Test incoming connections (requires root)
+test-conntrack-incoming:
+	@echo "Testing incoming connections..."
+	sudo $(GOTEST) -v ./tests/integration/... -run "TestConntrack_IncomingConnections"
+
+## test-conntrack-handshake: Test TCP handshake (requires root)
+test-conntrack-handshake:
+	@echo "Testing TCP handshake..."
+	sudo $(GOTEST) -v ./tests/integration/... -run "TestConntrack_TCPhandshake"
+
 ## test-e2e: Run end-to-end tests (requires root)
 test-e2e:
 	@echo "Running e2e tests (requires root)..."
 	sudo $(GOTEST) -v ./tests/e2e/...
+
+## test-remote: Run tests on remote hosts
+test-remote:
+	@echo "Running tests on remote hosts..."
+	./scripts/run-remote-tests.sh
 
 # =============================================================================
 # Code quality targets

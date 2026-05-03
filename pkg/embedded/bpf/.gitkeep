@@ -1,0 +1,3 @@
+# Placeholder for eBPF program object file
+# This file is copied during build:
+#   cp bpf/conntrack.bpf.o pkg/embedded/bpf/
