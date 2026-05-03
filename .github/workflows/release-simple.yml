@@ -91,28 +91,17 @@ jobs:
         run: |
           echo "=== Starting build ==="
           pwd
-          ls -la pkg/embedded/bpf/
-          ls -la pkg/embedded/configs/
-          ls -la pkg/embedded/systemd/
+          echo "=== pkg/embedded contents ==="
+          ls -laR pkg/embedded/
           echo "=== Running go build ==="
-          go build -ldflags="-s -w -X main.Version=${VERSION}" -o conntrack-linux-amd64 ./cmd/conntrack 2>&1 | tee /tmp/build.log
+          if go build -ldflags="-s -w -X main.Version=${VERSION}" -o conntrack-linux-amd64 ./cmd/conntrack 2>&1; then
+            echo "Build SUCCESS"
+          else
+            echo "Build FAILED"
+            exit 1
+          fi
           echo "=== Build complete ==="
           ls -la conntrack-linux-amd64
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: /tmp/build.log
-          retention-days: 1
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: conntrack-linux-amd64
-          path: conntrack-linux-amd64
-          retention-days: 1
 
   release:
     name: Create Release
