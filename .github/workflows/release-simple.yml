@@ -89,8 +89,23 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          go build -ldflags="-s -w -X main.Version=${VERSION}" -o conntrack-linux-amd64 ./cmd/conntrack
+          echo "=== Starting build ==="
+          pwd
+          ls -la pkg/embedded/bpf/
+          ls -la pkg/embedded/configs/
+          ls -la pkg/embedded/systemd/
+          echo "=== Running go build ==="
+          go build -ldflags="-s -w -X main.Version=${VERSION}" -o conntrack-linux-amd64 ./cmd/conntrack 2>&1 | tee /tmp/build.log
+          echo "=== Build complete ==="
           ls -la conntrack-linux-amd64
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build.log
+          retention-days: 1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
