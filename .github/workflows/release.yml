@@ -166,12 +166,24 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
+          # Debug: show directory structure
+          echo "=== Directory structure ==="
+          ls -la
+          ls -la bpf/ || true
+          ls -la pkg/embedded/ || true
+          
           # Prepare embedded resources
           mkdir -p pkg/embedded/bpf pkg/embedded/configs pkg/embedded/systemd
           cp bpf/conntrack.bpf.o pkg/embedded/bpf/
           cp configs/config.example.yaml pkg/embedded/configs/
           cp packaging/systemd/conntrack.service pkg/embedded/systemd/
-
+          
+          # Verify files exist
+          echo "=== Verifying embedded files ==="
+          ls -la pkg/embedded/bpf/
+          ls -la pkg/embedded/configs/
+          ls -la pkg/embedded/systemd/
+          
           # Build with embedded resources
           GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
             go build -ldflags="-s -w \
