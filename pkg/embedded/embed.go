@@ -9,24 +9,18 @@ import (
 	"path/filepath"
 )
 
-// Embedded file paths (set during build)
-var (
-	embeddedEBPFPath   = ""
-	embeddedConfigPath = ""
-	embeddedSystemdPath = ""
-)
-
 // GetEBPFProgram возвращает .o файл как []byte
 func GetEBPFProgram() ([]byte, error) {
-	// Try to read from embedded path first
-	if embeddedEBPFPath != "" {
-		return os.ReadFile(embeddedEBPFPath)
+	// Try embedded path first (set during build)
+	embeddedPath := "pkg/embedded/bpf/conntrack.bpf.o"
+	if data, err := os.ReadFile(embeddedPath); err == nil {
+		return data, nil
 	}
 	
-	// Fallback: try default locations
+	// Fallback paths
 	defaultPaths := []string{
-		"pkg/embedded/bpf/conntrack.bpf.o",
 		"/usr/share/conntrack/bpf/conntrack.bpf.o",
+		"./bpf/conntrack.bpf.o",
 	}
 	
 	for _, path := range defaultPaths {
@@ -35,18 +29,19 @@ func GetEBPFProgram() ([]byte, error) {
 		}
 	}
 	
-	return nil, fmt.Errorf("embedded eBPF program not found")
+	return nil, fmt.Errorf("eBPF program not found")
 }
 
 // GetSampleConfig возвращает sample config как []byte
 func GetSampleConfig() ([]byte, error) {
-	if embeddedConfigPath != "" {
-		return os.ReadFile(embeddedConfigPath)
+	embeddedPath := "pkg/embedded/configs/config.example.yaml"
+	if data, err := os.ReadFile(embeddedPath); err == nil {
+		return data, nil
 	}
 	
 	defaultPaths := []string{
-		"pkg/embedded/configs/config.example.yaml",
 		"/etc/conntrack/config.example.yaml",
+		"./configs/config.example.yaml",
 	}
 	
 	for _, path := range defaultPaths {
@@ -55,18 +50,19 @@ func GetSampleConfig() ([]byte, error) {
 		}
 	}
 	
-	return nil, fmt.Errorf("embedded config not found")
+	return nil, fmt.Errorf("config not found")
 }
 
 // GetSystemdUnit возвращает systemd unit файл как []byte
 func GetSystemdUnit() ([]byte, error) {
-	if embeddedSystemdPath != "" {
-		return os.ReadFile(embeddedSystemdPath)
+	embeddedPath := "pkg/embedded/systemd/conntrack.service"
+	if data, err := os.ReadFile(embeddedPath); err == nil {
+		return data, nil
 	}
 	
 	defaultPaths := []string{
-		"pkg/embedded/systemd/conntrack.service",
 		"/etc/systemd/system/conntrack.service",
+		"./packaging/systemd/conntrack.service",
 	}
 	
 	for _, path := range defaultPaths {
@@ -75,7 +71,7 @@ func GetSystemdUnit() ([]byte, error) {
 		}
 	}
 	
-	return nil, fmt.Errorf("embedded systemd unit not found")
+	return nil, fmt.Errorf("systemd unit not found")
 }
 
 // WriteEBPFToFile записывает eBPF программу в файл
@@ -113,11 +109,6 @@ func WriteSystemdUnitToFile(path string) error {
 
 // HasEmbeddedEBPF проверяет, доступна ли embedded версия
 func HasEmbeddedEBPF() bool {
-	if embeddedEBPFPath != "" {
-		_, err := os.Stat(embeddedEBPFPath)
-		return err == nil
-	}
-	
 	_, err := os.Stat("pkg/embedded/bpf/conntrack.bpf.o")
 	return err == nil
 }
