@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  GO_VERSION: '1.21'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate version tag
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "version=${TAG}" >> $GITHUB_OUTPUT
+
+  build-ebpf:
+    name: Build eBPF
+    runs-on: ubuntu-latest
+    needs: [validate]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install eBPF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev linux-headers-$(uname -r)
+
+      - name: Build eBPF programs
+        run: make -C bpf all
+
+      - name: Upload eBPF artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-programs
+          path: bpf/*.o
+          retention-days: 1
+
+  build-conntrack:
+    name: Build conntrack
+    runs-on: ubuntu-latest
+    needs: [validate, build-ebpf]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download eBPF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf-programs
+          path: bpf/
+
+      - name: Prepare embedded resources
+        run: |
+          mkdir -p pkg/embedded/bpf pkg/embedded/configs pkg/embedded/systemd
+          cp bpf/conntrack.bpf.o pkg/embedded/bpf/
+          cp configs/config.example.yaml pkg/embedded/configs/
+          cp packaging/systemd/conntrack.service pkg/embedded/systemd/
+          ls -la pkg/embedded/bpf/
+          ls -la pkg/embedded/configs/
+          ls -la pkg/embedded/systemd/
+
+      - name: Build conntrack
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          go build -ldflags="-s -w -X main.Version=${VERSION}" -o conntrack-linux-amd64 ./cmd/conntrack
+          ls -la conntrack-linux-amd64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: conntrack-linux-amd64
+          path: conntrack-linux-amd64
+          retention-days: 1
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [validate, build-conntrack]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Download eBPF
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf-programs
+          path: ./artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ needs.validate.outputs.version }}
+          tag_name: ${{ needs.validate.outputs.version }}
+          files: |
+            artifacts/conntrack-linux-amd64
+            artifacts/conntrack.bpf.o
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
