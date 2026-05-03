@@ -93,6 +93,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - name: Download Go modules
+        run: |
+          go mod download
+          go mod verify
+
       - name: Build binary
         env:
           VERSION: ${{ needs.validate.outputs.version }}
@@ -152,6 +157,11 @@ jobs:
           name: ebpf-programs
           path: bpf/
 
+      - name: Download Go modules
+        run: |
+          go mod download
+          go mod verify
+
       - name: Build single-binary with embedded eBPF
         env:
           VERSION: ${{ needs.validate.outputs.version }}
@@ -161,7 +171,7 @@ jobs:
           cp bpf/conntrack.bpf.o pkg/embedded/bpf/
           cp configs/config.example.yaml pkg/embedded/configs/
           cp packaging/systemd/conntrack.service pkg/embedded/systemd/
-          
+
           # Build with embedded resources
           GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
             go build -ldflags="-s -w \
