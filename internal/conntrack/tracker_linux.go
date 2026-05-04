@@ -222,7 +222,7 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 
 	// Log available programs and maps
 	t.logger.Debug("eBPF spec loaded",
-		zap.Strings("programs", getMapKeys(spec.Programs)),
+		zap.Strings("programs", getMapKeysSpec(spec.Programs)),
 		zap.Strings("maps", getMapKeys2(spec.Maps)),
 	)
 
@@ -248,6 +248,14 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 
 // getMapKeys returns keys from a map as string slice
 func getMapKeys(m map[string]*ebpf.Program) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func getMapKeysSpec(m map[string]*ebpf.ProgramSpec) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
