@@ -290,12 +290,14 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
 
     /* ctx->saddr / ctx->daddr are __u32[4] in network byte order (big-endian)
-     * Use BPF_CORE_READ to extract the first element (IPv4)
-     * Reconstruct __u32 from bytes: byte[0] is MSB, byte[3] is LSB
+     * For IPv4, we need saddr[0] and daddr[0] (first element of array)
+     * Use bpf_core_read() to correctly access array element
      */
     __u32 saddr4, daddr4;
-    saddr4 = BPF_CORE_READ(ctx, saddr);
-    daddr4 = BPF_CORE_READ(ctx, daddr);
+    if (bpf_core_read(&saddr4, sizeof(saddr4), &ctx->saddr) != 0)
+        return 0;
+    if (bpf_core_read(&daddr4, sizeof(daddr4), &ctx->daddr) != 0)
+        return 0;
 
     /* Convert from network byte order to host byte order */
     saddr4 = bpf_ntohl(saddr4);
