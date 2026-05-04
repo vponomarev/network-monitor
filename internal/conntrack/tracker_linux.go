@@ -272,62 +272,47 @@ func getMapKeys2(m map[string]*ebpf.MapSpec) []string {
 }
 
 // attachPrograms attaches eBPF programs to kernel hooks
-// Uses auto-detection: tries kprobe first, falls back to tracepoint if kprobe doesn't fire
+// Uses tracepoint fallback as PRIMARY method for outgoing connections
+// kprobe/tcp_connect is used only if tracepoint is not available
 func (t *Tracker) attachPrograms() error {
 	// Log available programs
 	t.logger.Info("Available eBPF programs",
 		zap.Strings("programs", getMapKeys(t.colls.Programs)),
 	)
 
-	// Attach tcp_connect for outgoing connections
-	// On kernels 6.1.x (Debian 12), kprobe/tcp_connect may attach but not fire
-	// In this case, tracepoint/sock/inet_sock_set_state is used as fallback
+	// Attach outgoing connection tracker
+	// Priority: 1) tracepoint/sock/inet_sock_set_state (fallback mode, more reliable)
+	//          2) kprobe/tcp_connect (legacy, may not fire on some kernels)
 	if t.config.TrackOutgoing {
-		kprobeAttached := false
-		tracepointAttached := false
+		attached := false
 
-		// Log all available programs for debugging
-		for name := range t.colls.Programs {
-			t.logger.Debug("Found eBPF program", zap.String("name", name))
-		}
-
-		// Try kprobe first
-		if prog, ok := t.colls.Programs["tcp_connect"]; ok {
-			l, err := link.Kprobe("tcp_connect", prog, nil)
-			if err != nil {
-				t.logger.Warn("Failed to attach kprobe/tcp_connect", zap.Error(err))
-			} else {
-				t.links = append(t.links, l)
-				t.logger.Info("Attached kprobe/tcp_connect for outgoing connections")
-				kprobeAttached = true
-			}
-		}
-
-		// Try tracepoint fallback
-		// Always attach if kprobe failed, or as additional coverage on problematic kernels
-		// Program name in spec is the FUNCTION name: "trace_outgoing_fallback" (not SEC name)
+		// Try tracepoint fallback FIRST (preferred method)
 		if prog, ok := t.colls.Programs["trace_outgoing_fallback"]; ok {
 			l, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
 			if err != nil {
-				if !kprobeAttached {
-					return fmt.Errorf("kprobe failed and tracepoint fallback also failed: %w", err)
-				}
-				t.logger.Debug("Tracepoint fallback not available (kprobe is active)", zap.Error(err))
+				t.logger.Warn("Failed to attach tracepoint/sock/inet_sock_set_state", zap.Error(err))
 			} else {
 				t.links = append(t.links, l)
-				if !kprobeAttached {
-					t.logger.Info("Attached tracepoint/sock/inet_sock_set_state for outgoing connections (fallback mode)")
-				} else {
-					t.logger.Info("Attached tracepoint/sock/inet_sock_set_state for outgoing connections (dual mode)")
-				}
-				tracepointAttached = true
+				t.logger.Info("Attached tracepoint/sock/inet_sock_set_state for outgoing connections (preferred mode)")
+				attached = true
 			}
-		} else {
-			t.logger.Debug("trace_outgoing_fallback program not found in spec")
 		}
 
-		// Error if neither kprobe nor tracepoint was attached
-		if !kprobeAttached && !tracepointAttached {
+		// Try kprobe only if tracepoint failed or not available
+		if !attached {
+			if prog, ok := t.colls.Programs["tcp_connect"]; ok {
+				l, err := link.Kprobe("tcp_connect", prog, nil)
+				if err != nil {
+					return fmt.Errorf("failed to attach kprobe/tcp_connect: %w", err)
+				}
+				t.links = append(t.links, l)
+				t.logger.Info("Attached kprobe/tcp_connect for outgoing connections (legacy mode)")
+				attached = true
+			}
+		}
+
+		// Error if neither was attached
+		if !attached {
 			return fmt.Errorf("failed to attach any outgoing connection tracker (kprobe and tracepoint both unavailable)")
 		}
 	}
