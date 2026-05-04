@@ -220,6 +220,12 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 		return fmt.Errorf("loading collection spec from %s: %w", path, err)
 	}
 
+	// Log available programs and maps
+	t.logger.Debug("eBPF spec loaded",
+		zap.Strings("programs", getMapKeys(spec.Programs)),
+		zap.Strings("maps", getMapKeys2(spec.Maps)),
+	)
+
 	// Create collection
 	colls, err := ebpf.NewCollection(spec)
 	if err != nil {
@@ -238,6 +244,23 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 	}
 
 	return nil
+}
+
+// getMapKeys returns keys from a map as string slice
+func getMapKeys(m map[string]*ebpf.ProgramSpec) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func getMapKeys2(m map[string]*ebpf.MapSpec) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // attachPrograms attaches eBPF programs to kernel hooks
