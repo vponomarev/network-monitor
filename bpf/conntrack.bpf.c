@@ -187,6 +187,8 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     if (family != AF_INET)
         return 0;
 
+    bpf_printk("conntrack: tcp_connect called, family=%d", family);
+
     struct connection_event evt = {};
     struct connection_key key = {};
 
@@ -205,6 +207,9 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     // Create key and extract connection info
     make_key_from_sock(sk, &key);
 
+    bpf_printk("conntrack: key extracted, src_ip[15]=%d, dst_ip[15]=%d", 
+               key.src_ip[15], key.dst_ip[15]);
+
     /* Filter out invalid connections (qemu-ga, etc.)
      * Both src and dst being 0.0.0.0 indicates invalid/internal connection
      */
@@ -212,8 +217,13 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
                     ((__u32)key.src_ip[14] << 8) | (__u32)key.src_ip[15];
     __u32 dst_ip4 = ((__u32)key.dst_ip[12] << 24) | ((__u32)key.dst_ip[13] << 16) |
                     ((__u32)key.dst_ip[14] << 8) | (__u32)key.dst_ip[15];
-    if (src_ip4 == 0 && dst_ip4 == 0)
+    
+    bpf_printk("conntrack: src_ip4=%u, dst_ip4=%u", src_ip4, dst_ip4);
+    
+    if (src_ip4 == 0 && dst_ip4 == 0) {
+        bpf_printk("conntrack: filtering out (both IPs zero)");
         return 0;
+    }
 
     __builtin_memcpy(evt.src_ip, key.src_ip, 16);
     __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
@@ -232,6 +242,7 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
 
     bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
 
+    bpf_printk("conntrack: submitting event");
     submit_event(&evt);
     return 0;
 }
