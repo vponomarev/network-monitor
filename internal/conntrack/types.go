@@ -6,7 +6,7 @@ import (
 )
 
 // DefaultEBPFProgramPath is the default path to the eBPF program object file
-const DefaultEBPFProgramPath = "/usr/share/netmon/bpf/conntrack.bpf.o"
+const DefaultEBPFProgramPath = "/usr/share/conntrack/bpf/conntrack.bpf.o"
 
 // Config holds connection tracker configuration
 type Config struct {
