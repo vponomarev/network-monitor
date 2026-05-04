@@ -247,7 +247,7 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 }
 
 // getMapKeys returns keys from a map as string slice
-func getMapKeys(m map[string]*ebpf.ProgramSpec) []string {
+func getMapKeys(m map[string]*ebpf.Program) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
