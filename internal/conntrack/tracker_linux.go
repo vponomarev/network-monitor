@@ -305,8 +305,8 @@ func (t *Tracker) attachPrograms() error {
 
 		// Try tracepoint fallback
 		// Always attach if kprobe failed, or as additional coverage on problematic kernels
-		// Program name in spec is "trace_outgoing_fallback" (function name, not SEC name)
-		if prog, ok := t.colls.Programs["trace_outgoing_fallback"]; ok {
+		// Program name in spec is the SEC name: "tracepoint/sock/inet_sock_set_state"
+		if prog, ok := t.colls.Programs["tracepoint/sock/inet_sock_set_state"]; ok {
 			l, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
 			if err != nil {
 				if !kprobeAttached {
@@ -323,7 +323,7 @@ func (t *Tracker) attachPrograms() error {
 				tracepointAttached = true
 			}
 		} else {
-			t.logger.Debug("trace_outgoing_fallback program not found in spec")
+			t.logger.Debug("tracepoint/sock/inet_sock_set_state program not found in spec")
 		}
 
 		// Error if neither kprobe nor tracepoint was attached
