@@ -64,6 +64,12 @@ func WriteConfigToFile(path string) error {
 	if err != nil {
 		return err
 	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", dir, err)
+	}
+
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -73,6 +79,12 @@ func WriteSystemdUnitToFile(path string) error {
 	if err != nil {
 		return err
 	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating directory %s: %w", dir, err)
+	}
+
 	return os.WriteFile(path, data, 0644)
 }
 
