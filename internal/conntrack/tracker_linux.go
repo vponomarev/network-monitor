@@ -266,6 +266,11 @@ func getMapKeys2(m map[string]*ebpf.MapSpec) []string {
 // attachPrograms attaches eBPF programs to kernel hooks
 // Uses auto-detection: tries kprobe first, falls back to tracepoint if kprobe doesn't fire
 func (t *Tracker) attachPrograms() error {
+	// Log available programs
+	t.logger.Info("Available eBPF programs",
+		zap.Strings("programs", getMapKeys(t.colls.Programs)),
+	)
+
 	// Attach tcp_connect for outgoing connections
 	// On kernels 6.1.x (Debian 12), kprobe/tcp_connect may attach but not fire
 	// In this case, tracepoint/sock/inet_sock_set_state is used as fallback
