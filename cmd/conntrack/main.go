@@ -206,16 +206,9 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 
 	zapCfg.Level = zap.NewAtomicLevelAt(level)
 
-	// Configure output: file or stdout/stderr
-	if cfg.Logging.OutputPath != "" {
-		// File output
-		zapCfg.OutputPaths = []string{cfg.Logging.OutputPath}
-		zapCfg.ErrorOutputPaths = []string{cfg.Logging.OutputPath + ".err"}
-	} else {
-		// Default to stdout/stderr
-		zapCfg.OutputPaths = []string{"stdout"}
-		zapCfg.ErrorOutputPaths = []string{"stderr"}
-	}
+	// Default to stdout/stderr
+	zapCfg.OutputPaths = []string{"stdout"}
+	zapCfg.ErrorOutputPaths = []string{"stderr"}
 
 	return zapCfg.Build()
 }
