@@ -24,7 +24,17 @@
       "Bash(git rm *)",
       "Bash(ssh *)",
       "Bash(git stash)",
-      "Bash(git show *)"
+      "Bash(git show *)",
+      "Read(//Users/v.p.ponomarev/Documents/git/github.com/vponomarev/network-monitor/**)",
+      "Bash(scp *)",
+      "Bash(md5sum *)",
+      "Bash(cp *)",
+      "Bash(cat *)",
+      "Bash(docker ps)",
+      "Bash(docker run *)",
+      "Bash(docker images)",
+      "Bash(docker exec *)",
+      "Bash(true)"
     ]
   },
   "$version": 3

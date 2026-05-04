@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -77,8 +78,9 @@ type MetricsConfig struct {
 
 // LoggingConfig holds logging settings
 type LoggingConfig struct {
-	Level  string `yaml:"level"`
-	Format string `yaml:"format"`
+	Level      string `yaml:"level"`
+	Format     string `yaml:"format"`
+	OutputPath string `yaml:"output_path"` // Empty = stdout/stderr
 }
 
 // PacketLossConfig holds packet loss monitoring configuration (for other modules)
@@ -172,8 +174,14 @@ func DefaultConfig() *Config {
 			},
 		},
 		Logging: LoggingConfig{
-			Level:  "info",
-			Format: "json",
+			Level:      "info",
+			Format:     "json",
+			OutputPath: "", // Default to stdout/stderr
+		},
+		Connections: ConnectionsConfig{
+			Enabled:       true,
+			TrackIncoming: true,
+			TrackOutgoing: true,
 		},
 	}
 }
@@ -273,6 +281,21 @@ func (c *Config) Validate() error {
 	validLogFormats := map[string]bool{"json": true, "console": true}
 	if !validLogFormats[c.Logging.Format] {
 		return fmt.Errorf("invalid logging format: %s (valid: json, console)", c.Logging.Format)
+	}
+
+	// Validate log output path if specified
+	if c.Logging.OutputPath != "" {
+		// Check if directory exists and is writable
+		dir := filepath.Dir(c.Logging.OutputPath)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return fmt.Errorf("log output directory does not exist: %s", dir)
+		}
+		// Try to create/truncate the file to check write permissions
+		f, err := os.OpenFile(c.Logging.OutputPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("cannot write to log file %s: %w", c.Logging.OutputPath, err)
+		}
+		f.Close()
 	}
 
 	// Validate packet loss config

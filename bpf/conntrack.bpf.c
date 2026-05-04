@@ -9,6 +9,34 @@
 #include "conntrack.bpf.h"
 
 /*
+ * UAPI constants - not always present in vmlinux.h (generated from BTF)
+ * These are from Linux UAPI headers and must be defined manually
+ */
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+
+#ifndef IPPROTO_TCP
+#define IPPROTO_TCP 6
+#endif
+
+#ifndef TCP_SYN
+#define TCP_SYN 0x02
+#endif
+
+#ifndef TCP_ACK
+#define TCP_ACK 0x10
+#endif
+
+#ifndef TCP_SYN_SENT
+#define TCP_SYN_SENT 2
+#endif
+
+#ifndef TASK_COMM_LEN
+#define TASK_COMM_LEN 16
+#endif
+
+/*
  * eBPF Connection Tracker - kprobe based
  *
  * Uses kprobe/kretprobe for maximum kernel compatibility:
@@ -21,6 +49,11 @@
  * Limitations:
  * - Only IPv4 TCP connections are tracked (AF_INET + IPPROTO_TCP)
  * - IPv6 support requires additional implementation
+ *
+ * Fallback mode (USE_SOCK_SET_STATE_FALLBACK):
+ * - Uses tracepoint/sock/inet_sock_set_state instead of kprobe/tcp_connect
+ * - Enable for kernels where kprobe/tcp_connect does not fire (e.g., Debian 12 with 6.1.x)
+ * - Requires kernel 5.14+ for stable tracepoint format
  */
 
 struct connection_event {
@@ -86,23 +119,18 @@ static __always_inline void submit_event(struct connection_event *evt)
 }
 
 /* Extract IPv4 addresses from sock using BPF_CORE_READ
- * For tcp_connect: uses inet_saddr/daddr (set before connect)
- * For inet_csk_accept/tcp_close: uses skc_rcv_saddr/daddr
+ * Uses skc_rcv_saddr/skc_daddr for all cases
+ * Note: For outgoing connections before bind(), src_ip will be 0.0.0.0
+ * This is expected behavior - userspace should handle this case
  */
 static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u8 *daddr)
 {
     __u32 saddr4, daddr4;
 
-    // Try skc_rcv_saddr/skc_daddr first (works for established sockets)
+    // Use skc_rcv_saddr/skc_daddr for all cases
+    // For tcp_connect before bind(): saddr4 will be 0.0.0.0 (expected)
     saddr4 = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
     daddr4 = BPF_CORE_READ(sk, __sk_common.skc_daddr);
-
-    // For tcp_connect, skc_rcv_saddr may be 0 (not bound yet)
-    // Fall back to inet_saddr from inet_sock
-    if (saddr4 == 0) {
-        struct inet_sock *inet = (void *)sk;
-        saddr4 = BPF_CORE_READ(inet, inet_saddr);
-    }
 
     // Kernel stores these in NETWORK byte order (big-endian)
     // Convert to host byte order
@@ -146,13 +174,17 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
 }
 
 /* Trace tcp_connect - outgoing connection initiation (SYN sent)
- * Note: No family check here - skc_family may not be set yet for outgoing.
- * IPv4/IPv6 filtering is done in extract_ipv4_addrs (returns 0.0.0.0 for IPv6).
+ * Socket family is already set at this point (socket() called before connect())
  */
 SEC("kprobe/tcp_connect")
 int BPF_KPROBE(tcp_connect, struct sock *sk)
 {
     if (!track_outgoing)
+        return 0;
+
+    // Check socket family - only IPv4 supported
+    __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    if (family != AF_INET)
         return 0;
 
     struct connection_event evt = {};
@@ -172,6 +204,17 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
 
     // Create key and extract connection info
     make_key_from_sock(sk, &key);
+
+    /* Filter out invalid connections (qemu-ga, etc.)
+     * Both src and dst being 0.0.0.0 indicates invalid/internal connection
+     */
+    __u32 src_ip4 = ((__u32)key.src_ip[12] << 24) | ((__u32)key.src_ip[13] << 16) |
+                    ((__u32)key.src_ip[14] << 8) | (__u32)key.src_ip[15];
+    __u32 dst_ip4 = ((__u32)key.dst_ip[12] << 24) | ((__u32)key.dst_ip[13] << 16) |
+                    ((__u32)key.dst_ip[14] << 8) | (__u32)key.dst_ip[15];
+    if (src_ip4 == 0 && dst_ip4 == 0)
+        return 0;
+
     __builtin_memcpy(evt.src_ip, key.src_ip, 16);
     __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
     evt.src_port = key.src_port;
@@ -193,14 +236,125 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     return 0;
 }
 
-/* Trace inet_csk_accept - server accepts incoming connection
- * Returns: struct sock * (new connection socket)
+/* -------------------------------------------------------------------------
+ * tracepoint/sock/inet_sock_set_state — fallback for outgoing connections.
  *
- * Key consistency: key is created from RAW socket values (local=src, remote=dst)
- * Event format: src=client (remote), dst=server (local) - swapped for user-facing format
+ * Enable by defining USE_SOCK_SET_STATE_FALLBACK at build time:
+ *   make fallback
  *
- * Note: tcp_flags are conditional - connection is already ESTABLISHED at accept() time
- */
+ * Use when kprobe/tcp_connect does not fire (verify with bpftool prog show,
+ * check run_cnt after curl). This tracepoint is stable on kernels 5.14+.
+ *
+ * Catches the TCP_SYN_SENT state transition which is equivalent to the
+ * moment tcp_connect() is called. PID context is correct here because
+ * the transition happens synchronously in the calling process.
+ * ---------------------------------------------------------------------- */
+#ifdef USE_SOCK_SET_STATE_FALLBACK
+
+SEC("tracepoint/sock/inet_sock_set_state")
+int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
+{
+    if (!track_outgoing)
+        return 0;
+
+    /* Only IPv4 TCP transitioning to SYN_SENT */
+    if (BPF_CORE_READ(ctx, protocol) != IPPROTO_TCP)
+        return 0;
+    if (BPF_CORE_READ(ctx, newstate) != TCP_SYN_SENT)
+        return 0;
+    if (BPF_CORE_READ(ctx, family) != AF_INET)
+        return 0;
+
+    struct connection_event evt = {};
+    evt.timestamp_ns = bpf_ktime_get_ns();
+    evt.pid_tgid = bpf_get_current_pid_tgid();
+    evt.pid = (__u32)(evt.pid_tgid >> 32);
+    evt.tid = (__u32)(evt.pid_tgid & 0xFFFFFFFF);
+    evt.direction = DIR_OUTGOING;
+    evt.state = CONN_STATE_SYN_SENT;
+    evt.event_type = CONN_EVENT_NEW;
+    evt.tcp_flags = TCP_SYN;
+    evt.protocol = IPPROTO_TCP;
+
+    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
+
+    /* ctx->saddr / ctx->daddr are __u8[4] in network byte order (big-endian)
+     * Use BPF_CORE_READ to access array fields correctly
+     * Reconstruct __u32 from bytes: byte[0] is MSB, byte[3] is LSB
+     */
+    __u8 saddr_bytes[4], daddr_bytes[4];
+    BPF_CORE_READ_INTO(&saddr_bytes, ctx, saddr);
+    BPF_CORE_READ_INTO(&daddr_bytes, ctx, daddr);
+
+    __u32 saddr4 = ((__u32)saddr_bytes[0] << 24) | ((__u32)saddr_bytes[1] << 16) |
+                   ((__u32)saddr_bytes[2] << 8) | (__u32)saddr_bytes[3];
+    __u32 daddr4 = ((__u32)daddr_bytes[0] << 24) | ((__u32)daddr_bytes[1] << 16) |
+                   ((__u32)daddr_bytes[2] << 8) | (__u32)daddr_bytes[3];
+
+    /* Convert from network byte order to host byte order */
+    saddr4 = bpf_ntohl(saddr4);
+    daddr4 = bpf_ntohl(daddr4);
+
+    __builtin_memset(evt.src_ip, 0, 16);
+    __builtin_memset(evt.dst_ip, 0, 16);
+    evt.src_ip[10] = 0xff; evt.src_ip[11] = 0xff;
+    evt.dst_ip[10] = 0xff; evt.dst_ip[11] = 0xff;
+
+    evt.src_ip[12] = (__u8)((saddr4 >> 24) & 0xFF);
+    evt.src_ip[13] = (__u8)((saddr4 >> 16) & 0xFF);
+    evt.src_ip[14] = (__u8)((saddr4 >>  8) & 0xFF);
+    evt.src_ip[15] = (__u8)( saddr4        & 0xFF);
+
+    evt.dst_ip[12] = (__u8)((daddr4 >> 24) & 0xFF);
+    evt.dst_ip[13] = (__u8)((daddr4 >> 16) & 0xFF);
+    evt.dst_ip[14] = (__u8)((daddr4 >>  8) & 0xFF);
+    evt.dst_ip[15] = (__u8)( daddr4        & 0xFF);
+
+    evt.src_port = ctx->sport;
+    evt.dst_port = ctx->dport;
+
+    /* Filter out invalid connections (qemu-ga, etc.) */
+    if (saddr4 == 0 && daddr4 == 0)
+        return 0;
+
+    struct connection_key key = {};
+    __builtin_memcpy(key.src_ip, evt.src_ip, 16);
+    __builtin_memcpy(key.dst_ip, evt.dst_ip, 16);
+    key.src_port = evt.src_port;
+    key.dst_port = evt.dst_port;
+    key.protocol = IPPROTO_TCP;
+
+    struct connection_entry entry = {};
+    entry.timestamp_ns = evt.timestamp_ns;
+    entry.pid = evt.pid;
+    entry.direction = DIR_OUTGOING;
+    entry.state = CONN_STATE_SYN_SENT;
+    entry.tcp_flags = TCP_SYN;
+    __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
+
+    bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
+    submit_event(&evt);
+    return 0;
+}
+#endif /* USE_SOCK_SET_STATE_FALLBACK */
+
+/* -------------------------------------------------------------------------
+ * kretprobe/inet_csk_accept — incoming connections.
+ *
+ * Fires after the kernel has dequeued a fully established connection from
+ * the accept queue. The returned sock is in ESTABLISHED state.
+ *
+ * Key is stored in socket-native format (local=src, remote=dst).
+ * Event is emitted in user-facing format (src=client, dst=server) — ports
+ * and IPs are swapped relative to the key.
+ *
+ * evt.comm semantics: name of the process calling accept() (the server).
+ * May occasionally be a kernel thread name if the scheduler context
+ * switches between accept() and the kretprobe firing — this is a known
+ * limitation. Userspace should fall back to /proc/{pid}/comm if needed.
+ *
+ * tcp_flags = TCP_SYN|TCP_ACK is symbolic — the handshake is already done.
+ * ---------------------------------------------------------------------- */
 SEC("kretprobe/inet_csk_accept")
 int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 {

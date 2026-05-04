@@ -3,6 +3,7 @@
 #
 # Usage:
 #   make              - Build eBPF objects
+#   make vmlinux.h    - Generate vmlinux.h from current kernel BTF
 #   make clean        - Remove build artifacts
 #   make deps         - Show dependency installation commands
 #   make install      - Copy built objects to output directory
@@ -25,23 +26,46 @@ CFLAGS += -D__TARGET_ARCH_$(ARCH)
 CFLAGS += -I$(KERN_INCLUDE)
 CFLAGS += -I.
 
+# Fallback mode: use tracepoint/sock/inet_sock_set_state instead of kprobe/tcp_connect
+# Enable for kernels where kprobe/tcp_connect does not fire (e.g., Debian 12 with 6.1.x)
+ifdef USE_SOCK_SET_STATE_FALLBACK
+CFLAGS += -DUSE_SOCK_SET_STATE_FALLBACK
+endif
+
 # Source and output files
 SRCS = conntrack.bpf.c
 OBJS = $(SRCS:.c=.o)
 SKELS = $(SRCS:.c=.skel.h)
 
-.PHONY: all clean install deps help
+# vmlinux.h - generate from current kernel BTF (recommended for target compatibility)
+.PHONY: all clean install deps help fallback vmlinux.h
+
+vmlinux.h:
+	@echo "Generating vmlinux.h from /sys/kernel/btf/vmlinux..."
+	@if [ ! -f /sys/kernel/btf/vmlinux ]; then \
+		echo "Error: /sys/kernel/btf/vmlinux not found. Is BTF enabled?"; \
+		exit 1; \
+	fi
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+	@echo "vmlinux.h generated successfully"
 
 all: $(OBJS) | $(OUTPUT_DIR)
 	@echo "eBPF objects built successfully"
 	@ls -la $(OBJS)
+
+# Build with fallback mode (tracepoint instead of kprobe for outgoing connections)
+fallback:
+	@echo "Building with USE_SOCK_SET_STATE_FALLBACK enabled..."
+	$(MAKE) USE_SOCK_SET_STATE_FALLBACK=1 all
+	@echo "Fallback build complete"
 
 # Create output directory
 $(OUTPUT_DIR):
 	mkdir -p $(OUTPUT_DIR)
 
 # Compile eBPF program to ELF object
-%.o: %.c conntrack.bpf.h vmlinux.h
+# vmlinux.h is optional - use existing file if bpftool not available
+%.o: %.c conntrack.bpf.h
 	@echo "  CLANG   $@"
 	$(CLANG) $(CFLAGS) -c $< -o $@
 	@echo "  STRIP   $@"
