@@ -276,6 +276,9 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     if (BPF_CORE_READ(ctx, family) != AF_INET)
         return 0;
 
+    bpf_printk("conntrack: tracepoint fired, protocol=%d, newstate=%d", 
+               BPF_CORE_READ(ctx, protocol), BPF_CORE_READ(ctx, newstate));
+
     struct connection_event evt = {};
     evt.timestamp_ns = bpf_ktime_get_ns();
     evt.pid_tgid = bpf_get_current_pid_tgid();
@@ -308,6 +311,9 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     saddr4 = bpf_ntohl(saddr4);
     daddr4 = bpf_ntohl(daddr4);
 
+    bpf_printk("conntrack: saddr4=%u, daddr4=%u, sport=%d, dport=%d",
+               saddr4, daddr4, ctx->sport, ctx->dport);
+
     __builtin_memset(evt.src_ip, 0, 16);
     __builtin_memset(evt.dst_ip, 0, 16);
     evt.src_ip[10] = 0xff; evt.src_ip[11] = 0xff;
@@ -327,8 +333,10 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_port = ctx->dport;
 
     /* Filter out invalid connections (qemu-ga, etc.) */
-    if (saddr4 == 0 && daddr4 == 0)
+    if (saddr4 == 0 && daddr4 == 0) {
+        bpf_printk("conntrack: filtering out (both IPs zero)");
         return 0;
+    }
 
     struct connection_key key = {};
     __builtin_memcpy(key.src_ip, evt.src_ip, 16);
@@ -346,6 +354,7 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
 
     bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
+    bpf_printk("conntrack: tracepoint submitting event");
     submit_event(&evt);
     return 0;
 }
