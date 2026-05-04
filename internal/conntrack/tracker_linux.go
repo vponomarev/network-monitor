@@ -343,6 +343,7 @@ func (t *Tracker) attachPrograms() error {
 func (t *Tracker) readEvents(ctx context.Context) {
 	if t.colls == nil {
 		// eBPF not loaded, events will come from simulation
+		t.logger.Info("eBPF collection not loaded, using simulation")
 		return
 	}
 
@@ -353,6 +354,7 @@ func (t *Tracker) readEvents(ctx context.Context) {
 		return
 	}
 
+	t.logger.Info("Creating ringbuf reader", zap.String("map", ringBuf.String()))
 	rd, err := ringbuf.NewReader(ringBuf)
 	if err != nil {
 		t.logger.Error("Creating ringbuf reader", zap.Error(err))
@@ -360,9 +362,12 @@ func (t *Tracker) readEvents(ctx context.Context) {
 	}
 	defer rd.Close()
 
+	t.logger.Info("Ringbuf reader created, starting to read events")
+
 	for {
 		select {
 		case <-ctx.Done():
+			t.logger.Info("Context done, exiting ringbuf reader")
 			return
 		default:
 		}
@@ -372,6 +377,8 @@ func (t *Tracker) readEvents(ctx context.Context) {
 			t.logger.Debug("Reading ringbuf", zap.Error(err))
 			continue
 		}
+
+		t.logger.Debug("Ringbuf event received", zap.Int("bytes", len(record.RawSample)))
 
 		conn := t.parseConnectionEvent(record.RawSample)
 		if conn != nil {
