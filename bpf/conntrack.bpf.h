@@ -9,18 +9,41 @@
 #define DIR_OUTGOING    1
 #define DIR_UNKNOWN     2  /* Used when connection was not tracked from start */
 
-/* Protocol constants */
+/* Protocol constants - from Linux UAPI */
+#ifndef IPPROTO_TCP
 #define IPPROTO_TCP     6
+#endif
+#ifndef IPPROTO_UDP
 #define IPPROTO_UDP     17
+#endif
+#ifndef IPPROTO_ICMP
 #define IPPROTO_ICMP    1
+#endif
 
-/* TCP flags - defined in vmlinux.h for eBPF */
-/* #define TCP_FIN    0x01 */
-/* #define TCP_SYN    0x02 */
-/* #define TCP_RST    0x04 */
-/* #define TCP_PSH    0x08 */
-/* #define TCP_ACK    0x10 */
-/* #define TCP_URG    0x20 */
+/* Address family - from Linux UAPI (not in BTF) */
+#ifndef AF_INET
+#define AF_INET         2
+#endif
+
+/* TCP flags - from Linux UAPI (not in BTF) */
+#ifndef TCP_FIN
+#define TCP_FIN    0x01
+#endif
+#ifndef TCP_SYN
+#define TCP_SYN    0x02
+#endif
+#ifndef TCP_RST
+#define TCP_RST    0x04
+#endif
+#ifndef TCP_PSH
+#define TCP_PSH    0x08
+#endif
+#ifndef TCP_ACK
+#define TCP_ACK    0x10
+#endif
+#ifndef TCP_URG
+#define TCP_URG    0x20
+#endif
 
 /* Connection states */
 #define CONN_STATE_NEW          0  /* Just created */

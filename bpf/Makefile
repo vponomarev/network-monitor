@@ -26,13 +26,8 @@ CFLAGS += -D__TARGET_ARCH_$(ARCH)
 CFLAGS += -I$(KERN_INCLUDE)
 CFLAGS += -I.
 
-# Fallback mode: use tracepoint/sock/inet_sock_set_state instead of kprobe/tcp_connect
-# Enabled by default for compatibility with kernels where kprobe/tcp_connect does not fire
-# (e.g., Debian 12 with 6.1.x, Debian 13 with 6.12.x)
-# To disable: make DISABLE_FALLBACK=1
-ifndef DISABLE_FALLBACK
-CFLAGS += -DUSE_SOCK_SET_STATE_FALLBACK
-endif
+# Tracepoint is always enabled for outgoing connections
+# No compile-time flags needed
 
 # Source and output files
 SRCS = conntrack.bpf.c
@@ -52,7 +47,7 @@ vmlinux.h:
 	@echo "vmlinux.h generated successfully"
 
 all: $(OBJS) | $(OUTPUT_DIR)
-	@echo "eBPF objects built successfully (with tracepoint fallback)"
+	@echo "eBPF objects built successfully"
 	@ls -la $(OBJS)
 
 # Create output directory
@@ -110,7 +105,7 @@ help:
 	@echo "eBPF Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all      - Build eBPF object files with tracepoint fallback (default)"
+	@echo "  all      - Build eBPF object files (default)"
 	@echo "  clean    - Remove build artifacts"
 	@echo "  install  - Copy built objects to output directory"
 	@echo "  deps     - Show dependency installation commands"
@@ -122,4 +117,3 @@ help:
 	@echo "  BPFTOOL      - bpftool for skeleton generation (default: bpftool)"
 	@echo "  OUTPUT_DIR   - Output directory (default: ../internal/conntrack/bpf)"
 	@echo "  KERN_INCLUDE - Kernel headers include path"
-	@echo "  DISABLE_FALLBACK=1 - Disable tracepoint fallback (use kprobe/tcp_connect)"

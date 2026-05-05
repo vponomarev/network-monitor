@@ -2,6 +2,7 @@ package conntrack
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -382,8 +383,8 @@ type ConnectionEventRaw struct {
 
 // makeConnectionKey generates unique key for connection
 func makeConnectionKey(srcIP net.IP, srcPort uint16, dstIP net.IP, dstPort uint16, protocol uint8) string {
-	return string(srcIP.To16()) + ":" + string(dstIP.To16()) + ":" +
-		string([]byte{byte(srcPort >> 8), byte(srcPort)}) + ":" +
-		string([]byte{byte(dstPort >> 8), byte(dstPort)}) + ":" +
-		string([]byte{protocol})
+	return fmt.Sprintf("%s:%d-%s:%d-%d",
+		srcIP.String(), srcPort,
+		dstIP.String(), dstPort,
+		protocol)
 }

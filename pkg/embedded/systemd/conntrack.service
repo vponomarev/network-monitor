@@ -1,0 +1,16 @@
+[Unit]
+Description=Connection Tracker (eBPF)
+After=network.target
+Documentation=https://github.com/vponomarev/network-monitor
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/conntrack --track-incoming --track-outgoing --track-closes
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -8,52 +8,24 @@
 #include <bpf/bpf_endian.h>
 #include "conntrack.bpf.h"
 
-/*
- * UAPI constants - not always present in vmlinux.h (generated from BTF)
- * These are from Linux UAPI headers and must be defined manually
- */
-#ifndef AF_INET
-#define AF_INET 2
-#endif
-
-#ifndef IPPROTO_TCP
-#define IPPROTO_TCP 6
-#endif
-
-#ifndef TCP_SYN
-#define TCP_SYN 0x02
-#endif
-
-#ifndef TCP_ACK
-#define TCP_ACK 0x10
-#endif
-
+/* TCP state constant - from Linux UAPI */
 #ifndef TCP_SYN_SENT
 #define TCP_SYN_SENT 2
 #endif
 
-#ifndef TASK_COMM_LEN
-#define TASK_COMM_LEN 16
-#endif
-
 /*
- * eBPF Connection Tracker - kprobe based
+ * eBPF Connection Tracker - tracepoint based for outgoing connections
  *
- * Uses kprobe/kretprobe for maximum kernel compatibility:
- * - kprobe/tcp_connect: исходящие соединения (SYN_SENT)
- * - kretprobe/inet_csk_accept: входящие соединения (ESTABLISHED)
- * - kprobe/tcp_close: закрытие соединений
+ * Uses:
+ * - tracepoint/sock/inet_sock_set_state: outgoing connections (SYN_SENT)
+ * - kretprobe/inet_csk_accept: incoming connections (ESTABLISHED)
+ * - kprobe/tcp_close: connection closes
  *
- * Supported kernels: 4.19.x+ (Debian 10/11, Ubuntu 18.04+, all modern)
+ * Supported kernels: 5.14+ (tracepoint/sock/inet_sock_set_state stable)
  *
  * Limitations:
  * - Only IPv4 TCP connections are tracked (AF_INET + IPPROTO_TCP)
  * - IPv6 support requires additional implementation
- *
- * Fallback mode (USE_SOCK_SET_STATE_FALLBACK):
- * - Uses tracepoint/sock/inet_sock_set_state instead of kprobe/tcp_connect
- * - Enable for kernels where kprobe/tcp_connect does not fire (e.g., Debian 12 with 6.1.x)
- * - Requires kernel 5.14+ for stable tracepoint format
  */
 
 struct connection_event {
@@ -122,22 +94,20 @@ static __always_inline void submit_event(struct connection_event *evt)
  * Uses skc_rcv_saddr/skc_daddr for all cases
  * Note: For outgoing connections before bind(), src_ip will be 0.0.0.0
  * This is expected behavior - userspace should handle this case
+ *
+ * IMPORTANT: skc_rcv_saddr/skc_daddr are in NETWORK byte order (big-endian).
+ * We copy bytes directly to IPv4-mapped format without byte swap.
  */
 static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u8 *daddr)
 {
     __u32 saddr4, daddr4;
 
     // Use skc_rcv_saddr/skc_daddr for all cases
-    // For tcp_connect before bind(): saddr4 will be 0.0.0.0 (expected)
     saddr4 = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
     daddr4 = BPF_CORE_READ(sk, __sk_common.skc_daddr);
 
-    // Kernel stores these in NETWORK byte order (big-endian)
-    // Convert to host byte order
-    saddr4 = bpf_ntohl(saddr4);
-    daddr4 = bpf_ntohl(daddr4);
-
     // Convert to IPv4-mapped IPv6 format
+    // Network byte order: byte[0] is MSB, byte[3] is LSB
     __builtin_memset(saddr, 0, 16);
     __builtin_memset(daddr, 0, 16);
     saddr[10] = 0xff;
@@ -145,11 +115,12 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[10] = 0xff;
     daddr[11] = 0xff;
 
-    // Extract bytes from host-order __u32
-    saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);
-    saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);
-    saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);
-    saddr[15] = (__u8)(saddr4 & 0xFF);
+    // Copy bytes directly from network-order __u32
+    // saddr4 = [byte0][byte1][byte2][byte3] in big-endian
+    saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);  // byte0 (MSB)
+    saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);  // byte1
+    saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);   // byte2
+    saddr[15] = (__u8)(saddr4 & 0xFF);          // byte3 (LSB)
 
     daddr[12] = (__u8)((daddr4 >> 24) & 0xFF);
     daddr[13] = (__u8)((daddr4 >> 16) & 0xFF);
@@ -173,9 +144,13 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
     key->protocol = IPPROTO_TCP;
 }
 
-/* Trace tcp_connect - outgoing connection initiation (SYN sent)
- * Socket family is already set at this point (socket() called before connect())
- */
+/* -------------------------------------------------------------------------
+ * kprobe/tcp_connect — outgoing connections (fallback for kernels < 5.14).
+ *
+ * This is used when tracepoint/sock/inet_sock_set_state is not available.
+ * Note: Some kernels (e.g., Ubuntu 22.04 with 5.15) may block kprobe/tcp_connect
+ * for userspace processes due to security restrictions.
+ * ---------------------------------------------------------------------- */
 SEC("kprobe/tcp_connect")
 int BPF_KPROBE(tcp_connect, struct sock *sk)
 {
@@ -186,8 +161,6 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
     if (family != AF_INET)
         return 0;
-
-    bpf_printk("conntrack: tcp_connect called, family=%d", family);
 
     struct connection_event evt = {};
     struct connection_key key = {};
@@ -201,27 +174,17 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     evt.event_type = CONN_EVENT_NEW;
     evt.tcp_flags = TCP_SYN;
 
-    // Get process name once
     bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
 
-    // Create key and extract connection info
     make_key_from_sock(sk, &key);
 
-    bpf_printk("conntrack: key extracted, src_ip[15]=%d, dst_ip[15]=%d", 
-               key.src_ip[15], key.dst_ip[15]);
-
-    /* Filter out invalid connections (qemu-ga, etc.)
-     * Both src and dst being 0.0.0.0 indicates invalid/internal connection
-     */
+    /* Filter out invalid connections (qemu-ga, etc.) */
     __u32 src_ip4 = ((__u32)key.src_ip[12] << 24) | ((__u32)key.src_ip[13] << 16) |
                     ((__u32)key.src_ip[14] << 8) | (__u32)key.src_ip[15];
     __u32 dst_ip4 = ((__u32)key.dst_ip[12] << 24) | ((__u32)key.dst_ip[13] << 16) |
                     ((__u32)key.dst_ip[14] << 8) | (__u32)key.dst_ip[15];
-    
-    bpf_printk("conntrack: src_ip4=%u, dst_ip4=%u", src_ip4, dst_ip4);
-    
+
     if (src_ip4 == 0 && dst_ip4 == 0) {
-        bpf_printk("conntrack: filtering out (both IPs zero)");
         return 0;
     }
 
@@ -231,7 +194,6 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     evt.dst_port = key.dst_port;
     evt.protocol = key.protocol;
 
-    // Store in connections map
     struct connection_entry entry = {};
     entry.timestamp_ns = evt.timestamp_ns;
     entry.pid = evt.pid;
@@ -241,29 +203,19 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
     __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
 
     bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
-
-    bpf_printk("conntrack: submitting event");
     submit_event(&evt);
     return 0;
 }
 
 /* -------------------------------------------------------------------------
- * tracepoint/sock/inet_sock_set_state — fallback for outgoing connections.
- *
- * Enable by defining USE_SOCK_SET_STATE_FALLBACK at build time:
- *   make fallback
- *
- * Use when kprobe/tcp_connect does not fire (verify with bpftool prog show,
- * check run_cnt after curl). This tracepoint is stable on kernels 5.14+.
+ * tracepoint/sock/inet_sock_set_state — outgoing connections (PRIMARY for 5.14+).
  *
  * Catches the TCP_SYN_SENT state transition which is equivalent to the
  * moment tcp_connect() is called. PID context is correct here because
  * the transition happens synchronously in the calling process.
  * ---------------------------------------------------------------------- */
-#ifdef USE_SOCK_SET_STATE_FALLBACK
-
 SEC("tracepoint/sock/inet_sock_set_state")
-int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
+int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
 {
     if (!track_outgoing)
         return 0;
@@ -276,7 +228,7 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     if (BPF_CORE_READ(ctx, family) != AF_INET)
         return 0;
 
-    bpf_printk("conntrack: tracepoint fired, protocol=%d, newstate=%d", 
+    bpf_printk("conntrack: tracepoint fired, protocol=%d, newstate=%d",
                BPF_CORE_READ(ctx, protocol), BPF_CORE_READ(ctx, newstate));
 
     struct connection_event evt = {};
@@ -295,6 +247,7 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     /* ctx->saddr / ctx->daddr are __u8[4] in network byte order (big-endian)
      * Reconstruct __u32 from bytes: byte[0] is MSB, byte[3] is LSB
      * Use bpf_core_read() to correctly access array elements
+     * NO byte swap needed - we copy bytes directly to IPv4-mapped format
      */
     __u8 saddr_bytes[4], daddr_bytes[4];
     if (bpf_core_read(&saddr_bytes, sizeof(saddr_bytes), &ctx->saddr) != 0)
@@ -302,37 +255,34 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     if (bpf_core_read(&daddr_bytes, sizeof(daddr_bytes), &ctx->daddr) != 0)
         return 0;
 
-    __u32 saddr4 = ((__u32)saddr_bytes[0] << 24) | ((__u32)saddr_bytes[1] << 16) |
-                   ((__u32)saddr_bytes[2] << 8) | (__u32)saddr_bytes[3];
-    __u32 daddr4 = ((__u32)daddr_bytes[0] << 24) | ((__u32)daddr_bytes[1] << 16) |
-                   ((__u32)daddr_bytes[2] << 8) | (__u32)daddr_bytes[3];
-
-    /* Convert from network byte order to host byte order */
-    saddr4 = bpf_ntohl(saddr4);
-    daddr4 = bpf_ntohl(daddr4);
-
-    bpf_printk("conntrack: saddr4=%u, daddr4=%u, sport=%d, dport=%d",
-               saddr4, daddr4, ctx->sport, ctx->dport);
+    bpf_printk("conntrack: tracepoint fired, sport=%d, dport=%d",
+               (__u32)ctx->sport, (__u32)ctx->dport);
 
     __builtin_memset(evt.src_ip, 0, 16);
     __builtin_memset(evt.dst_ip, 0, 16);
     evt.src_ip[10] = 0xff; evt.src_ip[11] = 0xff;
     evt.dst_ip[10] = 0xff; evt.dst_ip[11] = 0xff;
 
-    evt.src_ip[12] = (__u8)((saddr4 >> 24) & 0xFF);
-    evt.src_ip[13] = (__u8)((saddr4 >> 16) & 0xFF);
-    evt.src_ip[14] = (__u8)((saddr4 >>  8) & 0xFF);
-    evt.src_ip[15] = (__u8)( saddr4        & 0xFF);
+    /* Copy bytes directly - network order preserved */
+    evt.src_ip[12] = saddr_bytes[0];
+    evt.src_ip[13] = saddr_bytes[1];
+    evt.src_ip[14] = saddr_bytes[2];
+    evt.src_ip[15] = saddr_bytes[3];
 
-    evt.dst_ip[12] = (__u8)((daddr4 >> 24) & 0xFF);
-    evt.dst_ip[13] = (__u8)((daddr4 >> 16) & 0xFF);
-    evt.dst_ip[14] = (__u8)((daddr4 >>  8) & 0xFF);
-    evt.dst_ip[15] = (__u8)( daddr4        & 0xFF);
+    evt.dst_ip[12] = daddr_bytes[0];
+    evt.dst_ip[13] = daddr_bytes[1];
+    evt.dst_ip[14] = daddr_bytes[2];
+    evt.dst_ip[15] = daddr_bytes[3];
 
     evt.src_port = ctx->sport;
     evt.dst_port = ctx->dport;
 
     /* Filter out invalid connections (qemu-ga, etc.) */
+    __u32 saddr4 = ((__u32)saddr_bytes[0] << 24) | ((__u32)saddr_bytes[1] << 16) |
+                   ((__u32)saddr_bytes[2] << 8) | (__u32)saddr_bytes[3];
+    __u32 daddr4 = ((__u32)daddr_bytes[0] << 24) | ((__u32)daddr_bytes[1] << 16) |
+                   ((__u32)daddr_bytes[2] << 8) | (__u32)daddr_bytes[3];
+
     if (saddr4 == 0 && daddr4 == 0) {
         bpf_printk("conntrack: filtering out (both IPs zero)");
         return 0;
@@ -358,7 +308,6 @@ int trace_outgoing_fallback(struct trace_event_raw_inet_sock_set_state *ctx)
     submit_event(&evt);
     return 0;
 }
-#endif /* USE_SOCK_SET_STATE_FALLBACK */
 
 /* -------------------------------------------------------------------------
  * kretprobe/inet_csk_accept — incoming connections.
