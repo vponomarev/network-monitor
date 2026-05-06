@@ -1,81 +1,44 @@
-# Network Monitor Configuration Example
-# Copy to config.yaml and customize
+# Connection Tracker (conntrack) configuration file
+# This is a sample configuration for eBPF-based connection tracking
 
-global:
-  ttl_hours: 3
-  metrics_port: 9876
-  trace_pipe_path: /sys/kernel/tracing/trace_pipe
-
-metadata:
-  locations:
-    type: file
-    path: locations.yaml
-    
-  roles:
-    type: file
-    path: roles.yaml
-
-discovery:
-  traceroute:
-    enabled: true
-    top_n: 10
-    mode: both  # both | top_loss | on_demand | periodic
-    interval: 5m
-    # Traceroute-specific settings
-    protocol: icmp        # icmp | udp | tcp
-    max_hops: 30          # Maximum TTL
-    timeout: 3s           # Per-probe timeout
-    probes_per_hop: 3     # Probes per TTL value
-    start_ttl: 1          # Starting TTL
-    dst_port: 33434       # Destination port for UDP/TCP traceroute
-    src_port: 0           # Source port (0 = auto) for TCP traceroute
-    tcp_flags: S          # TCP flags: S=SYN, A=ACK, F=FIN, R=RST (for TCP traceroute)
-
-topology:
-  enabled: false          # Enable topology enrichment
-  path: topology.yaml     # Path to topology YAML file
-
-metrics:
-  name: netmon_tcp_loss_total
-  default_labels:
-    - src_ip
-    - dst_ip
-    - src_location
-    - dst_location
-    - src_role
-    - dst_role
-  optional_labels:
-    - src_network
-    - dst_network
-    - path_id
-
+# Logging configuration
 logging:
+  # Log level: debug, info, warn, error
   level: info
-  format: json
+  # Log format: json, console
+  format: console
 
-# Optional monitoring modules (disabled by default)
-# Uncomment and configure to enable
+# Connection tracking configuration
+connections:
+  # Track incoming connections (accepted sockets)
+  track_incoming: true
+  
+  # Track outgoing connections (connect() calls)
+  track_outgoing: true
+  
+  # Track connection closes (TCP close events)
+  track_closes: true
+  
+  # Optional: filter by ports (empty = track all ports)
+  # filter_ports:
+  #   - 22    # SSH
+  #   - 80    # HTTP
+  #   - 443   # HTTPS
 
-# Bandwidth monitoring - tracks network interface throughput
-#bandwidth:
-#  enabled: true
-#  interfaces:
-#    - eth0
-#    - eth1
-#  interval: 10s
+# Syslog configuration (optional)
+# If not specified, logs go to stdout/stderr
+# syslog:
+#   # Network type: empty (local), udp, tcp
+#   network: udp
+#   # Remote syslog address (e.g., localhost:514)
+#   address: localhost:514
+#   # Tag/program name for syslog messages
+#   tag: conntrack
+#   # Syslog facility: LOCAL0-7, USER, DAEMON
+#   facility: LOCAL0
+#   # Include hostname in messages
+#   include_hostname: true
 
-# Latency monitoring - measures RTT to targets via UDP
-#latency:
-#  enabled: true
-#  targets:
-#    - 8.8.8.8
-#    - 1.1.1.1
-#  interval: 30s
-#  timeout: 500ms
-
-# DNS monitoring - tests DNS resolution performance
-#dns:
-#  enabled: true
-#  interfaces: []  # empty = use system resolver
-#  port: 53
-#  interval: 1m
+# SYN timeout configuration
+# Timeout for waiting SYN+ACK response on outgoing connections
+syn_timeout: 30s
