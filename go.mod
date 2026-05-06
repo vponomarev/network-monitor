@@ -3,11 +3,11 @@ module github.com/vponomarev/network-monitor
 go 1.21.0
 
 require (
-	github.com/cilium/ebpf v0.15.0
-	github.com/prometheus/client_golang v1.18.0
-	github.com/spf13/cobra v1.10.2
-	github.com/stretchr/testify v1.10.0
-	go.uber.org/zap v1.26.0
+	github.com/cilium/ebpf v0.12.3
+	github.com/prometheus/client_golang v1.17.0
+	github.com/spf13/cobra v1.6.1
+	github.com/stretchr/testify v1.8.1
+	go.uber.org/zap v1.24.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -22,6 +22,7 @@ require (
 	github.com/prometheus/common v0.45.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
 	golang.org/x/sys v0.20.0 // indirect
