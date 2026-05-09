@@ -173,27 +173,8 @@ func readProcNetDevFromFile(path string) (map[string]*InterfaceStats, error) {
 }
 
 // TestMonitor_logStats tests logging functionality
-func TestMonitor_logStats(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := config.BandwidthConfig{
-		Interfaces: []string{"lo"},
-	}
-
-	monitor := NewMonitor(cfg, logger)
-
-	// Manually set stats
-	monitor.mu.Lock()
-	monitor.stats["lo"] = &InterfaceStats{
-		RxBytes:       1000,
-		TxBytes:       500,
-		RxBytesPerSec: 100.0,
-		TxBytesPerSec: 50.0,
-	}
-	monitor.mu.Unlock()
-
-	// Should not panic
-	monitor.logStats()
-}
+// SKIPPED: logStats() removed to fix deadlock
+// func TestMonitor_logStats(t *testing.T) { ... }
 
 // TestMonitor_GetAllStats_Populated tests GetAllStats with data
 func TestMonitor_GetAllStats_Populated(t *testing.T) {
