@@ -4,7 +4,6 @@
 package packetloss
 
 import (
-	"context"
 	"regexp"
 	"testing"
 	"time"
