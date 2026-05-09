@@ -211,10 +211,19 @@ func TestMonitor_Run_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	// This will fail to open trace_pipe without root, but should handle context cancellation
-	err := monitor.Run(ctx)
-	// Error is expected if not running as root
+	// Use a mock trace pipe file instead of real one
+	tmpfile, err := os.CreateTemp("", "trace_pipe_test_*")
 	if err != nil {
-		assert.Contains(t, err.Error(), "requires root")
+		t.Skip("Cannot create temp file")
 	}
+	defer os.Remove(tmpfile.Name())
+
+	// Override trace pipe path
+	oldPath := TracePipePath
+	TracePipePath = tmpfile.Name()
+	defer func() { TracePipePath = oldPath }()
+
+	// Run should exit on context cancellation
+	err = monitor.Run(ctx)
+	assert.Error(t, err) // Context cancelled
 }

@@ -232,7 +232,7 @@ func TestMonitor_Events_Error(t *testing.T) {
 	// The channel is used internally to send errors
 	select {
 	case _, ok := <-events:
-		// Channel is readable (ok=false means closed)
+		_ = ok // Channel is readable (ok=false means closed)
 	default:
 		// Channel is empty, which is expected
 	}

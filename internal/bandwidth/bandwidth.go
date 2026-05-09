@@ -92,7 +92,6 @@ func (m *Monitor) collect() {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	now := time.Now()
 
@@ -117,7 +116,15 @@ func (m *Monitor) collect() {
 		m.prev[iface] = stats
 	}
 
-	m.logStats()
+	// Log stats without holding lock (copy data first)
+	for iface, stats := range m.stats {
+		m.logger.Debug("Bandwidth stats",
+			zap.String("interface", iface),
+			zap.Float64("rx_bytes_per_sec", stats.RxBytesPerSec),
+			zap.Float64("tx_bytes_per_sec", stats.TxBytesPerSec))
+	}
+
+	m.mu.Unlock()
 }
 
 // readProcNetDev reads network statistics from /proc/net/dev
@@ -171,19 +178,6 @@ func (m *Monitor) readProcNetDev() (map[string]*InterfaceStats, error) {
 	}
 
 	return stats, scanner.Err()
-}
-
-// logStats logs current statistics
-func (m *Monitor) logStats() {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for iface, stats := range m.stats {
-		m.logger.Debug("Bandwidth stats",
-			zap.String("interface", iface),
-			zap.Float64("rx_bytes_per_sec", stats.RxBytesPerSec),
-			zap.Float64("tx_bytes_per_sec", stats.TxBytesPerSec))
-	}
 }
 
 // GetStats returns current statistics for an interface

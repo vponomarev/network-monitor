@@ -51,12 +51,25 @@ type interfaceStats struct {
 
 // NewMonitor creates a new packet loss monitor
 func NewMonitor(cfg config.PacketLossConfig, logger *zap.Logger) *Monitor {
-	return &Monitor{
+	m := &Monitor{
 		config: cfg,
 		logger: logger.Named("packetloss"),
 		stats:  make(map[string]*interfaceStats),
 		events: make(chan events.Event, 100),
 	}
+
+	// Initialize stats for each interface (for testing without Run())
+	for _, iface := range cfg.Interfaces {
+		m.stats[iface] = &interfaceStats{
+			totalPackets:  0,
+			lostPackets:   0,
+			windowPackets: make([]bool, cfg.WindowSize),
+			windowIndex:   0,
+			lastAlert:     time.Time{},
+		}
+	}
+
+	return m
 }
 
 // Run starts the packet loss monitoring
@@ -64,15 +77,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 	m.logger.Info("Starting packet loss monitor",
 		zap.Strings("interfaces", m.config.Interfaces))
 
-	// Initialize stats for each interface
-	m.mu.Lock()
-	for _, iface := range m.config.Interfaces {
-		m.stats[iface] = &interfaceStats{
-			windowPackets: make([]bool, m.config.WindowSize),
-		}
-	}
-	m.mu.Unlock()
-
+	// Stats already initialized in NewMonitor
 	// Start trace pipe reader
 	return m.readTracePipe(ctx)
 }
