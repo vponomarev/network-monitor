@@ -122,15 +122,7 @@ func TestMonitor_readProcNetDev_MalformedLines(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	// Create monitor with custom proc path
-	logger := zap.NewNop()
-	cfg := config.BandwidthConfig{
-		Interfaces: []string{"eth0", "eth1", "lo"},
-	}
-
-	monitor := NewMonitor(cfg, logger)
-	
-	// Use reflection or create a test helper to read from custom path
+	// Use test helper to read from custom file
 	stats, err := readProcNetDevFromFile(tmpfile.Name())
 
 	require.NoError(t, err)
