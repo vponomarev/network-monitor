@@ -151,7 +151,11 @@ func run(cmd *cobra.Command, args []string) error {
 	// Create tracker config
 	ebpfPath := ebpfProgram
 	if ebpfPath == "" {
-		ebpfPath = conntrack.DefaultEBPFProgramPath
+		// Only use default path if embedded eBPF is available
+		if embedded.HasEmbeddedEBPF() {
+			ebpfPath = conntrack.DefaultEBPFProgramPath
+		}
+		// Otherwise, leave empty to trigger simulation mode
 	}
 
 	trackerCfg := conntrack.Config{
