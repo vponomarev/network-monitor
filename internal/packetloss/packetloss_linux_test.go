@@ -180,7 +180,7 @@ func Test_parsePacketCount(t *testing.T) {
 	}{
 		{"packets: 1234", 1234, false},
 		{"pkt=5678", 5678, false},
-		{"pkt: 999", 999, false},
+		{"packets 999", 999, false},
 		{"no count here", 0, true},
 	}
 
