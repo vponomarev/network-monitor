@@ -199,19 +199,7 @@ func Test_parsePacketCount(t *testing.T) {
 }
 
 func TestMonitor_Run_ContextCancellation(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := config.PacketLossConfig{
-		Interfaces:    []string{"lo"},
-		WindowSize:    100,
-		AlertInterval: "1s",
-	}
-
-	monitor := NewMonitor(cfg, logger)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	// Run with mock file - will fail but test context cancellation
-	// Note: We can't easily override TracePipePath (constant), so skip this test
+	// Note: This test requires overriding TracePipePath constant which is not possible.
+	// The test is skipped.
 	t.Skip("Test requires overriding TracePipePath constant")
 }
