@@ -6,7 +6,6 @@ package integration
 import (
 	"context"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -17,13 +16,6 @@ import (
 	"github.com/vponomarev/network-monitor/internal/latency"
 	"go.uber.org/zap"
 )
-
-// skipIfNotRoot skips the test if not running as root
-func skipIfNotRoot(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("Integration tests require root privileges")
-	}
-}
 
 // TestBandwidth_Integration tests bandwidth monitoring with real interfaces
 func TestBandwidth_Integration(t *testing.T) {
@@ -62,7 +54,7 @@ func TestBandwidth_Integration(t *testing.T) {
 // TestLatency_Integration tests latency monitoring with real targets
 func TestLatency_Integration(t *testing.T) {
 	skipIfNotRoot(t)
-	
+
 	logger := zap.NewNop()
 	cfg := config.LatencyConfig{
 		Targets:  []string{"127.0.0.1"},

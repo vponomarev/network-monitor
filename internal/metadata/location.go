@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -14,18 +15,21 @@ import (
 type LocationMatcher struct {
 	mu       sync.RWMutex
 	networks []netWithLocation
+	logger   *zap.Logger
 }
 
 type netWithLocation struct {
 	network  *net.IPNet
 	location string
 	hostname string
+	vrf      string
 }
 
 type LocationEntry struct {
 	Network  string `yaml:"network"`
 	Location string `yaml:"location"`
 	Hostname string `yaml:"hostname,omitempty"`
+	Vrf      string `yaml:"vrf,omitempty"`
 }
 
 type LocationsFile struct {
@@ -33,9 +37,10 @@ type LocationsFile struct {
 }
 
 // NewLocationMatcher creates a new location matcher and loads from file
-func NewLocationMatcher(path string) (*LocationMatcher, error) {
+func NewLocationMatcher(path string, logger *zap.Logger) (*LocationMatcher, error) {
 	m := &LocationMatcher{
 		networks: make([]netWithLocation, 0),
+		logger:   logger.Named("location_matcher"),
 	}
 
 	if err := m.Load(path); err != nil {
@@ -46,9 +51,10 @@ func NewLocationMatcher(path string) (*LocationMatcher, error) {
 }
 
 // NewEmptyLocationMatcher creates an empty matcher
-func NewEmptyLocationMatcher() *LocationMatcher {
+func NewEmptyLocationMatcher(logger *zap.Logger) *LocationMatcher {
 	return &LocationMatcher{
 		networks: make([]netWithLocation, 0),
+		logger:   logger.Named("location_matcher"),
 	}
 }
 
@@ -75,6 +81,7 @@ func (m *LocationMatcher) Load(path string) error {
 			network:  network,
 			location: entry.Location,
 			hostname: entry.Hostname,
+			vrf:      entry.Vrf,
 		})
 	}
 
@@ -88,6 +95,20 @@ func (m *LocationMatcher) Load(path string) error {
 	m.mu.Lock()
 	m.networks = networks
 	m.mu.Unlock()
+
+	// Log loaded networks
+	m.logger.Info("Locations loaded",
+		zap.Int("count", len(networks)),
+		zap.String("path", path))
+
+	// Log each network at debug level
+	for i, nwl := range networks {
+		m.logger.Debug("Loaded network",
+			zap.Int("index", i),
+			zap.String("network", nwl.network.String()),
+			zap.String("location", nwl.location),
+			zap.String("vrf", nwl.vrf))
+	}
 
 	return nil
 }
@@ -107,10 +128,29 @@ func (m *LocationMatcher) GetLocation(ip string) string {
 		return "unknown"
 	}
 
+	// Debug logging for each lookup (only in debug mode)
+	if m.logger != nil && m.logger.Core().Enabled(zap.DebugLevel) {
+		m.logger.Debug("Looking up IP",
+			zap.String("ip", ip),
+			zap.Int("networks_count", len(m.networks)))
+	}
+
 	for _, nwl := range m.networks {
 		if nwl.network.Contains(parsedIP) {
+			if m.logger != nil && m.logger.Core().Enabled(zap.DebugLevel) {
+				m.logger.Debug("IP matched",
+					zap.String("ip", ip),
+					zap.String("network", nwl.network.String()),
+					zap.String("location", nwl.location))
+			}
 			return nwl.location
 		}
+	}
+
+	// No match found - log at debug level
+	if m.logger != nil && m.logger.Core().Enabled(zap.DebugLevel) {
+		m.logger.Debug("IP not matched to any network",
+			zap.String("ip", ip))
 	}
 
 	return "unknown"
@@ -136,6 +176,28 @@ func (m *LocationMatcher) GetHostname(ip string) string {
 	}
 
 	return ""
+}
+
+// GetVrf returns the VRF for an IP, or "unknown" if not found
+func (m *LocationMatcher) GetVrf(ip string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return "unknown"
+	}
+
+	for _, nwl := range m.networks {
+		if nwl.network.Contains(parsedIP) {
+			if nwl.vrf != "" {
+				return nwl.vrf
+			}
+			return "unknown"
+		}
+	}
+
+	return "unknown"
 }
 
 // Count returns the number of loaded networks

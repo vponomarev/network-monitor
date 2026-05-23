@@ -10,12 +10,13 @@ type MetricsCollector struct {
 	logger *zap.Logger
 
 	// Connection state metrics
-	connectionsTotal    *prometheus.GaugeVec
-	eventsTotal         *prometheus.CounterVec
-	handshakeSeconds    *prometheus.HistogramVec
-	connectionDuration  *prometheus.HistogramVec
-	bytesTransferred    *prometheus.CounterVec
-	bytesPerConnection  *prometheus.HistogramVec
+	connectionsTotal   *prometheus.GaugeVec
+	eventsTotal        *prometheus.CounterVec
+	handshakeSeconds   *prometheus.HistogramVec
+	connectionDuration *prometheus.HistogramVec
+	bytesTransferred   *prometheus.CounterVec
+	bytesPerConnection *prometheus.HistogramVec
+	droppedEventsTotal prometheus.Gauge
 }
 
 // NewMetricsCollector creates a new metrics collector
@@ -81,6 +82,14 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 		[]string{"direction"},
 	)
 
+	// Dropped events gauge (absolute count)
+	mc.droppedEventsTotal = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "conntrack_dropped_events_total",
+			Help: "Total number of dropped connection events (buffer overflow)",
+		},
+	)
+
 	// Register metrics
 	prometheus.MustRegister(mc.connectionsTotal)
 	prometheus.MustRegister(mc.eventsTotal)
@@ -88,6 +97,7 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 	prometheus.MustRegister(mc.connectionDuration)
 	prometheus.MustRegister(mc.bytesTransferred)
 	prometheus.MustRegister(mc.bytesPerConnection)
+	prometheus.MustRegister(mc.droppedEventsTotal)
 
 	return mc
 }
@@ -117,7 +127,7 @@ func (mc *MetricsCollector) OnConnectionEvent(conn *Connection, event Connection
 	// Track connection duration and bytes for closed connections
 	if event == EventClosed || event == EventFailed || event == EventRejected {
 		mc.connectionDuration.WithLabelValues(direction).Observe(conn.Duration().Seconds())
-		
+
 		totalBytes := conn.BytesSent + conn.BytesRecv
 		if totalBytes > 0 {
 			mc.bytesPerConnection.WithLabelValues(direction).Observe(float64(totalBytes))
@@ -132,6 +142,11 @@ func (mc *MetricsCollector) UpdateStateMetrics(stats Stats) {
 	mc.connectionsTotal.WithLabelValues("established", "").Set(float64(stats.Established))
 }
 
+// UpdateDroppedMetrics updates the dropped events metric
+func (mc *MetricsCollector) UpdateDroppedMetrics(dropped uint64) {
+	mc.droppedEventsTotal.Set(float64(dropped))
+}
+
 // Stop unregisters metrics
 func (mc *MetricsCollector) Stop() {
 	prometheus.Unregister(mc.connectionsTotal)
@@ -140,4 +155,5 @@ func (mc *MetricsCollector) Stop() {
 	prometheus.Unregister(mc.connectionDuration)
 	prometheus.Unregister(mc.bytesTransferred)
 	prometheus.Unregister(mc.bytesPerConnection)
+	prometheus.Unregister(mc.droppedEventsTotal)
 }

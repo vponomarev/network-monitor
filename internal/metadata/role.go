@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -14,6 +15,7 @@ import (
 type RoleMatcher struct {
 	mu       sync.RWMutex
 	networks []netWithRole
+	logger   *zap.Logger
 }
 
 type netWithRole struct {
@@ -31,9 +33,10 @@ type RolesFile struct {
 }
 
 // NewRoleMatcher creates a new role matcher and loads from file
-func NewRoleMatcher(path string) (*RoleMatcher, error) {
+func NewRoleMatcher(path string, logger *zap.Logger) (*RoleMatcher, error) {
 	m := &RoleMatcher{
 		networks: make([]netWithRole, 0),
+		logger:   logger.Named("role_matcher"),
 	}
 
 	if err := m.Load(path); err != nil {
@@ -44,9 +47,10 @@ func NewRoleMatcher(path string) (*RoleMatcher, error) {
 }
 
 // NewEmptyRoleMatcher creates an empty matcher
-func NewEmptyRoleMatcher() *RoleMatcher {
+func NewEmptyRoleMatcher(logger *zap.Logger) *RoleMatcher {
 	return &RoleMatcher{
 		networks: make([]netWithRole, 0),
+		logger:   logger.Named("role_matcher"),
 	}
 }
 
@@ -85,6 +89,19 @@ func (m *RoleMatcher) Load(path string) error {
 	m.mu.Lock()
 	m.networks = networks
 	m.mu.Unlock()
+
+	// Log loaded networks
+	m.logger.Info("Roles loaded",
+		zap.Int("count", len(networks)),
+		zap.String("path", path))
+
+	// Log each network at debug level
+	for i, nwr := range networks {
+		m.logger.Debug("Loaded network",
+			zap.Int("index", i),
+			zap.String("network", nwr.network.String()),
+			zap.String("role", nwr.role))
+	}
 
 	return nil
 }

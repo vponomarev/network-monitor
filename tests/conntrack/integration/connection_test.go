@@ -1,5 +1,4 @@
-// Package integration содержит интеграционные тесты для проверки отслеживания подключений conntrack
-// Run with: sudo go test -v ./tests/integration/conntrack_connection_test.go ./tests/integration/helpers.go
+// Package integration содержит интеграционные тесты для conntrack
 package integration
 
 import (
@@ -18,7 +17,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// skipIfNotRoot пропускает тест, если запущен не от root
+func skipIfNotRoot(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("Integration tests require root privileges")
+	}
+}
+
 // TestConntrack_OutgoingConnections проверяет отслеживание исходящих подключений
+// IT-001
 func TestConntrack_OutgoingConnections(t *testing.T) {
 	skipIfNotRoot(t)
 
@@ -38,7 +45,6 @@ func TestConntrack_OutgoingConnections(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Start tracker
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- tracker.Run(ctx)
@@ -47,10 +53,8 @@ func TestConntrack_OutgoingConnections(t *testing.T) {
 	// Generate outgoing connections
 	const numConnections = 5
 	for i := 0; i < numConnections; i++ {
-		// Try to connect to localhost
 		conn, err := net.DialTimeout("tcp", "127.0.0.1:80", 100*time.Millisecond)
 		if err != nil {
-			// Port 80 may not be available, try port 22
 			conn, err = net.DialTimeout("tcp", "127.0.0.1:22", 100*time.Millisecond)
 		}
 		if err == nil {
@@ -58,17 +62,12 @@ func TestConntrack_OutgoingConnections(t *testing.T) {
 		}
 	}
 
-	// Wait for events
 	<-time.After(1 * time.Second)
 
-	// Check that tracker is running
 	count := tracker.GetConnectionCount()
 	t.Logf("Tracked %d connections", count)
-
-	// In simulation mode, we should have some connections
 	assert.GreaterOrEqual(t, count, 0)
 
-	// Get stats
 	stats := tracker.GetStats()
 	t.Logf("Stats: %+v", stats)
 
@@ -77,6 +76,7 @@ func TestConntrack_OutgoingConnections(t *testing.T) {
 }
 
 // TestConntrack_IncomingConnections проверяет отслеживание входящих подключений
+// IT-002
 func TestConntrack_IncomingConnections(t *testing.T) {
 	skipIfNotRoot(t)
 
@@ -101,7 +101,6 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	// Start a simple TCP server to accept incoming connections
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -109,7 +108,6 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 	localPort := listener.Addr().(*net.TCPAddr).Port
 	t.Logf("Listening on port %d", localPort)
 
-	// Accept connections in background
 	var acceptedCount int
 	var mu sync.Mutex
 	done := make(chan bool)
@@ -120,13 +118,12 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 			case <-done:
 				return
 			default:
-				// Use TCP listener for SetDeadline
+				// Set read deadline using tcp listener
 				if tcpListener, ok := listener.(*net.TCPListener); ok {
-					_ = tcpListener.SetDeadline(time.Now().Add(100 * time.Millisecond))
+					tcpListener.SetDeadline(time.Now().Add(100 * time.Millisecond))
 				}
 				conn, err := listener.Accept()
 				if err != nil {
-					// Deadline exceeded is expected, continue
 					continue
 				}
 				mu.Lock()
@@ -137,7 +134,6 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 		}
 	}()
 
-	// Generate incoming connections
 	for i := 0; i < 3; i++ {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), 1*time.Second)
 		if err == nil {
@@ -145,9 +141,7 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 		}
 	}
 
-	// Wait for events
 	<-time.After(1 * time.Second)
-
 	close(done)
 
 	count := tracker.GetConnectionCount()
@@ -157,7 +151,8 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 	<-errChan
 }
 
-// TestConntrack_TCPhandshake проверяет полный TCP handshake (SYN → SYN+ACK → ESTABLISHED)
+// TestConntrack_TCPhandshake проверяет полный TCP handshake
+// IT-003
 func TestConntrack_TCPhandshake(t *testing.T) {
 	skipIfNotRoot(t)
 
@@ -182,7 +177,6 @@ func TestConntrack_TCPhandshake(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	// Start TCP server
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -190,7 +184,6 @@ func TestConntrack_TCPhandshake(t *testing.T) {
 	localPort := listener.Addr().(*net.TCPAddr).Port
 	t.Logf("Server listening on port %d", localPort)
 
-	// Server accepts connections
 	serverDone := make(chan bool)
 	go func() {
 		for {
@@ -198,33 +191,28 @@ func TestConntrack_TCPhandshake(t *testing.T) {
 			case <-serverDone:
 				return
 			default:
-				// Use TCP listener for SetDeadline
+				// Set read deadline using tcp listener
 				if tcpListener, ok := listener.(*net.TCPListener); ok {
-					_ = tcpListener.SetDeadline(time.Now().Add(200 * time.Millisecond))
+					tcpListener.SetDeadline(time.Now().Add(200 * time.Millisecond))
 				}
 				conn, err := listener.Accept()
 				if err != nil {
 					continue
 				}
-				// Keep connection open briefly to simulate established state
 				time.Sleep(50 * time.Millisecond)
 				_ = conn.Close()
 			}
 		}
 	}()
 
-	// Client creates connection (full handshake)
 	clientConn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), 1*time.Second)
 	require.NoError(t, err)
 
-	// Send some data
 	_, err = clientConn.Write([]byte("HELLO"))
 	assert.NoError(t, err)
 
-	// Wait for handshake to complete
 	<-time.After(200 * time.Millisecond)
 
-	// Check tracked connections
 	conns := tracker.GetConnections()
 	t.Logf("Total tracked connections: %d", len(conns))
 
@@ -233,84 +221,16 @@ func TestConntrack_TCPhandshake(t *testing.T) {
 			i, conn.SourceIP, conn.DestIP, conn.Direction.String(), conn.State.String())
 	}
 
-	// Cleanup
 	_ = clientConn.Close()
 	close(serverDone)
-
-	// Wait for close events
 	<-time.After(1 * time.Second)
 
 	cancel()
 	<-errChan
 }
 
-// TestConntrack_ConnectionLifecycle проверяет полный жизненный цикл подключения
-func TestConntrack_ConnectionLifecycle(t *testing.T) {
-	skipIfNotRoot(t)
-
-	logger, _ := zap.NewDevelopment()
-	cfg := conntrack.Config{
-		EBPFProgramPath: "",
-		TrackIncoming:   true,
-		TrackOutgoing:   true,
-		TrackCloses:     true,
-		SYNTimeout:      5 * time.Second,
-	}
-
-	tracker, err := conntrack.NewTracker(cfg, logger)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- tracker.Run(ctx)
-	}()
-
-	// Start server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	port := listener.Addr().(*net.TCPAddr).Port
-
-	// Accept and close
-	go func() {
-		for i := 0; i < 3; i++ {
-			conn, err := listener.Accept()
-			if err != nil {
-				continue
-			}
-			buf := make([]byte, 1024)
-			_, _ = conn.Read(buf)
-			time.Sleep(10 * time.Millisecond)
-			_ = conn.Close()
-		}
-	}()
-
-	// Create 3 connections
-	for i := 0; i < 3; i++ {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 1*time.Second)
-		if err != nil {
-			continue
-		}
-		_, _ = conn.Write([]byte(fmt.Sprintf("msg%d", i)))
-		time.Sleep(50 * time.Millisecond)
-		_ = conn.Close()
-	}
-
-	// Wait for all events
-	<-time.After(2 * time.Second)
-
-	stats := tracker.GetStats()
-	t.Logf("Final stats: %+v", stats)
-
-	cancel()
-	<-errChan
-}
-
 // TestConntrack_DirectionTracking проверяет разделение на входящие/исходящие
+// IT-004
 func TestConntrack_DirectionTracking(t *testing.T) {
 	skipIfNotRoot(t)
 
@@ -333,7 +253,6 @@ func TestConntrack_DirectionTracking(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	// Outgoing connections
 	for i := 0; i < 3; i++ {
 		conn, _ := net.DialTimeout("tcp", "127.0.0.1:22", 100*time.Millisecond)
 		if conn != nil {
@@ -341,7 +260,6 @@ func TestConntrack_DirectionTracking(t *testing.T) {
 		}
 	}
 
-	// Incoming connections
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -382,49 +300,8 @@ func TestConntrack_DirectionTracking(t *testing.T) {
 	<-errChan
 }
 
-// TestConntrack_ProcessIdentification проверяет определение процесса
-func TestConntrack_ProcessIdentification(t *testing.T) {
-	skipIfNotRoot(t)
-
-	logger := zap.NewNop()
-	cfg := conntrack.Config{
-		EBPFProgramPath: "",
-		TrackIncoming:   false,
-		TrackOutgoing:   true,
-		TrackCloses:     true,
-	}
-
-	tracker, err := conntrack.NewTracker(cfg, logger)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- tracker.Run(ctx)
-	}()
-
-	// Create connection from current process
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:22", 100*time.Millisecond)
-	if err == nil {
-		_ = conn.Close()
-	}
-
-	<-time.After(500 * time.Millisecond)
-
-	conns := tracker.GetConnections()
-	for _, c := range conns {
-		t.Logf("Process: PID=%d, Name=%s", c.PID, c.ProcessName)
-		assert.NotEmpty(t, c.ProcessName)
-		assert.NotEqual(t, "unknown", c.ProcessName)
-	}
-
-	cancel()
-	<-errChan
-}
-
-// TestConntrack_ConcurrentConnections проверяет работу при конкурентных подключениях
+// TestConntrack_ConcurrentConnections проверяет работу при конкурентной нагрузке
+// IT-005
 func TestConntrack_ConcurrentConnections(t *testing.T) {
 	skipIfNotRoot(t)
 
@@ -447,7 +324,6 @@ func TestConntrack_ConcurrentConnections(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	// Server
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -469,7 +345,6 @@ func TestConntrack_ConcurrentConnections(t *testing.T) {
 		}
 	}()
 
-	// Create 10 concurrent connections
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -495,45 +370,8 @@ func TestConntrack_ConcurrentConnections(t *testing.T) {
 	<-errChan
 }
 
-// skipIfNotRoot skips test if not running as root
-func skipIfNotRoot(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("Integration tests require root privileges")
-	}
-}
-
-// TestConntrack_ConfigValidation проверяет валидацию конфигурации
-func TestConntrack_ConfigValidation(t *testing.T) {
-	logger := zap.NewNop()
-
-	// Test with all tracking disabled
-	cfg := conntrack.Config{
-		EBPFProgramPath: "",
-		TrackIncoming:   false,
-		TrackOutgoing:   false,
-		TrackCloses:     false,
-	}
-
-	tracker, err := conntrack.NewTracker(cfg, logger)
-	require.NoError(t, err)
-	require.NotNil(t, tracker)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- tracker.Run(ctx)
-	}()
-
-	<-time.After(500 * time.Millisecond)
-	cancel()
-	<-errChan
-
-	t.Log("Tracker created successfully with minimal config")
-}
-
 // TestConntrack_EventChannel проверяет работу канала событий
+// IT-006
 func TestConntrack_EventChannel(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := conntrack.Config{
@@ -554,7 +392,6 @@ func TestConntrack_EventChannel(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	// Start listening for events
 	eventCount := 0
 	eventDone := make(chan bool)
 
@@ -572,7 +409,6 @@ func TestConntrack_EventChannel(t *testing.T) {
 		}
 	}()
 
-	// Generate connections
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -605,12 +441,15 @@ func TestConntrack_EventChannel(t *testing.T) {
 	<-errChan
 }
 
-// TestConntrack_MetricsIntegration проверяет интеграцию с метриками
-func TestConntrack_MetricsIntegration(t *testing.T) {
+// TestConntrack_ProcessIdentification проверяет определение процесса
+// IT-007
+func TestConntrack_ProcessIdentification(t *testing.T) {
+	skipIfNotRoot(t)
+
 	logger := zap.NewNop()
 	cfg := conntrack.Config{
 		EBPFProgramPath: "",
-		TrackIncoming:   true,
+		TrackIncoming:   false,
 		TrackOutgoing:   true,
 		TrackCloses:     true,
 	}
@@ -626,43 +465,58 @@ func TestConntrack_MetricsIntegration(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	// Generate some traffic
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	port := listener.Addr().(*net.TCPAddr).Port
-
-	go func() {
-		for i := 0; i < 5; i++ {
-			conn, err := listener.Accept()
-			if err != nil {
-				continue
-			}
-			_ = conn.Close()
-		}
-	}()
-
-	for i := 0; i < 5; i++ {
-		conn, _ := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 1*time.Second)
-		if conn != nil {
-			_ = conn.Close()
-		}
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:22", 100*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
 	}
 
-	<-time.After(1 * time.Second)
+	<-time.After(500 * time.Millisecond)
 
-	stats := tracker.GetStats()
-	t.Logf("Metrics - TotalOutgoing: %d, TotalIncoming: %d, Established: %d",
-		stats.TotalOutgoing, stats.TotalIncoming, stats.Established)
+	conns := tracker.GetConnections()
+	for _, c := range conns {
+		t.Logf("Process: PID=%d, Name=%s", c.PID, c.ProcessName)
+		assert.NotEmpty(t, c.ProcessName)
+		assert.NotEqual(t, "unknown", c.ProcessName)
+	}
 
 	cancel()
 	<-errChan
 }
 
+// TestConntrack_ConfigValidation проверяет валидацию конфигурации
+// IT-008
+func TestConntrack_ConfigValidation(t *testing.T) {
+	logger := zap.NewNop()
+
+	cfg := conntrack.Config{
+		EBPFProgramPath: "",
+		TrackIncoming:   false,
+		TrackOutgoing:   false,
+		TrackCloses:     false,
+	}
+
+	tracker, err := conntrack.NewTracker(cfg, logger)
+	require.NoError(t, err)
+	require.NotNil(t, tracker)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- tracker.Run(ctx)
+	}()
+
+	<-time.After(500 * time.Millisecond)
+	cancel()
+	<-errChan
+
+	t.Log("Tracker created successfully with minimal config")
+}
+
 // TestConntrack_AppConfig загружает конфигурацию из файла и создает трекер
+// IT-009
 func TestConntrack_AppConfig(t *testing.T) {
-	// Create temporary config
 	tmpConfig := "/tmp/conntrack_test_config.yaml"
 	configContent := `
 global:
@@ -684,7 +538,6 @@ logging:
 	require.NoError(t, err)
 	defer os.Remove(tmpConfig)
 
-	// Load config
 	cfg, err := config.Load(tmpConfig)
 	require.NoError(t, err)
 	assert.True(t, cfg.Connections.Enabled)

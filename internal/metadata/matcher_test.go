@@ -1,16 +1,24 @@
 package metadata
 
 import (
-	"net"
 	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
+
+func newTestMatcherLogger(t *testing.T) *zap.Logger {
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return logger
+}
 
 func TestLocationMatcher_BestMatch(t *testing.T) {
 	// Create test data similar to Python version
-	matcher := NewEmptyLocationMatcher()
+	matcher := NewEmptyLocationMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithLocation{
 		{network: mustParseCIDR("10.179.64.0/22"), location: "DWH"},
 		{network: mustParseCIDR("10.179.64.32/32"), location: "IX-M5-SM13"},
@@ -18,11 +26,7 @@ func TestLocationMatcher_BestMatch(t *testing.T) {
 	}
 
 	// Sort to ensure best-match order (as Load does)
-	sort.Slice(matcher.networks, func(i, j int) bool {
-		iLen, _ := matcher.networks[i].network.Mask.Size()
-		jLen, _ := matcher.networks[j].network.Mask.Size()
-		return iLen > jLen
-	})
+	// Note: sorting is done in Load(), this is just for test setup
 
 	// Test best-match: /32 should win over /22
 	location := matcher.GetLocation("10.179.64.32")
@@ -38,19 +42,12 @@ func TestLocationMatcher_BestMatch(t *testing.T) {
 }
 
 func TestRoleMatcher_BestMatch(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithRole{
 		{network: mustParseCIDR("10.179.64.0/22"), role: "dwh-storage"},
 		{network: mustParseCIDR("10.179.64.32/32"), role: "s3-dwh05"},
 		{network: mustParseCIDR("10.179.65.31/32"), role: "dwh-lb"},
 	}
-
-	// Sort to ensure best-match order (as Load does)
-	sort.Slice(matcher.networks, func(i, j int) bool {
-		iLen, _ := matcher.networks[i].network.Mask.Size()
-		jLen, _ := matcher.networks[j].network.Mask.Size()
-		return iLen > jLen
-	})
 
 	// Test best-match: /32 should win over /22
 	role := matcher.GetRole("10.179.64.32")
@@ -66,7 +63,7 @@ func TestRoleMatcher_BestMatch(t *testing.T) {
 }
 
 func TestLocationMatcher_Count(t *testing.T) {
-	matcher := NewEmptyLocationMatcher()
+	matcher := NewEmptyLocationMatcher(newTestMatcherLogger(t))
 	assert.Equal(t, 0, matcher.Count())
 
 	matcher.networks = []netWithLocation{
@@ -76,7 +73,7 @@ func TestLocationMatcher_Count(t *testing.T) {
 }
 
 func TestRoleMatcher_Count(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestMatcherLogger(t))
 	assert.Equal(t, 0, matcher.Count())
 
 	matcher.networks = []netWithRole{
@@ -86,7 +83,7 @@ func TestRoleMatcher_Count(t *testing.T) {
 }
 
 func TestLocationMatcher_GetHostname(t *testing.T) {
-	matcher := NewEmptyLocationMatcher()
+	matcher := NewEmptyLocationMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithLocation{
 		{network: mustParseCIDR("10.179.65.31/32"), location: "IX-M5-SM13", hostname: "dwh-lb-01"},
 		{network: mustParseCIDR("10.179.64.0/22"), location: "DWH"},
@@ -106,7 +103,7 @@ func TestLocationMatcher_GetHostname(t *testing.T) {
 }
 
 func TestLocationMatcher_InvalidIP(t *testing.T) {
-	matcher := NewEmptyLocationMatcher()
+	matcher := NewEmptyLocationMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithLocation{
 		{network: mustParseCIDR("10.0.0.0/8"), location: "test"},
 	}
@@ -116,7 +113,7 @@ func TestLocationMatcher_InvalidIP(t *testing.T) {
 }
 
 func TestRoleMatcher_InvalidIP(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithRole{
 		{network: mustParseCIDR("10.0.0.0/8"), role: "test"},
 	}
@@ -125,18 +122,9 @@ func TestRoleMatcher_InvalidIP(t *testing.T) {
 	assert.Equal(t, "unknown", role)
 }
 
-// Helper function for tests
-func mustParseCIDR(s string) *net.IPNet {
-	_, network, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return network
-}
-
 // Test that sorting works correctly (most specific first)
 func TestLocationMatcher_Sorting(t *testing.T) {
-	matcher := NewEmptyLocationMatcher()
+	matcher := NewEmptyLocationMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithLocation{
 		{network: mustParseCIDR("10.0.0.0/8"), location: "broad"},
 		{network: mustParseCIDR("10.179.64.32/32"), location: "specific"},

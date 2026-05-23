@@ -67,6 +67,8 @@ func NewExporterWithRegistry(
 			"dst_role",
 			"src_network",
 			"dst_network",
+			"src_vrf",
+			"dst_vrf",
 		},
 	)
 
@@ -117,6 +119,8 @@ func (e *Exporter) updateMetric(key pairKey) {
 	dstRole := e.roleMatcher.GetRole(key.dst)
 	srcNetwork := getNetwork(key.src)
 	dstNetwork := getNetwork(key.dst)
+	srcVrf := e.locationMatcher.GetVrf(key.src)
+	dstVrf := e.locationMatcher.GetVrf(key.dst)
 
 	e.counter.WithLabelValues(
 		key.src,
@@ -127,6 +131,8 @@ func (e *Exporter) updateMetric(key pairKey) {
 		dstRole,
 		srcNetwork,
 		dstNetwork,
+		srcVrf,
+		dstVrf,
 	).Add(float64(data.count))
 }
 
@@ -202,12 +208,65 @@ func (e *Exporter) Collector() prometheus.Collector {
 }
 
 // SetMatchers updates the location and role matchers (for SIGHUP reload)
+// Updates labels for all metrics while preserving counter values
 func (e *Exporter) SetMatchers(locationMatcher *metadata.LocationMatcher, roleMatcher *metadata.RoleMatcher) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	// Save current events with their counts
+	savedEvents := make(map[pairKey]*pairData, len(e.events))
+	for k, v := range e.events {
+		savedEvents[k] = v
+	}
+
+	// Update matchers
 	e.locationMatcher = locationMatcher
 	e.roleMatcher = roleMatcher
-	e.logger.Info("Matchers updated")
+
+	// Clear old Prometheus metrics
+	e.counter.Reset()
+
+	// Clear events map
+	e.events = make(map[pairKey]*pairData)
+
+	// Restore events and recreate metrics with NEW labels but SAME counts
+	for key, data := range savedEvents {
+		e.events[key] = data
+		e.updateMetricLocked(key)
+	}
+
+	e.logger.Info("Matchers updated, metrics recreated with new labels (counters preserved)",
+		zap.Int("events_preserved", len(savedEvents)))
+}
+
+// updateMetricLocked updates metric without acquiring lock (caller must hold lock)
+func (e *Exporter) updateMetricLocked(key pairKey) {
+	data := e.events[key]
+	if data == nil {
+		return
+	}
+
+	srcLocation := e.locationMatcher.GetLocation(key.src)
+	dstLocation := e.locationMatcher.GetLocation(key.dst)
+	srcRole := e.roleMatcher.GetRole(key.src)
+	dstRole := e.roleMatcher.GetRole(key.dst)
+	srcNetwork := getNetwork(key.src)
+	dstNetwork := getNetwork(key.dst)
+	srcVrf := e.locationMatcher.GetVrf(key.src)
+	dstVrf := e.locationMatcher.GetVrf(key.dst)
+
+	e.counter.WithLabelValues(
+		key.src,
+		key.dst,
+		srcLocation,
+		dstLocation,
+		srcRole,
+		dstRole,
+		srcNetwork,
+		dstNetwork,
+		srcVrf,
+		dstVrf,
+	).Add(float64(data.count))
 }
 
 // SetTopology sets the network topology (for SIGHUP reload)

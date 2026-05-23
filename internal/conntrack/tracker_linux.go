@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -52,42 +53,45 @@ type Tracker struct {
 
 	// Event channel
 	events chan *Connection
+
+	// Dropped events counter
+	droppedEvents uint64
 }
 
 // eBPF event structure (must match C struct)
 // C struct has __u8 _pad[7] after tcp_flags for 8-byte alignment of comm
 type bpfConnectionEvent struct {
-	TimestampNs uint64    // offset 0
-	PidTgid     uint64    // offset 8
-	PID         uint32    // offset 16
-	TID         uint32    // offset 20
-	SrcIP       [16]byte  // offset 24
-	DstIP       [16]byte  // offset 40
-	SrcPort     uint16    // offset 56
-	DstPort     uint16    // offset 58
-	Protocol    uint8     // offset 60
-	Direction   uint8     // offset 61
-	State       uint8     // offset 62
-	EventType   uint8     // offset 63
-	TCPFlags    uint8     // offset 64
-	_           [7]byte   // offset 65-71 (padding for comm alignment)
-	Comm        [16]byte  // offset 72
+	TimestampNs uint64   // offset 0
+	PidTgid     uint64   // offset 8
+	PID         uint32   // offset 16
+	TID         uint32   // offset 20
+	SrcIP       [16]byte // offset 24
+	DstIP       [16]byte // offset 40
+	SrcPort     uint16   // offset 56
+	DstPort     uint16   // offset 58
+	Protocol    uint8    // offset 60
+	Direction   uint8    // offset 61
+	State       uint8    // offset 62
+	EventType   uint8    // offset 63
+	TCPFlags    uint8    // offset 64
+	_           [7]byte  // offset 65-71 (padding for comm alignment)
+	Comm        [16]byte // offset 72
 }
 
 // validateBpfConnectionEvent checks that Go struct matches C struct
 func validateBpfConnectionEvent() error {
 	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
 	if unsafe.Sizeof(bpfConnectionEvent{}) != 88 {
-		return fmt.Errorf("bpfConnectionEvent size mismatch: got %d, expected 88", 
+		return fmt.Errorf("bpfConnectionEvent size mismatch: got %d, expected 88",
 			unsafe.Sizeof(bpfConnectionEvent{}))
 	}
-	
+
 	// Comm must start at offset 72 (after 7-byte padding)
 	if unsafe.Offsetof(bpfConnectionEvent{}.Comm) != 72 {
-		return fmt.Errorf("bpfConnectionEvent.Comm offset mismatch: got %d, expected 72", 
+		return fmt.Errorf("bpfConnectionEvent.Comm offset mismatch: got %d, expected 72",
 			unsafe.Offsetof(bpfConnectionEvent{}.Comm))
 	}
-	
+
 	return nil
 }
 
@@ -103,12 +107,21 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 		return nil, fmt.Errorf("removing memlock: %w", err)
 	}
 
+	// Set default buffer size if not specified
+	bufferSize := cfg.EventBufferSize
+	if bufferSize <= 0 {
+		bufferSize = DefaultEventBufferSize
+	}
+
 	tracker := &Tracker{
 		config:      cfg,
 		logger:      logger.Named("conntrack"),
 		connections: make(map[string]*Connection),
-		events:      make(chan *Connection, 1000),
+		events:      make(chan *Connection, bufferSize),
 	}
+
+	// Log buffer size
+	logger.Info("Connection tracker buffer size", zap.Int("size", bufferSize))
 
 	// Create metrics collector
 	tracker.metricsCollector = NewMetricsCollector(logger)
@@ -501,7 +514,7 @@ func getProcessComm(pid uint32) string {
 	// /proc/{pid}/comm contains just the process name + newline
 	name := strings.TrimSpace(string(data))
 	name = strings.TrimRight(name, "\x00")
-	
+
 	if name == "" {
 		return ""
 	}
@@ -597,7 +610,10 @@ func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
 	select {
 	case t.events <- conn:
 	default:
-		t.logger.Warn("Event channel full, dropping event")
+		// Increment dropped counter atomically
+		atomic.AddUint64(&t.droppedEvents, 1)
+		t.logger.Debug("Event channel full, dropping event",
+			zap.Uint64("dropped_total", atomic.LoadUint64(&t.droppedEvents)))
 	}
 }
 
@@ -612,18 +628,18 @@ func (t *Tracker) simulateEvents() {
 
 		// Simulate outgoing connection
 		outConn := &Connection{
-			ID:            fmt.Sprintf("out-%d", counter),
-			Timestamp:     time.Now(),
-			SourceIP:      net.ParseIP("192.168.1.100"),
-			SourcePort:    uint16(50000 + counter),
-			DestIP:        net.ParseIP("8.8.8.8"),
-			DestPort:      443,
-			Protocol:      6, // TCP
-			Direction:     DirectionOutgoing,
-			State:         StateSynSent,
-			PID:           1234,
-			ProcessName:   "curl",
-			SynSentTime:   time.Now(),
+			ID:          fmt.Sprintf("out-%d", counter),
+			Timestamp:   time.Now(),
+			SourceIP:    net.ParseIP("192.168.1.100"),
+			SourcePort:  uint16(50000 + counter),
+			DestIP:      net.ParseIP("8.8.8.8"),
+			DestPort:    443,
+			Protocol:    6, // TCP
+			Direction:   DirectionOutgoing,
+			State:       StateSynSent,
+			PID:         1234,
+			ProcessName: "curl",
+			SynSentTime: time.Now(),
 		}
 
 		t.onConnectionEvent(outConn, EventNew)
@@ -637,18 +653,18 @@ func (t *Tracker) simulateEvents() {
 
 		// Simulate incoming connection
 		inConn := &Connection{
-			ID:            fmt.Sprintf("in-%d", counter),
-			Timestamp:     time.Now(),
-			SourceIP:      net.ParseIP("10.0.0.50"),
-			SourcePort:    uint16(40000 + counter),
-			DestIP:        net.ParseIP("192.168.1.100"),
-			DestPort:      80,
-			Protocol:      6, // TCP
-			Direction:     DirectionIncoming,
-			State:         StateSynReceived,
-			PID:           5678,
-			ProcessName:   "nginx",
-			SynSentTime:   time.Now(),
+			ID:          fmt.Sprintf("in-%d", counter),
+			Timestamp:   time.Now(),
+			SourceIP:    net.ParseIP("10.0.0.50"),
+			SourcePort:  uint16(40000 + counter),
+			DestIP:      net.ParseIP("192.168.1.100"),
+			DestPort:    80,
+			Protocol:    6, // TCP
+			Direction:   DirectionIncoming,
+			State:       StateSynReceived,
+			PID:         5678,
+			ProcessName: "nginx",
+			SynSentTime: time.Now(),
 		}
 
 		t.onConnectionEvent(inConn, EventNew)
@@ -691,6 +707,11 @@ func (t *Tracker) Events() <-chan *Connection {
 	return t.events
 }
 
+// GetDroppedEvents returns the number of dropped events
+func (t *Tracker) GetDroppedEvents() uint64 {
+	return atomic.LoadUint64(&t.droppedEvents)
+}
+
 // updateMetrics periodically updates connection state metrics
 func (t *Tracker) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
@@ -703,6 +724,7 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 		case <-ticker.C:
 			if t.metricsCollector != nil {
 				t.metricsCollector.UpdateStateMetrics(t.GetStats())
+				t.metricsCollector.UpdateDroppedMetrics(t.GetDroppedEvents())
 			}
 		}
 	}

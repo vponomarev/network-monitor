@@ -53,6 +53,14 @@ logging:
   level: info
   format: json
 
+# Connection tracking (eBPF-based)
+connections:
+  enabled: true
+  track_incoming: true
+  track_outgoing: true
+  filter_ports: []
+  event_buffer_size: 10000  # Buffer size for connection events (default: 10000)
+
 # Optional monitoring modules (disabled by default)
 # Uncomment and configure to enable
 

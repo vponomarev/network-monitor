@@ -68,8 +68,8 @@ func TestMetrics_Exporter_Integration(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Create matchers
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 
 	// Create exporter
 	exporter := metrics.NewExporterWithRegistry(
@@ -247,7 +247,8 @@ locations:
 	defer os.Remove(tmpFile)
 
 	// Load matcher
-	matcher, err := metadata.NewLocationMatcher(tmpFile)
+	logger := zap.NewNop()
+	matcher, err := metadata.NewLocationMatcher(tmpFile, logger)
 	require.NoError(t, err)
 
 	// Test matching
@@ -284,7 +285,8 @@ roles:
 	defer os.Remove(tmpFile)
 
 	// Load matcher
-	matcher, err := metadata.NewRoleMatcher(tmpFile)
+	logger := zap.NewNop()
+	matcher, err := metadata.NewRoleMatcher(tmpFile, logger)
 	require.NoError(t, err)
 
 	// Test matching - most specific wins

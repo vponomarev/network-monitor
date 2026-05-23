@@ -6,14 +6,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 // TracePipePath is the default path to the kernel trace pipe
 const TracePipePath = "/sys/kernel/tracing/trace_pipe"
+
+// TracepointEnablePath is the path to the tcp_retransmit_skb enable flag
+const TracepointEnablePath = "/sys/kernel/tracing/events/tcp/tcp_retransmit_skb/enable"
 
 // TCPRetransmitEvent represents a TCP retransmit event
 type TCPRetransmitEvent struct {
@@ -68,6 +74,10 @@ func (c *TracePipeCollector) Run(ctx context.Context) error {
 		}
 
 		if err := c.readTracePipe(ctx); err != nil {
+			if err == context.Canceled || err == unix.ECANCELED {
+				c.logger.Debug("Trace pipe collector stopped")
+				return nil
+			}
 			c.logger.Error("Error reading trace pipe", zap.Error(err))
 			// Wait before retrying
 			select {
@@ -89,23 +99,47 @@ func (c *TracePipeCollector) readTracePipe(ctx context.Context) error {
 
 	reader := bufio.NewReader(file)
 
+	// Create a channel for context cancellation
+	done := ctx.Done()
+
 	for {
+		// Check context before blocking read
 		select {
-		case <-ctx.Done():
+		case <-done:
+			c.logger.Debug("Context cancelled, closing trace_pipe")
+			file.Close()
 			return ctx.Err()
 		default:
 		}
 
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
-			return fmt.Errorf("reading trace_pipe: %w", err)
+		// Use a goroutine to make the read cancellable
+		type readResult struct {
+			line string
+			err  error
 		}
+		resultCh := make(chan readResult, 1)
 
-		c.processLine(line)
+		go func() {
+			line, err := reader.ReadString('\n')
+			resultCh <- readResult{line: line, err: err}
+		}()
+
+		// Wait for either read completion or context cancellation
+		select {
+		case <-done:
+			c.logger.Debug("Context cancelled during read, closing file")
+			file.Close()
+			return ctx.Err()
+		case result := <-resultCh:
+			if result.err != nil {
+				if result.err == io.EOF {
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+				return fmt.Errorf("reading trace_pipe: %w", result.err)
+			}
+			c.processLine(result.line)
+		}
 	}
 }
 
@@ -144,4 +178,61 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// IsTracepointEnabled checks if the tcp_retransmit_skb tracepoint is enabled
+func IsTracepointEnabled(enablePath string) (bool, error) {
+	data, err := os.ReadFile(enablePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, fmt.Errorf("tracepoint enable file not found at %s - ensure tracefs is mounted", enablePath)
+		}
+		return false, fmt.Errorf("reading enable file: %w", err)
+	}
+
+	value := strings.TrimSpace(string(data))
+	return value == "1", nil
+}
+
+// EnableTracepoint enables the tcp_retransmit_skb tracepoint
+func EnableTracepoint(enablePath string) error {
+	// Ensure parent directory exists
+	dir := filepath.Dir(enablePath)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("tracepoint directory not found at %s - ensure tracefs is mounted", dir)
+	}
+
+	// Write "1" to enable the tracepoint
+	if err := os.WriteFile(enablePath, []byte("1"), 0644); err != nil {
+		return fmt.Errorf("enabling tracepoint: %w (requires root privileges)", err)
+	}
+
+	return nil
+}
+
+// CheckAndWarnTracepoint checks if tracepoint is enabled and logs a warning if not
+func CheckAndWarnTracepoint(logger *zap.Logger, enablePath string) bool {
+	enabled, err := IsTracepointEnabled(enablePath)
+	if err != nil {
+		logger.Warn("Cannot check tracepoint status",
+			zap.String("path", enablePath),
+			zap.Error(err))
+		return false
+	}
+
+	if !enabled {
+		logger.Warn("TCP retransmit tracepoint is NOT enabled. "+
+			"Run with --enable-tracing flag or manually enable: "+
+			"echo 1 | sudo tee "+enablePath,
+			zap.String("path", enablePath))
+		return false
+	}
+
+	logger.Info("TCP retransmit tracepoint is enabled", zap.String("path", enablePath))
+	return true
+}
+
+// GetTracepointEnablePath returns the path to the enable file for tcp_retransmit_skb
+func GetTracepointEnablePath() string {
+	return TracepointEnablePath
 }

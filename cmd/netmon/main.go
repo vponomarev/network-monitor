@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -32,16 +33,34 @@ var (
 
 func main() {
 	// Parse command line flags
-	configPath := os.Getenv("NETMON_CONFIG")
-	if configPath == "" {
-		configPath = "config.yaml"
-	}
+	enableTracing := flag.Bool("enable-tracing", false, "Automatically enable TCP retransmit tracing (requires root)")
+	configPath := flag.String("config", "", "Path to configuration file (overrides NETMON_CONFIG env var)")
+	flag.Parse()
 
 	// Load configuration
-	cfg, err := config.Load(configPath)
+	if *configPath == "" {
+		*configPath = os.Getenv("NETMON_CONFIG")
+		if *configPath == "" {
+			*configPath = "config.yaml"
+		}
+	}
+
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Enable tracing if requested
+	if *enableTracing {
+		logger, _ := zap.NewDevelopment() // Temporary logger for early messages
+		logger.Info("Enabling TCP retransmit tracing",
+			zap.String("path", collector.GetTracepointEnablePath()))
+		if err := collector.EnableTracepoint(collector.GetTracepointEnablePath()); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to enable tracing: %v\n", err)
+			os.Exit(1)
+		}
+		logger.Info("TCP retransmit tracing enabled successfully")
 	}
 
 	// Initialize logger
@@ -52,22 +71,25 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Check if tracing is enabled (warn if not)
+	collector.CheckAndWarnTracepoint(logger, collector.GetTracepointEnablePath())
+
 	logger.Info("Starting Network Monitor",
 		zap.String("version", Version),
-		zap.String("config", configPath),
+		zap.String("config", *configPath),
 	)
 
 	// Initialize metadata matchers
-	locationMatcher, err := metadata.NewLocationMatcher(cfg.Metadata.Locations.Path)
+	locationMatcher, err := metadata.NewLocationMatcher(cfg.Metadata.Locations.Path, logger)
 	if err != nil {
 		logger.Warn("Failed to load locations, using empty matcher", zap.Error(err))
-		locationMatcher = metadata.NewEmptyLocationMatcher()
+		locationMatcher = metadata.NewEmptyLocationMatcher(logger)
 	}
 
-	roleMatcher, err := metadata.NewRoleMatcher(cfg.Metadata.Roles.Path)
+	roleMatcher, err := metadata.NewRoleMatcher(cfg.Metadata.Roles.Path, logger)
 	if err != nil {
 		logger.Warn("Failed to load roles, using empty matcher", zap.Error(err))
-		roleMatcher = metadata.NewEmptyRoleMatcher()
+		roleMatcher = metadata.NewEmptyRoleMatcher(logger)
 	}
 
 	// Initialize topology (optional)
@@ -97,21 +119,23 @@ func main() {
 	// Create reload channel for SIGHUP
 	reloadChan := make(chan struct{}, 1)
 
+	// Signal handler goroutine - runs for the entire lifetime
 	go func() {
-		sig := <-sigChan
-		switch sig {
-		case syscall.SIGHUP:
-			logger.Info("SIGHUP received, reloading configuration")
-			select {
-			case reloadChan <- struct{}{}:
+		for sig := range sigChan {
+			switch sig {
+			case syscall.SIGHUP:
+				logger.Info("SIGHUP received, reloading configuration")
+				select {
+				case reloadChan <- struct{}{}:
+				default:
+					// Reload already pending
+				}
+				// Continue listening for more signals
 			default:
-				// Reload already pending
+				logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
+				cancel()
+				return
 			}
-			// Re-arm signal handler
-			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		default:
-			logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
-			cancel()
 		}
 	}()
 
@@ -163,11 +187,12 @@ func main() {
 	var connTracker *conntrack.Tracker
 	if cfg.Connections.Enabled {
 		connCfg := conntrack.Config{
-			TrackIncoming:  cfg.Connections.TrackIncoming,
-			TrackOutgoing: cfg.Connections.TrackOutgoing,
-			TrackCloses:   true,
-			FilterPorts:   cfg.Connections.FilterPorts,
-			SYNTimeout:    30 * time.Second,
+			TrackIncoming:   cfg.Connections.TrackIncoming,
+			TrackOutgoing:   cfg.Connections.TrackOutgoing,
+			TrackCloses:     true,
+			FilterPorts:     cfg.Connections.FilterPorts,
+			SYNTimeout:      30 * time.Second,
+			EventBufferSize: cfg.Connections.EventBufferSize,
 		}
 
 		var err error
@@ -182,7 +207,8 @@ func main() {
 			}()
 			logger.Info("Connection tracker started",
 				zap.Bool("incoming", cfg.Connections.TrackIncoming),
-				zap.Bool("outgoing", cfg.Connections.TrackOutgoing))
+				zap.Bool("outgoing", cfg.Connections.TrackOutgoing),
+				zap.Int("buffer_size", connCfg.EventBufferSize))
 		}
 	}
 
@@ -302,7 +328,7 @@ func main() {
 				logger.Info("Reloading configuration")
 
 				// Reload config file
-				newCfg, err := config.Load(configPath)
+				newCfg, err := config.Load(*configPath)
 				if err != nil {
 					logger.Error("Failed to reload config", zap.Error(err))
 					continue

@@ -13,8 +13,8 @@ import (
 
 func TestNewExporter(t *testing.T) {
 	logger := zap.NewNop()
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 	reg := prometheus.NewRegistry()
 
 	exporter := NewExporterWithRegistry("test_tcp_loss_total", locationMatcher, roleMatcher, logger, reg)
@@ -25,8 +25,8 @@ func TestNewExporter(t *testing.T) {
 
 func TestExporter_RecordRetransmit(t *testing.T) {
 	logger := zap.NewNop()
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 	reg := prometheus.NewRegistry()
 
 	exporter := NewExporterWithRegistry("test_tcp_loss_total_2", locationMatcher, roleMatcher, logger, reg)
@@ -77,8 +77,8 @@ func TestExporter_splitIP(t *testing.T) {
 
 func TestExporter_SetTTL(t *testing.T) {
 	logger := zap.NewNop()
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 	reg := prometheus.NewRegistry()
 
 	exporter := NewExporterWithRegistry("test_tcp_loss_total_3", locationMatcher, roleMatcher, logger, reg)
@@ -90,8 +90,8 @@ func TestExporter_SetTTL(t *testing.T) {
 
 func TestExporter_CleanupOld(t *testing.T) {
 	logger := zap.NewNop()
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 	reg := prometheus.NewRegistry()
 
 	exporter := NewExporterWithRegistry("test_tcp_loss_total_4", locationMatcher, roleMatcher, logger, reg)
@@ -111,8 +111,8 @@ func TestExporter_CleanupOld(t *testing.T) {
 
 func TestExporter_Collect(t *testing.T) {
 	logger := zap.NewNop()
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 	reg := prometheus.NewRegistry()
 
 	exporter := NewExporterWithRegistry("test_tcp_loss_total_5", locationMatcher, roleMatcher, logger, reg)
@@ -134,4 +134,35 @@ func TestExporter_Collect(t *testing.T) {
 	}
 
 	assert.NotEmpty(t, metrics)
+}
+
+func TestExporter_WithVrfLabels(t *testing.T) {
+	logger := zap.NewNop()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
+	reg := prometheus.NewRegistry()
+
+	exporter := NewExporterWithRegistry("test_tcp_loss_total_vrf", locationMatcher, roleMatcher, logger, reg)
+
+	// Record retransmit
+	exporter.RecordRetransmit("192.168.1.10", "192.168.1.20")
+
+	// Collect metrics
+	ch := make(chan prometheus.Metric, 20)
+	go func() {
+		exporter.Collect(ch)
+		close(ch)
+	}()
+
+	// Verify we get metrics with VRF labels
+	var metrics []prometheus.Metric
+	for m := range ch {
+		metrics = append(metrics, m)
+	}
+
+	assert.NotEmpty(t, metrics)
+	// Metrics should have 10 labels (including src_vrf, dst_vrf)
+	desc := metrics[0].Desc()
+	assert.Contains(t, desc.String(), "src_vrf")
+	assert.Contains(t, desc.String(), "dst_vrf")
 }

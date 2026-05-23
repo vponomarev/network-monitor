@@ -1,43 +1,73 @@
 # Locations Configuration Example
-# Maps IP ranges to physical locations
+# Maps IP ranges to physical locations and VRFs
+#
+# Fields:
+#   network  - CIDR notation (required)
+#   location - Physical location identifier (required)
+#   hostname - Optional hostname for specific IPs
+#   vrf      - VRF name (optional, defaults to "unknown" in metrics)
 
 locations:
-  # DataCenter 1
-  - network: 10.146.22.0/24
-    location: IX-M4-SM3
-    
-  - network: 10.179.64.0/22
-    location: IX-M5-SM13
-    
-  - network: 10.179.68.0/24
-    location: IX-M5-SM14
-    
-  - network: 10.181.208.0/22
-    location: IX-M3.31
-    
-  - network: 10.198.8.0/22
-    location: DS-402
-    
-  - network: 10.218.74.0/24
-    location: M1-4
-    
-  - network: 10.181.212.0/24
-    location: IX-M3-SM10
-    
-  - network: 10.118.52.0/24
-    location: IX-M4-SM3
-    
-  - network: 10.117.10.0/24
-    location: IX-M4-SM3
-    
-  - network: 10.144.180.0/24
-    location: IX-M5-SM6
+  # DataCenter 1 - Management VRF
+  - network: 192.168.10.0/24
+    location: datacenter-a
+    vrf: mgmt-vrf
 
-  # Specific hosts with hostnames
-  - network: 10.179.65.31/32
-    location: IX-M5-SM13
-    hostname: dwh-lb-01
-    
-  - network: 10.179.65.32/32
-    location: IX-M5-SM13
-    hostname: dwh-lb-02
+  - network: 192.168.20.0/24
+    location: datacenter-b
+    vrf: mgmt-vrf
+
+  - network: 192.168.30.0/24
+    location: datacenter-c
+    vrf: mgmt-vrf
+
+  # DataCenter 2 - Default VRF
+  - network: 192.168.40.0/24
+    location: datacenter-d
+    vrf: default-vrf
+
+  - network: 192.168.50.0/24
+    location: datacenter-e
+    vrf: default-vrf
+
+  # DataCenter 3 - No VRF specified (will show as "unknown")
+  - network: 192.168.60.0/24
+    location: datacenter-f
+
+  - network: 192.168.70.0/24
+    location: datacenter-g
+
+  # Multiple networks in same location
+  - network: 192.168.80.0/24
+    location: datacenter-a
+    vrf: shared-vrf
+
+  - network: 192.168.90.0/24
+    location: datacenter-a
+    vrf: shared-vrf
+
+  - network: 192.168.100.0/24
+    location: datacenter-b
+    vrf: shared-vrf
+
+  # Specific hosts with hostnames and VRF
+  - network: 192.168.20.10/32
+    location: datacenter-b
+    hostname: app-server-01
+    vrf: mgmt-vrf
+
+  - network: 192.168.20.11/32
+    location: datacenter-b
+    hostname: app-server-02
+    vrf: mgmt-vrf
+
+  # Load balancers example
+  - network: 192.168.200.1/32
+    location: datacenter-a
+    hostname: lb-01
+    vrf: external-vrf
+
+  - network: 192.168.200.2/32
+    location: datacenter-a
+    hostname: lb-02
+    vrf: external-vrf

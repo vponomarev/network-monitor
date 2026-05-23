@@ -21,8 +21,8 @@ func TestMetrics_Server_Integration(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Create exporter
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
 	exporter := metrics.NewExporter("test_metric", locationMatcher, roleMatcher, logger)
 
 	// Create registry
@@ -76,9 +76,9 @@ func TestMetrics_Server_Integration(t *testing.T) {
 // TestMetrics_Record tests metric recording
 func TestMetrics_Record(t *testing.T) {
 	logger := zap.NewNop()
-	locationMatcher := metadata.NewEmptyLocationMatcher()
-	roleMatcher := metadata.NewEmptyRoleMatcher()
-	
+	locationMatcher := metadata.NewEmptyLocationMatcher(logger)
+	roleMatcher := metadata.NewEmptyRoleMatcher(logger)
+
 	// Create a new registry for this test to avoid duplicate registration
 	reg := prometheus.NewRegistry()
 	exporter := metrics.NewExporterWithRegistry("test_metric_record", locationMatcher, roleMatcher, logger, reg)

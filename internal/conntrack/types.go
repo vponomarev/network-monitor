@@ -8,6 +8,9 @@ import (
 // DefaultEBPFProgramPath is the default path to the eBPF program object file
 const DefaultEBPFProgramPath = "/usr/share/conntrack/bpf/conntrack.bpf.o"
 
+// DefaultEventBufferSize is the default size of the event channel buffer
+const DefaultEventBufferSize = 10000
+
 // Config holds connection tracker configuration
 type Config struct {
 	// Path to eBPF program object file
@@ -30,6 +33,9 @@ type Config struct {
 
 	// SYN timeout
 	SYNTimeout time.Duration
+
+	// Event channel buffer size (default: 10000)
+	EventBufferSize int
 }
 
 // Direction represents connection direction
@@ -38,7 +44,7 @@ type Direction int
 const (
 	DirectionIncoming Direction = iota
 	DirectionOutgoing
-	DirectionUnknown  // Used when connection was not tracked from start
+	DirectionUnknown // Used when connection was not tracked from start
 )
 
 func (d Direction) String() string {

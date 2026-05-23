@@ -117,10 +117,11 @@ type DNSConfig struct {
 
 // ConnectionsConfig holds connection tracking configuration (for other modules)
 type ConnectionsConfig struct {
-	Enabled       bool  `yaml:"enabled"`
-	TrackIncoming bool  `yaml:"track_incoming"`
-	TrackOutgoing bool  `yaml:"track_outgoing"`
-	FilterPorts   []int `yaml:"filter_ports"`
+	Enabled         bool  `yaml:"enabled"`
+	TrackIncoming   bool  `yaml:"track_incoming"`
+	TrackOutgoing   bool  `yaml:"track_outgoing"`
+	FilterPorts     []int `yaml:"filter_ports"`
+	EventBufferSize int   `yaml:"event_buffer_size"` // Default: 10000
 }
 
 // DefaultConfig returns a configuration with default values
@@ -203,12 +204,37 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
+	// Resolve relative paths relative to config file directory
+	configDir := filepath.Dir(path)
+	cfg.resolveRelativePaths(configDir)
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
 
 	return cfg, nil
+}
+
+// resolveRelativePaths converts relative paths to absolute paths relative to config file directory
+func (c *Config) resolveRelativePaths(configDir string) {
+	// Resolve metadata paths
+	if c.Metadata.Locations.Path != "" && !filepath.IsAbs(c.Metadata.Locations.Path) {
+		c.Metadata.Locations.Path = filepath.Join(configDir, c.Metadata.Locations.Path)
+	}
+	if c.Metadata.Roles.Path != "" && !filepath.IsAbs(c.Metadata.Roles.Path) {
+		c.Metadata.Roles.Path = filepath.Join(configDir, c.Metadata.Roles.Path)
+	}
+
+	// Resolve topology path
+	if c.Topology.Path != "" && !filepath.IsAbs(c.Topology.Path) {
+		c.Topology.Path = filepath.Join(configDir, c.Topology.Path)
+	}
+
+	// Resolve log output path
+	if c.Logging.OutputPath != "" && !filepath.IsAbs(c.Logging.OutputPath) {
+		c.Logging.OutputPath = filepath.Join(configDir, c.Logging.OutputPath)
+	}
 }
 
 // Validate validates the configuration

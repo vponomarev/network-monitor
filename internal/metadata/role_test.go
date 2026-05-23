@@ -7,7 +7,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+func newTestRoleLogger(t *testing.T) *zap.Logger {
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return logger
+}
 
 func TestRoleMatcher_Load_FromYAML(t *testing.T) {
 	// Create temporary YAML file
@@ -30,7 +39,7 @@ func TestRoleMatcher_Load_FromYAML(t *testing.T) {
 	tmpfile.Close()
 
 	// Load matcher
-	matcher, err := NewRoleMatcher(tmpfile.Name())
+	matcher, err := NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	require.NoError(t, err)
 	require.NotNil(t, matcher)
 
@@ -62,7 +71,7 @@ func TestRoleMatcher_EmptyFile(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	matcher, err := NewRoleMatcher(tmpfile.Name())
+	matcher, err := NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	require.NoError(t, err)
 
 	role := matcher.GetRole("192.168.1.1")
@@ -71,7 +80,7 @@ func TestRoleMatcher_EmptyFile(t *testing.T) {
 }
 
 func TestRoleMatcher_NonExistentFile(t *testing.T) {
-	_, err := NewRoleMatcher("/nonexistent/file.yaml")
+	_, err := NewRoleMatcher("/nonexistent/file.yaml", newTestRoleLogger(t))
 	assert.Error(t, err)
 }
 
@@ -84,7 +93,7 @@ func TestRoleMatcher_InvalidYAML(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	_, err = NewRoleMatcher(tmpfile.Name())
+	_, err = NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	assert.Error(t, err)
 }
 
@@ -101,7 +110,7 @@ func TestRoleMatcher_InvalidNetwork(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	_, err = NewRoleMatcher(tmpfile.Name())
+	_, err = NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	assert.Error(t, err)
 }
 
@@ -115,7 +124,7 @@ func TestRoleMatcher_Reload(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	matcher, err := NewRoleMatcher(tmpfile.Name())
+	matcher, err := NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, 1, matcher.Count())
 
@@ -136,7 +145,7 @@ func TestRoleMatcher_Reload(t *testing.T) {
 }
 
 func TestRoleMatcher_BestMatchOrder(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestRoleLogger(t))
 
 	// Add in random order
 	matcher.networks = []netWithRole{
@@ -171,7 +180,7 @@ func TestRoleMatcher_BestMatchOrder(t *testing.T) {
 }
 
 func TestRoleMatcher_EdgeCases(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestRoleLogger(t))
 	matcher.networks = []netWithRole{
 		{network: mustParseCIDR("0.0.0.0/0"), role: "everything"},
 	}
@@ -185,7 +194,7 @@ func TestRoleMatcher_EdgeCases(t *testing.T) {
 }
 
 func TestRoleMatcher_Concurrent(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestRoleLogger(t))
 	matcher.networks = []netWithRole{
 		{network: mustParseCIDR("192.168.1.0/24"), role: "office"},
 	}
@@ -225,7 +234,7 @@ func TestRoleMatcher_Load_FromCSV(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestRoleLogger(t))
 	err = matcher.ParseRolesFromCSV(tmpfile.Name())
 	// Note: CSV parsing is not fully implemented yet
 	// This test documents the intended functionality
@@ -233,13 +242,13 @@ func TestRoleMatcher_Load_FromCSV(t *testing.T) {
 }
 
 func TestNewEmptyRoleMatcher(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestRoleLogger(t))
 	require.NotNil(t, matcher)
 	assert.Equal(t, 0, matcher.Count())
 }
 
 func TestRoleMatcher_GetRole_InvalidIP(t *testing.T) {
-	matcher := NewEmptyRoleMatcher()
+	matcher := NewEmptyRoleMatcher(newTestRoleLogger(t))
 	matcher.networks = []netWithRole{
 		{network: mustParseCIDR("10.0.0.0/8"), role: "test"},
 	}
@@ -271,7 +280,7 @@ func TestRoleMatcher_MultipleNetworksSameRole(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	matcher, err := NewRoleMatcher(tmpfile.Name())
+	matcher, err := NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, "web-server", matcher.GetRole("192.168.1.50"))
@@ -296,7 +305,7 @@ func TestRoleMatcher_HierarchicalRoles(t *testing.T) {
 	require.NoError(t, err)
 	tmpfile.Close()
 
-	matcher, err := NewRoleMatcher(tmpfile.Name())
+	matcher, err := NewRoleMatcher(tmpfile.Name(), newTestRoleLogger(t))
 	require.NoError(t, err)
 
 	// Most specific wins

@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -93,4 +94,74 @@ func TestTracePipeCollector_Run_ContextCancellation(t *testing.T) {
 	// Should fail quickly due to non-existent path
 	err := collector.Run(ctx)
 	assert.Error(t, err)
+}
+
+func TestIsTracepointEnabled_FileNotFound(t *testing.T) {
+	enabled, err := IsTracepointEnabled("/nonexistent/path/enable")
+	assert.False(t, enabled)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "tracepoint enable file not found")
+}
+
+func TestIsTracepointEnabled_Enabled(t *testing.T) {
+	// Create a temporary file with "1"
+	tmpFile := t.TempDir() + "/enable"
+	err := os.WriteFile(tmpFile, []byte("1\n"), 0644)
+	require.NoError(t, err)
+
+	enabled, err := IsTracepointEnabled(tmpFile)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
+}
+
+func TestIsTracepointEnabled_Disabled(t *testing.T) {
+	// Create a temporary file with "0"
+	tmpFile := t.TempDir() + "/enable"
+	err := os.WriteFile(tmpFile, []byte("0\n"), 0644)
+	require.NoError(t, err)
+
+	enabled, err := IsTracepointEnabled(tmpFile)
+	assert.NoError(t, err)
+	assert.False(t, enabled)
+}
+
+func TestIsTracepointEnabled_InvalidContent(t *testing.T) {
+	// Create a temporary file with invalid content
+	tmpFile := t.TempDir() + "/enable"
+	err := os.WriteFile(tmpFile, []byte("invalid\n"), 0644)
+	require.NoError(t, err)
+
+	enabled, err := IsTracepointEnabled(tmpFile)
+	assert.NoError(t, err)
+	assert.False(t, enabled)
+}
+
+func TestEnableTracepoint_DirectoryNotFound(t *testing.T) {
+	err := EnableTracepoint("/nonexistent/path/enable")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "tracepoint directory not found")
+}
+
+func TestEnableTracepoint_Success(t *testing.T) {
+	// Skip if not root (cannot write to /sys/kernel/tracing)
+	if os.Getuid() != 0 {
+		t.Skip("Test requires root privileges")
+	}
+
+	// This test would require actual tracefs mount
+	// For now, just verify the function exists and compiles
+	assert.NotNil(t, EnableTracepoint)
+}
+
+func TestCheckAndWarnTracepoint(t *testing.T) {
+	logger := zap.NewNop()
+
+	// Test with non-existent path
+	result := CheckAndWarnTracepoint(logger, "/nonexistent/path/enable")
+	assert.False(t, result)
+}
+
+func TestGetTracepointEnablePath(t *testing.T) {
+	path := GetTracepointEnablePath()
+	assert.Equal(t, "/sys/kernel/tracing/events/tcp/tcp_retransmit_skb/enable", path)
 }

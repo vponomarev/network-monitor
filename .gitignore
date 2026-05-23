@@ -38,3 +38,9 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Test reports and logs
+scripts/conntrack_test_report_*.txt
+scripts/results_*.log
+**/test_results/
+**/*.test.log
