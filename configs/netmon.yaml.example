@@ -1,6 +1,54 @@
 # Network Monitor Configuration Example
 # Copy this file to /etc/netmon/config.yaml and customize
 
+# Global settings
+global:
+  ttl_hours: 3
+  metrics_port: 9876
+  trace_pipe_path: /sys/kernel/tracing/trace_pipe
+
+# Metadata configuration (locations, roles, topology)
+# Each source can optionally poll an HTTP endpoint for updates
+metadata:
+  # Locations: maps IP ranges to physical locations
+  locations:
+    path: /etc/netmon/locations.yaml
+    # Optional: HTTP update source for automatic updates
+    # First poll happens 30 seconds after startup, then at poll_interval
+    # update_source:
+    #   url: https://config.example.com/locations.yaml
+    #   poll_interval: 20m  # Check every 20 minutes (default)
+    #   timeout: 10s        # HTTP request timeout
+
+  # Roles: maps IP ranges to logical roles
+  roles:
+    path: /etc/netmon/roles.yaml
+    # Optional: HTTP update source
+    # update_source:
+    #   url: https://config.example.com/roles.yaml
+    #   poll_interval: 20m
+    #   timeout: 10s
+
+  # Topology: network topology for enrichment
+  topology:
+    path: /etc/netmon/topology.yaml
+    # Optional: HTTP update source (topology changes rarely)
+    # update_source:
+    #   url: https://config.example.com/topology.yaml
+    #   poll_interval: 60m  # Check every hour
+    #   timeout: 10s
+
+# HTTP Update Source Behavior:
+# - Local file is REQUIRED for startup (fail-fast if missing)
+# - HTTP polling is OPTIONAL
+# - First poll: 30 seconds after startup
+# - Validation: type-specific (locations/roles/topology)
+# - Auto-reload: memory updated after successful file update
+# - Atomic writes: write to temp file + rename
+# - Metrics: metadata_update_total, metadata_update_errors_total,
+#            metadata_last_update_timestamp_seconds, metadata_last_hash
+# - API: GET /api/v1/metadata/status for source status
+
 # Monitoring module configurations
 monitoring:
   # Packet loss monitoring via trace_pipe
@@ -52,6 +100,11 @@ monitoring:
 
 # Metrics export configuration
 metrics:
+  name: netmon_tcp_loss_total
+  # Cardinality control (protects Prometheus from OOM). See config.example.yaml.
+  cardinality:
+    level: role        # role (default, no IP labels) | network (/24) | ip (unbounded)
+    max_series: 10000  # hard cap on active series; 0 = unlimited
   prometheus:
     enabled: true
     port: 9090

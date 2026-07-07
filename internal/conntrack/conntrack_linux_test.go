@@ -248,15 +248,15 @@ func Test_enrichProcessName(t *testing.T) {
 func Test_bpfConnectionEvent_StructAlignment(t *testing.T) {
 	// Test that Go struct matches C struct
 	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
-	
+
 	// Check total size
-	assert.Equal(t, uintptr(88), unsafe.Sizeof(bpfConnectionEvent{}), 
+	assert.Equal(t, uintptr(88), unsafe.Sizeof(bpfConnectionEvent{}),
 		"bpfConnectionEvent size must be 88 bytes")
-	
+
 	// Check Comm offset (must be 72 after 7-byte padding)
 	assert.Equal(t, uintptr(72), unsafe.Offsetof(bpfConnectionEvent{}.Comm),
 		"bpfConnectionEvent.Comm must start at offset 72")
-	
+
 	// Check other critical offsets
 	assert.Equal(t, uintptr(0), unsafe.Offsetof(bpfConnectionEvent{}.TimestampNs))
 	assert.Equal(t, uintptr(8), unsafe.Offsetof(bpfConnectionEvent{}.PidTgid))

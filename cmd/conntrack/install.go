@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	defaultInstallPath   = "/usr/local/bin"
-	defaultEBPFPath      = "/usr/share/conntrack/bpf/conntrack.bpf.o"
-	defaultConfigPath    = "/etc/conntrack/config.yaml"
-	defaultSystemdPath   = "/etc/systemd/system/conntrack.service"
+	defaultInstallPath = "/usr/local/bin"
+	defaultEBPFPath    = "/usr/share/conntrack/bpf/conntrack.bpf.o"
+	defaultConfigPath  = "/etc/conntrack/config.yaml"
+	defaultSystemdPath = "/etc/systemd/system/conntrack.service"
 )
 
 // installCmd представляет команду установки

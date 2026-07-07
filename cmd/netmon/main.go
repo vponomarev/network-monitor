@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/vponomarev/network-monitor/internal/conntrack"
 	"github.com/vponomarev/network-monitor/internal/discovery"
 	"github.com/vponomarev/network-monitor/internal/dns"
+	"github.com/vponomarev/network-monitor/internal/health"
 	"github.com/vponomarev/network-monitor/internal/latency"
 	"github.com/vponomarev/network-monitor/internal/metadata"
 	"github.com/vponomarev/network-monitor/internal/metrics"
@@ -79,17 +82,25 @@ func main() {
 		zap.String("config", *configPath),
 	)
 
-	// Initialize metadata matchers
+	// Initialize metadata matchers (from local files - required for startup)
 	locationMatcher, err := metadata.NewLocationMatcher(cfg.Metadata.Locations.Path, logger)
 	if err != nil {
 		logger.Warn("Failed to load locations, using empty matcher", zap.Error(err))
 		locationMatcher = metadata.NewEmptyLocationMatcher(logger)
+	} else {
+		logger.Info("Locations loaded",
+			zap.String("path", cfg.Metadata.Locations.Path),
+			zap.Int("count", locationMatcher.Count()))
 	}
 
 	roleMatcher, err := metadata.NewRoleMatcher(cfg.Metadata.Roles.Path, logger)
 	if err != nil {
 		logger.Warn("Failed to load roles, using empty matcher", zap.Error(err))
 		roleMatcher = metadata.NewEmptyRoleMatcher(logger)
+	} else {
+		logger.Info("Roles loaded",
+			zap.String("path", cfg.Metadata.Roles.Path),
+			zap.Int("count", roleMatcher.Count()))
 	}
 
 	// Initialize topology (optional)
@@ -111,6 +122,121 @@ func main() {
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Fatal-error propagation for CRITICAL components (loss collector, HTTP
+	// server). When a critical component dies, we record the first error, cancel
+	// the context to trigger graceful shutdown, and exit non-zero at the end so
+	// a supervisor (systemd Restart=on-failure) restarts us. Non-critical
+	// components (conntrack, bandwidth, latency, dns, discovery, pollers) only
+	// log and never call setFatal.
+	var (
+		fatalMu  sync.Mutex
+		fatalErr error
+	)
+	setFatal := func(err error) {
+		fatalMu.Lock()
+		if fatalErr == nil {
+			fatalErr = err
+		}
+		fatalMu.Unlock()
+		cancel()
+	}
+
+	// Create metrics exporter with topology and cardinality config.
+	exporter := metrics.NewExporterWithConfig(
+		cfg.Metrics.Name, locationMatcher, roleMatcher, logger,
+		prometheus.DefaultRegisterer,
+		metrics.CardinalityConfig{
+			Level:     cfg.Metrics.Cardinality.Level,
+			MaxSeries: cfg.Metrics.Cardinality.MaxSeries,
+		},
+	)
+	exporter.SetTopology(networkTopology)
+	// Periodic TTL cleanup: the raw CounterVec is registered (not the exporter),
+	// so scrapes never trigger Collect/cleanupOld — run a janitor instead.
+	exporter.StartJanitor(ctx, time.Minute)
+
+	// Create metadata status API
+	metadataAPI := metadata.NewMetadataStatusAPI()
+	metadataAPI.RegisterCounter("locations", locationMatcher)
+	metadataAPI.RegisterCounter("roles", roleMatcher)
+	// Topology uses DeviceCount() instead of Count(), wrap it
+	metadataAPI.RegisterCounter("topology", &topologyCounter{topology: networkTopology})
+
+	// Start HTTP pollers for metadata updates (if configured)
+	// Each poller runs independently and updates its file periodically
+	// First poll happens 30 seconds after startup, then at configured intervals
+	if cfg.Metadata.Locations.UpdateSource != nil {
+		locationsPoller := metadata.NewHTTPPoller(
+			metadata.HTTPPollerConfig{
+				Name:     "locations",
+				URL:      cfg.Metadata.Locations.UpdateSource.URL,
+				Interval: cfg.Metadata.Locations.UpdateSource.PollIntervalDuration(),
+				Timeout:  cfg.Metadata.Locations.UpdateSource.TimeoutDuration(),
+				FilePath: cfg.Metadata.Locations.Path,
+			},
+			logger,
+			prometheus.DefaultRegisterer,
+		)
+		locationsPoller.SetValidator(metadata.LocationsValidator)
+		locationsPoller.SetReloadFunc(func() error {
+			return locationMatcher.Reload(cfg.Metadata.Locations.Path)
+		})
+		metadataAPI.RegisterPoller("locations", locationsPoller)
+		go locationsPoller.Run(ctx)
+
+		logger.Info("HTTP update source enabled for locations",
+			zap.String("url", cfg.Metadata.Locations.UpdateSource.URL),
+			zap.Duration("interval", cfg.Metadata.Locations.UpdateSource.PollIntervalDuration()))
+	}
+
+	if cfg.Metadata.Roles.UpdateSource != nil {
+		rolesPoller := metadata.NewHTTPPoller(
+			metadata.HTTPPollerConfig{
+				Name:     "roles",
+				URL:      cfg.Metadata.Roles.UpdateSource.URL,
+				Interval: cfg.Metadata.Roles.UpdateSource.PollIntervalDuration(),
+				Timeout:  cfg.Metadata.Roles.UpdateSource.TimeoutDuration(),
+				FilePath: cfg.Metadata.Roles.Path,
+			},
+			logger,
+			prometheus.DefaultRegisterer,
+		)
+		rolesPoller.SetValidator(metadata.RolesValidator)
+		rolesPoller.SetReloadFunc(func() error {
+			return roleMatcher.Reload(cfg.Metadata.Roles.Path)
+		})
+		metadataAPI.RegisterPoller("roles", rolesPoller)
+		go rolesPoller.Run(ctx)
+
+		logger.Info("HTTP update source enabled for roles",
+			zap.String("url", cfg.Metadata.Roles.UpdateSource.URL),
+			zap.Duration("interval", cfg.Metadata.Roles.UpdateSource.PollIntervalDuration()))
+	}
+
+	if cfg.Metadata.Topology.UpdateSource != nil && cfg.Topology.Enabled {
+		topologyPoller := metadata.NewHTTPPoller(
+			metadata.HTTPPollerConfig{
+				Name:     "topology",
+				URL:      cfg.Metadata.Topology.UpdateSource.URL,
+				Interval: cfg.Metadata.Topology.UpdateSource.PollIntervalDuration(),
+				Timeout:  cfg.Metadata.Topology.UpdateSource.TimeoutDuration(),
+				FilePath: cfg.Metadata.Topology.Path,
+			},
+			logger,
+			prometheus.DefaultRegisterer,
+		)
+		topologyPoller.SetValidator(metadata.TopologyValidator)
+		topologyPoller.SetReloadFunc(func() error {
+			return networkTopology.Reload(cfg.Metadata.Topology.Path)
+		})
+		metadataAPI.RegisterPoller("topology", topologyPoller)
+		go topologyPoller.Run(ctx)
+
+		logger.Info("HTTP update source enabled for topology",
+			zap.String("url", cfg.Metadata.Topology.UpdateSource.URL),
+			zap.Duration("interval", cfg.Metadata.Topology.UpdateSource.PollIntervalDuration()))
+	}
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
@@ -138,10 +264,6 @@ func main() {
 			}
 		}
 	}()
-
-	// Create metrics exporter with topology
-	exporter := metrics.NewExporter(cfg.Metrics.Name, locationMatcher, roleMatcher, logger)
-	exporter.SetTopology(networkTopology)
 
 	// Create discovery service with traceroute
 	var discoveryService *discovery.DiscoveryService
@@ -175,11 +297,29 @@ func main() {
 			zap.String("mode", cfg.Discovery.Traceroute.Mode))
 	}
 
+	// Readiness state: /ready reports 200 only once the loss collector is
+	// actually consuming events, and flips back to 503 when it stops.
+	healthState := health.NewState()
+
+	// Create collector self-metrics
+	collectorMetrics := collector.NewCollectorMetrics(prometheus.DefaultRegisterer, logger)
+
 	// Start trace pipe collector
-	collector := collector.NewTracePipeCollector(cfg.Global.TracePipePath, exporter, logger)
+	collector := collector.NewTracePipeCollector(cfg.Global.TracePipePath, exporter, logger, collectorMetrics)
+	collector.SetReadyFunc(func() {
+		collectorMetrics.SetUp(true)
+		healthState.SetCollectorReady(true)
+	})
 	go func() {
-		if err := collector.Run(ctx); err != nil {
-			logger.Error("Collector error", zap.Error(err))
+		err := collector.Run(ctx)
+		// Collector stopped (error or shutdown): no longer collecting data.
+		collectorMetrics.SetUp(false)
+		healthState.SetCollectorReady(false)
+		if err != nil && err != context.Canceled {
+			// The loss collector is critical — its failure must take down the
+			// process so it gets restarted rather than running blind.
+			logger.Error("FATAL: loss collector stopped", zap.Error(err))
+			setFatal(err)
 		}
 	}()
 
@@ -255,47 +395,67 @@ func main() {
 	// Start HTTP server for metrics and API
 	mux := http.NewServeMux()
 
-	// Prometheus metrics endpoint
-	mux.Handle("/metrics", promhttp.HandlerFor(
+	// Helper to wrap handlers with optional auth
+	requireAuth := func(handler http.Handler) http.Handler {
+		if cfg.Global.AuthToken == "" {
+			return handler
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Use subtle constant-time comparison to prevent timing attacks
+			token := r.Header.Get("Authorization")
+			if token == "" {
+				token = r.URL.Query().Get("token")
+			}
+			if subtle.ConstantTimeCompare([]byte(token), []byte("Bearer "+cfg.Global.AuthToken)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			handler.ServeHTTP(w, r)
+		})
+	}
+
+	// Prometheus metrics endpoint (protected if auth token is set)
+	metricsHandler := promhttp.HandlerFor(
 		prometheus.DefaultGatherer,
 		promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
 		},
-	))
+	)
+	mux.Handle("/metrics", requireAuth(metricsHandler))
 
-	// Health and ready endpoints
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
+	// Health and ready endpoints (NEVER protected by auth).
+	// /health is liveness (always 200 while serving); /ready is readiness
+	// (200 only when the loss collector is running, else 503).
+	mux.HandleFunc("/health", healthState.LivenessHandler())
+	mux.HandleFunc("/ready", healthState.ReadinessHandler())
 
-	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
-
-	// Discovery API endpoints
+	// Discovery API endpoints (protected if auth token is set)
 	if discoveryService != nil {
 		discoveryMux := discoveryService.HTTPHandler()
-		mux.Handle("/api/v1/discover", discoveryMux)
-		mux.Handle("/api/v1/loss/top", discoveryMux)
+		mux.Handle("/api/v1/discover", requireAuth(discoveryMux))
+		mux.Handle("/api/v1/loss/top", requireAuth(discoveryMux))
 
 		logger.Info("Discovery API enabled",
 			zap.String("endpoints", "/api/v1/discover, /api/v1/loss/top"))
 	}
 
-	// Connection tracking API endpoints
+	// Metadata status API endpoint (protected if auth token is set)
+	mux.Handle("/api/v1/metadata/", requireAuth(metadataAPI.HTTPHandler()))
+	logger.Info("Metadata API enabled",
+		zap.String("endpoint", "/api/v1/metadata/status"))
+
+	// Connection tracking API endpoints (protected if auth token is set)
 	if connTracker != nil {
 		connAPI := conntrack.NewAPI(connTracker)
 		connMux := connAPI.HTTPHandler()
-		mux.Handle("/api/v1/conntrack/", connMux)
+		mux.Handle("/api/v1/conntrack/", requireAuth(connMux))
 
 		logger.Info("Connection tracking API enabled",
 			zap.String("endpoints", "/api/v1/conntrack/connections, /api/v1/conntrack/stats"))
 	}
 
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Global.MetricsPort),
+		Addr:         fmt.Sprintf("%s:%d", cfg.Global.MetricsAddr, cfg.Global.MetricsPort),
 		Handler:      mux,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -305,8 +465,10 @@ func main() {
 	go func() {
 		logger.Info("Starting HTTP server", zap.Int("port", cfg.Global.MetricsPort))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server error", zap.Error(err))
-			cancel()
+			// The HTTP server (metrics + API) is critical — bind failures etc.
+			// must take down the process.
+			logger.Error("FATAL: HTTP server error", zap.Error(err))
+			setFatal(err)
 		}
 	}()
 
@@ -386,6 +548,17 @@ func main() {
 	}
 
 	logger.Info("Network Monitor stopped")
+
+	// If a critical component failed, exit non-zero so a supervisor restarts us.
+	// os.Exit skips deferred logger.Sync(), so flush explicitly first.
+	fatalMu.Lock()
+	fe := fatalErr
+	fatalMu.Unlock()
+	if fe != nil {
+		logger.Error("Exiting with non-zero status due to fatal component failure", zap.Error(fe))
+		_ = logger.Sync()
+		os.Exit(1)
+	}
 }
 
 func initLogger(cfg *config.Config) (*zap.Logger, error) {
@@ -410,4 +583,16 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 	}
 
 	return zapCfg.Build()
+}
+
+// topologyCounter wraps topology.Topology to implement CounterProvider
+type topologyCounter struct {
+	topology *topology.Topology
+}
+
+func (t *topologyCounter) Count() int {
+	if t.topology == nil {
+		return 0
+	}
+	return t.topology.DeviceCount()
 }

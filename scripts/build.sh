@@ -94,7 +94,7 @@ echo -e "\n${YELLOW}Building binaries...${NC}"
 echo "  Building netmon..."
 go build -ldflags "${LDFLAGS}" -o "${OUTPUT_DIR}/netmon" ./cmd/netmon
 
-echo "  Building pktloss..."
+echo "  Building pktloss (EXPERIMENTAL - not for production)..."
 go build -ldflags "${LDFLAGS}" -o "${OUTPUT_DIR}/pktloss" ./cmd/pktloss
 
 echo "  Building conntrack..."

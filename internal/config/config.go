@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -28,19 +29,53 @@ type Config struct {
 type GlobalConfig struct {
 	TTLHours      int    `yaml:"ttl_hours"`
 	MetricsPort   int    `yaml:"metrics_port"`
+	MetricsAddr   string `yaml:"metrics_addr"` // Bind address (default: "0.0.0.0")
+	AuthToken     string `yaml:"auth_token"`   // Optional auth token for /metrics and /api/*
 	TracePipePath string `yaml:"trace_pipe_path"`
+}
+
+// MetadataSourceConfig описывает HTTP источник для обновления metadata
+type MetadataSourceConfig struct {
+	URL          string `yaml:"url"`
+	PollInterval string `yaml:"poll_interval"` // "20m", "1h"
+	Timeout      string `yaml:"timeout"`       // "10s"
+}
+
+// PollIntervalDuration возвращает интервал как time.Duration
+func (m *MetadataSourceConfig) PollIntervalDuration() time.Duration {
+	if m.PollInterval == "" {
+		return 20 * time.Minute // дефолт
+	}
+	d, err := time.ParseDuration(m.PollInterval)
+	if err != nil {
+		return 20 * time.Minute
+	}
+	return d
+}
+
+// TimeoutDuration возвращает timeout как time.Duration
+func (m *MetadataSourceConfig) TimeoutDuration() time.Duration {
+	if m.Timeout == "" {
+		return 10 * time.Second
+	}
+	d, err := time.ParseDuration(m.Timeout)
+	if err != nil {
+		return 10 * time.Second
+	}
+	return d
+}
+
+// FileMetadataConfig описывает файл + опциональный update source
+type FileMetadataConfig struct {
+	Path         string                `yaml:"path"`          // обязательный
+	UpdateSource *MetadataSourceConfig `yaml:"update_source"` // опционально
 }
 
 // MetadataConfig holds metadata source configuration
 type MetadataConfig struct {
-	Locations FileSourceConfig `yaml:"locations"`
-	Roles     FileSourceConfig `yaml:"roles"`
-}
-
-// FileSourceConfig holds file-based source configuration
-type FileSourceConfig struct {
-	Type string `yaml:"type"`
-	Path string `yaml:"path"`
+	Locations FileMetadataConfig `yaml:"locations"`
+	Roles     FileMetadataConfig `yaml:"roles"`
+	Topology  FileMetadataConfig `yaml:"topology"`
 }
 
 // DiscoveryConfig holds discovery settings
@@ -71,9 +106,22 @@ type TracerouteConfig struct {
 
 // MetricsConfig holds metrics settings
 type MetricsConfig struct {
-	Name           string   `yaml:"name"`
-	DefaultLabels  []string `yaml:"default_labels"`
-	OptionalLabels []string `yaml:"optional_labels"`
+	Name           string            `yaml:"name"`
+	DefaultLabels  []string          `yaml:"default_labels"`
+	OptionalLabels []string          `yaml:"optional_labels"`
+	Cardinality    CardinalityConfig `yaml:"cardinality"`
+}
+
+// CardinalityConfig controls the label granularity and the hard cap on the
+// number of active loss series exported to Prometheus.
+type CardinalityConfig struct {
+	// Level: "ip" | "role" | "network".
+	//   ip      — label every series with full src_ip/dst_ip (unbounded cardinality)
+	//   network — aggregate to /24 networks (no per-IP labels)
+	//   role    — aggregate to location/role/vrf (no IP, no network) [default]
+	Level string `yaml:"level"`
+	// MaxSeries caps the number of distinct active series. 0 = unlimited.
+	MaxSeries int `yaml:"max_series"`
 }
 
 // LoggingConfig holds logging settings
@@ -130,16 +178,18 @@ func DefaultConfig() *Config {
 		Global: GlobalConfig{
 			TTLHours:      3,
 			MetricsPort:   9876,
+			MetricsAddr:   "0.0.0.0",
 			TracePipePath: "/sys/kernel/tracing/trace_pipe",
 		},
 		Metadata: MetadataConfig{
-			Locations: FileSourceConfig{
-				Type: "file",
+			Locations: FileMetadataConfig{
 				Path: "locations.yaml",
 			},
-			Roles: FileSourceConfig{
-				Type: "file",
+			Roles: FileMetadataConfig{
 				Path: "roles.yaml",
+			},
+			Topology: FileMetadataConfig{
+				Path: "topology.yaml",
 			},
 		},
 		Discovery: DiscoveryConfig{
@@ -173,6 +223,10 @@ func DefaultConfig() *Config {
 				"dst_network",
 				"path_id",
 			},
+			Cardinality: CardinalityConfig{
+				Level:     "role",
+				MaxSeries: 10000,
+			},
 		},
 		Logging: LoggingConfig{
 			Level:      "info",
@@ -194,7 +248,6 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return default config if file doesn't exist
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("reading config file: %w", err)
@@ -207,6 +260,11 @@ func Load(path string) (*Config, error) {
 	// Resolve relative paths relative to config file directory
 	configDir := filepath.Dir(path)
 	cfg.resolveRelativePaths(configDir)
+
+	// Override auth token from environment variable if not set in config
+	if cfg.Global.AuthToken == "" {
+		cfg.Global.AuthToken = os.Getenv("NETMON_AUTH_TOKEN")
+	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -225,8 +283,11 @@ func (c *Config) resolveRelativePaths(configDir string) {
 	if c.Metadata.Roles.Path != "" && !filepath.IsAbs(c.Metadata.Roles.Path) {
 		c.Metadata.Roles.Path = filepath.Join(configDir, c.Metadata.Roles.Path)
 	}
+	if c.Metadata.Topology.Path != "" && !filepath.IsAbs(c.Metadata.Topology.Path) {
+		c.Metadata.Topology.Path = filepath.Join(configDir, c.Metadata.Topology.Path)
+	}
 
-	// Resolve topology path
+	// Resolve topology path (legacy TopologyConfig)
 	if c.Topology.Path != "" && !filepath.IsAbs(c.Topology.Path) {
 		c.Topology.Path = filepath.Join(configDir, c.Topology.Path)
 	}
@@ -246,6 +307,25 @@ func (c *Config) Validate() error {
 
 	if c.Global.TTLHours < 1 {
 		return fmt.Errorf("invalid ttl_hours: must be at least 1")
+	}
+
+	// Validate metrics bind address
+	if c.Global.MetricsAddr != "" {
+		if ip := net.ParseIP(c.Global.MetricsAddr); ip == nil {
+			return fmt.Errorf("invalid metrics_addr: %q is not a valid IP address", c.Global.MetricsAddr)
+		}
+	}
+
+	// Validate metrics cardinality settings
+	if c.Metrics.Cardinality.Level == "" {
+		c.Metrics.Cardinality.Level = "role" // default; keeps old configs working
+	}
+	validCardinalityLevels := map[string]bool{"ip": true, "role": true, "network": true}
+	if !validCardinalityLevels[c.Metrics.Cardinality.Level] {
+		return fmt.Errorf("invalid metrics.cardinality.level: %s (valid: ip, role, network)", c.Metrics.Cardinality.Level)
+	}
+	if c.Metrics.Cardinality.MaxSeries < 0 {
+		return fmt.Errorf("invalid metrics.cardinality.max_series: must be >= 0 (0 = unlimited)")
 	}
 
 	if c.Global.TracePipePath == "" {
@@ -288,14 +368,33 @@ func (c *Config) Validate() error {
 	if c.Metadata.Locations.Path == "" {
 		return fmt.Errorf("metadata.locations.path is required")
 	}
-
 	if c.Metadata.Roles.Path == "" {
 		return fmt.Errorf("metadata.roles.path is required")
 	}
+	if c.Metadata.Topology.Path == "" {
+		return fmt.Errorf("metadata.topology.path is required")
+	}
 
-	// Validate topology path if enabled
+	// Validate topology path if enabled (legacy TopologyConfig)
 	if c.Topology.Enabled && c.Topology.Path == "" {
 		return fmt.Errorf("topology.path is required when topology is enabled")
+	}
+
+	// Validate update sources if specified
+	if c.Metadata.Locations.UpdateSource != nil {
+		if c.Metadata.Locations.UpdateSource.URL == "" {
+			return fmt.Errorf("metadata.locations.update_source.url is required")
+		}
+	}
+	if c.Metadata.Roles.UpdateSource != nil {
+		if c.Metadata.Roles.UpdateSource.URL == "" {
+			return fmt.Errorf("metadata.roles.update_source.url is required")
+		}
+	}
+	if c.Metadata.Topology.UpdateSource != nil {
+		if c.Metadata.Topology.UpdateSource.URL == "" {
+			return fmt.Errorf("metadata.topology.update_source.url is required")
+		}
 	}
 
 	// Validate logging settings

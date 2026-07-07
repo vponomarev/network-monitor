@@ -1,6 +1,12 @@
 //go:build !linux
 // +build !linux
 
+// Package packetloss is EXPERIMENTAL and NOT production-ready.
+//
+// Its loss detection is a heuristic scrape of trace_pipe and does not produce
+// meaningful loss percentages. Do NOT enable it in production. Real TCP loss
+// metrics are produced by internal/collector + internal/metrics (see the
+// netmon binary). This package is kept only for experiments.
 package packetloss
 
 import (

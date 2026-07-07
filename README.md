@@ -12,6 +12,10 @@
 | **netmon** | TCP packet loss monitoring with path discovery | trace_pipe + traceroute |
 | **conntrack** | Connection tracking with eBPF | eBPF kprobes + tracepoints |
 
+> **Note:** The `pktloss` binary (in `cmd/pktloss/`) is **EXPERIMENTAL** and NOT production-ready.
+> It uses heuristic trace_pipe scraping and does not produce meaningful loss metrics.
+> For production TCP loss monitoring, use the **netmon** binary instead.
+
 ---
 
 ## 📋 Table of Contents
@@ -317,6 +321,49 @@ roles:
     role: dwh-lb
 ```
 
+### HTTP Update Source (Optional)
+
+Metadata files (locations, roles, topology) can be automatically updated from an HTTP endpoint:
+
+```yaml
+metadata:
+  locations:
+    path: /etc/netmon/locations.yaml
+    update_source:
+      url: https://config.example.com/locations.yaml
+      poll_interval: 20m  # Check every 20 minutes (default)
+      timeout: 10s        # HTTP request timeout
+      
+  roles:
+    path: /etc/netmon/roles.yaml
+    update_source:
+      url: https://config.example.com/roles.yaml
+      poll_interval: 20m
+      
+  topology:
+    path: /etc/netmon/topology.yaml
+    update_source:
+      url: https://config.example.com/topology.yaml
+      poll_interval: 60m  # Topology changes rarely
+```
+
+**Behavior:**
+1. **Startup**: Local file is required (fail if missing)
+2. **First poll**: 30 seconds after startup
+3. **Subsequent polls**: Every `poll_interval` (default: 20m)
+4. **Validation**: Type-specific validation before writing
+5. **Auto-reload**: Memory updated automatically after successful file update
+6. **Atomic writes**: File updated atomically (write + rename)
+
+**Metrics:**
+```prometheus
+# Update statistics per source
+metadata_update_total{source="locations"}
+metadata_update_errors_total{source="locations"}
+metadata_last_update_timestamp_seconds{source="locations"}
+metadata_last_hash{source="locations"}
+```
+
 See [Configuration Guide](docs/configuration.md) for all options.
 
 ---
@@ -340,6 +387,39 @@ See [Configuration Guide](docs/configuration.md) for all options.
 |----------|--------|-------------|
 | `/api/v1/conntrack/connections` | GET | List active connections |
 | `/api/v1/conntrack/stats` | GET | Connection statistics |
+
+### Metadata Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/metadata/status` | GET | Status of metadata sources (locations, roles, topology) |
+
+**Example response:**
+```json
+{
+  "sources": {
+    "locations": {
+      "file_path": "/etc/netmon/locations.yaml",
+      "http_url": "https://config.example.com/locations.yaml",
+      "last_check": "2026-05-23T12:00:00Z",
+      "last_hash": "a1b2c3d4",
+      "update_success": true,
+      "entries_count": 15,
+      "enabled": true
+    },
+    "roles": {
+      "file_path": "/etc/netmon/roles.yaml",
+      "entries_count": 20,
+      "enabled": false
+    },
+    "topology": {
+      "file_path": "/etc/netmon/topology.yaml",
+      "entries_count": 5,
+      "enabled": false
+    }
+  }
+}
+```
 
 See [Discovery API Reference](docs/DISCOVERY_API.md) for details.
 

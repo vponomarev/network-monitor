@@ -35,7 +35,7 @@ func TestCollector_TracePipe_Integration(t *testing.T) {
 	logger := zap.NewNop()
 	exporter := &mockExporter{}
 
-	collector := collector.NewTracePipeCollector(tracePipePath, exporter, logger)
+	collector := collector.NewTracePipeCollector(tracePipePath, exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
