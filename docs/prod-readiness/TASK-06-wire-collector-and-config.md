@@ -1,5 +1,10 @@
 # TASK-06 — Интеграция коллектора в main.go + переключатель источника
 
+> ✅ **СТАТУС: ВЫПОЛНЕНО** (основная сессия). Реализовано:
+> - `global.loss_source: ebpf|tracepipe` в конфиге (дефолт `ebpf`, пустое → `ebpf`), валидация; пример в `config.example.yaml`.
+> - `main.go`: switch по `loss_source` через локальный интерфейс `lossCollector`; общий `SetReadyFunc`/`SetUp`/`setFatal`. `CheckAndWarnTracepoint` только для `tracepipe`. `source` в self-метрике = фактический источник (`ebpf`/`trace_pipe`).
+> - **E2E на 4 ядрах (5.15/6.1/6.8/6.12):** обе ветки → `netmon_tcp_loss_total{src_role=…,dst_role=…}` растёт, `read==parsed`, `parse_errors=0`, `collector_up=1`, `/ready=200`.
+
 **Метка исполнителя:** 🧠 strong
 **Зависит от:** TASK-05
 **Оценка:** ~0.5 дня

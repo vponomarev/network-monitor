@@ -14,8 +14,14 @@ type CollectorMetrics struct {
 	sourceInfo   prometheus.Gauge
 }
 
-// NewCollectorMetrics creates and registers collector metrics
-func NewCollectorMetrics(reg prometheus.Registerer, logger *zap.Logger) *CollectorMetrics {
+// NewCollectorMetrics creates and registers collector metrics. An optional
+// source label ("trace_pipe" or "ebpf") sets netmon_loss_source_info; it
+// defaults to "trace_pipe" when omitted (backward compatible).
+func NewCollectorMetrics(reg prometheus.Registerer, logger *zap.Logger, source ...string) *CollectorMetrics {
+	src := "trace_pipe"
+	if len(source) > 0 && source[0] != "" {
+		src = source[0]
+	}
 	m := &CollectorMetrics{
 		up: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "netmon_loss_collector_up",
@@ -35,9 +41,9 @@ func NewCollectorMetrics(reg prometheus.Registerer, logger *zap.Logger) *Collect
 		}),
 		sourceInfo: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "netmon_loss_source_info",
-			Help: "Information about the loss data source (1 = trace_pipe, 0 = other)",
+			Help: "Information about the loss data source (labelled by source; value always 1)",
 			ConstLabels: map[string]string{
-				"source": "trace_pipe",
+				"source": src,
 			},
 		}),
 	}
@@ -45,11 +51,11 @@ func NewCollectorMetrics(reg prometheus.Registerer, logger *zap.Logger) *Collect
 	// Register metrics
 	reg.MustRegister(m.up, m.eventsRead, m.eventsParsed, m.parseErrors, m.sourceInfo)
 
-	// Set source info to 1 (trace_pipe)
+	// Set source info to 1
 	m.sourceInfo.Set(1)
 
 	logger.Info("Collector self-metrics registered",
-		zap.String("source", "trace_pipe"))
+		zap.String("source", src))
 
 	return m
 }

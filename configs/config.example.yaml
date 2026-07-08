@@ -8,6 +8,11 @@ global:
   # auth_token: ""            # Optional: Bearer token for /metrics and /api/* endpoints
                               # Can also be set via NETMON_AUTH_TOKEN environment variable
                               # /health and /ready are NEVER protected
+  # TCP-loss data source:
+  #   ebpf      — eBPF tracepoint tcp_retransmit_skb via ring buffer (DEFAULT, production)
+  #   tracepipe — legacy text scrape of trace_pipe (fallback/debug; single global consumer)
+  loss_source: ebpf
+  # trace_pipe_path is only used when loss_source: tracepipe
   trace_pipe_path: /sys/kernel/tracing/trace_pipe
 
 metadata:

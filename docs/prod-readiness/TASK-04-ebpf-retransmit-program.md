@@ -1,5 +1,11 @@
 # TASK-04 — eBPF-программа на tcp_retransmit_skb с ring buffer
 
+> ✅ **СТАТУС: ВЫПОЛНЕНО** (основная сессия). Реализовано:
+> - `bpf/tcploss.bpf.c` — `SEC("tracepoint/tcp/tcp_retransmit_skb")`, ring buffer `loss_events` (256KiB), IPv4-only (`family==AF_INET`), без `bpf_printk`.
+> - Структура `tcploss_event` (48 байт, фикс. layout) читается через CO-RE (`trace_event_raw_tcp_event_sk_skb`, добавлен в `bpf/vmlinux.h`; имена полей совпадают с BTF ядра → офсеты релоцируются). Порты host-order, адреса — network-order в IPv4-mapped.
+> - `bpf/Makefile`: `tcploss.bpf.c` добавлен в `SRCS`; собран clang 19 на debian13; `.o` (5480 б) лежит в `pkg/embedded/bpf/tcploss.bpf.o`.
+> - **Cross-kernel load-тест (bpftool): OK на 5.15, 6.1, 6.8, 6.12** — одинаковый prog tag, CO-RE релоцирует под каждое ядро.
+
 **Метка исполнителя:** 🧠 strong 🐧 linux-host
 **Зависит от:** нет (но результат потребляется TASK-05)
 **Оценка:** 1–2 дня (включая проверку на реальных ядрах)

@@ -41,9 +41,9 @@
 - [`TASK-03`](TASK-03-remove-fake-packetloss.md) — ✅ **DONE** (qwen) — Изолирован нерабочий модуль `internal/packetloss`.
 
 ### Фаза 1 — Production-путь сбора потерь (eBPF вместо trace_pipe)
-- [`TASK-04`](TASK-04-ebpf-retransmit-program.md) — 🧠 strong 🐧 linux-host — eBPF-программа на трейспоинт `tcp:tcp_retransmit_skb` с ring buffer.
-- [`TASK-05`](TASK-05-ebpf-loss-collector.md) — 🧠 strong 🐧 linux-host — Go-коллектор поверх ring buffer (замена парсера trace_pipe).
-- [`TASK-06`](TASK-06-wire-collector-and-config.md) — 🧠 strong — Интеграция коллектора в `main.go` + переключатель источника в конфиге.
+- [`TASK-04`](TASK-04-ebpf-retransmit-program.md) — ✅ **DONE** (я) — `bpf/tcploss.bpf.c` на трейспоинт `tcp/tcp_retransmit_skb` + ring buffer `loss_events`, IPv4, без `bpf_printk`. Собран, `.o` в `pkg/embedded/bpf/`. **Load-тест пройден на 4 ядрах** (5.15/6.1/6.8/6.12, CO-RE).
+- [`TASK-05`](TASK-05-ebpf-loss-collector.md) — ✅ **DONE** (я) — `internal/losscollector` (ebpf_linux.go + _other.go stub), ringbuf-reader без busy-loop (`ErrClosed`), парсинг с валидацией размера, self-метрики. Unit-тесты (linux) зелёные.
+- [`TASK-06`](TASK-06-wire-collector-and-config.md) — ✅ **DONE** (я) — `global.loss_source: ebpf|tracepipe` (дефолт ebpf); проводка в `main.go`. **E2E на 4 ядрах**: обе ветки дают `netmon_tcp_loss_total` с разметкой по ролям, `read==parsed`, `parse_errors=0`.
 
 ### Фаза 2 — Надёжность и наблюдаемость
 - [`TASK-07`](TASK-07-real-health-ready.md) — ✅ **DONE** — Реальные `/health` и `/ready`. Реализовано и развязано от TASK-06 (готовность привязана к текущему коллектору; `internal/health` переиспользуется eBPF-коллектором позже).

@@ -30,7 +30,7 @@ CFLAGS += -I.
 # No compile-time flags needed
 
 # Source and output files
-SRCS = conntrack.bpf.c
+SRCS = conntrack.bpf.c tcploss.bpf.c
 OBJS = $(SRCS:.c=.o)
 SKELS = $(SRCS:.c=.skel.h)
 

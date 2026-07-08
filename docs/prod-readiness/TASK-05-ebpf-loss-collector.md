@@ -1,5 +1,13 @@
 # TASK-05 — Go-коллектор потерь поверх eBPF ring buffer
 
+> ✅ **СТАТУС: ВЫПОЛНЕНО** (основная сессия). Реализовано:
+> - `internal/losscollector/ebpf_linux.go` (build tag linux) + `ebpf_other.go` (stub для сборки на macOS).
+> - Грузит embedded `.o` (`embedded.GetTCPLossEBPFProgram`), аттач `link.Tracepoint("tcp","tcp_retransmit_skb")`, ringbuf-reader на `loss_events`.
+> - Корректный выход из цикла: reader закрывается по `ctx.Done`, `errors.Is(ErrClosed)` → return, backoff на прочих ошибках (нет busy-loop).
+> - `validateBpfLossEvent()` (размер 48 / офсеты); парсинг → `RecordRetransmit`; IPv4-mapped → dotted-quad.
+> - Self-метрики через интерфейс `Metrics` (duck-typing на `*collector.CollectorMetrics`, без импорта collector) + atomic-геттеры для тестов.
+> - Unit-тесты (linux): `validateBpfLossEvent`, парсинг валидного/короткого/не-IPv4 события — зелёные на debian13.
+
 **Метка исполнителя:** 🧠 strong 🐧 linux-host
 **Зависит от:** TASK-04
 **Оценка:** 1–2 дня

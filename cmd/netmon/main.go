@@ -22,6 +22,7 @@ import (
 	"github.com/vponomarev/network-monitor/internal/dns"
 	"github.com/vponomarev/network-monitor/internal/health"
 	"github.com/vponomarev/network-monitor/internal/latency"
+	"github.com/vponomarev/network-monitor/internal/losscollector"
 	"github.com/vponomarev/network-monitor/internal/metadata"
 	"github.com/vponomarev/network-monitor/internal/metrics"
 	"github.com/vponomarev/network-monitor/internal/topology"
@@ -74,8 +75,11 @@ func main() {
 	}
 	defer logger.Sync()
 
-	// Check if tracing is enabled (warn if not)
-	collector.CheckAndWarnTracepoint(logger, collector.GetTracepointEnablePath())
+	// Check if tracing is enabled (warn if not) — only relevant for the legacy
+	// trace_pipe loss source; the eBPF source does not use the text tracepoint.
+	if cfg.Global.LossSource == "tracepipe" {
+		collector.CheckAndWarnTracepoint(logger, collector.GetTracepointEnablePath())
+	}
 
 	logger.Info("Starting Network Monitor",
 		zap.String("version", Version),
@@ -301,27 +305,52 @@ func main() {
 	// actually consuming events, and flips back to 503 when it stops.
 	healthState := health.NewState()
 
-	// Create collector self-metrics
-	collectorMetrics := collector.NewCollectorMetrics(prometheus.DefaultRegisterer, logger)
+	// Select the TCP-loss data source: eBPF tracepoint (production) or the
+	// legacy trace_pipe text scraper (fallback/debug).
+	type lossCollector interface {
+		Run(ctx context.Context) error
+		SetReadyFunc(func())
+	}
+	var (
+		lc               lossCollector
+		collectorMetrics *collector.CollectorMetrics
+	)
 
-	// Start trace pipe collector
-	collector := collector.NewTracePipeCollector(cfg.Global.TracePipePath, exporter, logger, collectorMetrics)
-	collector.SetReadyFunc(func() {
-		collectorMetrics.SetUp(true)
-		healthState.SetCollectorReady(true)
-	})
-	go func() {
-		err := collector.Run(ctx)
-		// Collector stopped (error or shutdown): no longer collecting data.
-		collectorMetrics.SetUp(false)
-		healthState.SetCollectorReady(false)
-		if err != nil && err != context.Canceled {
-			// The loss collector is critical — its failure must take down the
-			// process so it gets restarted rather than running blind.
-			logger.Error("FATAL: loss collector stopped", zap.Error(err))
+	switch cfg.Global.LossSource {
+	case "tracepipe":
+		logger.Warn("Using legacy trace_pipe loss source (not recommended for production)")
+		collectorMetrics = collector.NewCollectorMetrics(prometheus.DefaultRegisterer, logger, "trace_pipe")
+		lc = collector.NewTracePipeCollector(cfg.Global.TracePipePath, exporter, logger, collectorMetrics)
+	default: // "ebpf"
+		collectorMetrics = collector.NewCollectorMetrics(prometheus.DefaultRegisterer, logger, "ebpf")
+		ec, err := losscollector.NewEBPFLossCollector(exporter, logger, losscollector.Options{})
+		if err != nil {
+			logger.Error("FATAL: failed to init eBPF loss collector", zap.Error(err))
 			setFatal(err)
+		} else {
+			ec.SetMetrics(collectorMetrics)
+			lc = ec
 		}
-	}()
+	}
+
+	if lc != nil {
+		lc.SetReadyFunc(func() {
+			collectorMetrics.SetUp(true)
+			healthState.SetCollectorReady(true)
+		})
+		go func() {
+			err := lc.Run(ctx)
+			// Collector stopped (error or shutdown): no longer collecting data.
+			collectorMetrics.SetUp(false)
+			healthState.SetCollectorReady(false)
+			if err != nil && err != context.Canceled {
+				// The loss collector is critical — its failure must take down the
+				// process so it gets restarted rather than running blind.
+				logger.Error("FATAL: loss collector stopped", zap.Error(err))
+				setFatal(err)
+			}
+		}()
+	}
 
 	// Start connection tracker (Linux only)
 	var connTracker *conntrack.Tracker
@@ -474,6 +503,7 @@ func main() {
 
 	logger.Info("Network Monitor started",
 		zap.Int("port", cfg.Global.MetricsPort),
+		zap.String("loss_source", cfg.Global.LossSource),
 		zap.String("trace_pipe", cfg.Global.TracePipePath),
 		zap.Bool("discovery", cfg.Discovery.Traceroute.Enabled),
 		zap.Bool("bandwidth", cfg.Bandwidth.Enabled),

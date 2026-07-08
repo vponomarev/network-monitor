@@ -301,4 +301,22 @@ struct trace_event_raw_inet_sock_set_state {
     __u32 daddr_v6[4];
 };
 
+/* tcp_event_sk_skb class — used by tracepoint/tcp/tcp_retransmit_skb.
+ * Field names match kernel BTF so CO-RE relocates offsets per kernel.
+ * ports (sport/dport) are host byte order; saddr/daddr are network-order bytes. */
+struct trace_event_raw_tcp_event_sk_skb {
+    struct trace_entry ent;
+    const void *skbaddr;
+    const void *skaddr;
+    int state;
+    __u16 sport;
+    __u16 dport;
+    __u16 family;
+    __u8 saddr[4];
+    __u8 daddr[4];
+    __u8 saddr_v6[16];
+    __u8 daddr_v6[16];
+    char __data[0];
+};
+
 #endif /* __VMLINUX_H__ */

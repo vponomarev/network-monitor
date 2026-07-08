@@ -32,6 +32,10 @@ type GlobalConfig struct {
 	MetricsAddr   string `yaml:"metrics_addr"` // Bind address (default: "0.0.0.0")
 	AuthToken     string `yaml:"auth_token"`   // Optional auth token for /metrics and /api/*
 	TracePipePath string `yaml:"trace_pipe_path"`
+	// LossSource selects the TCP-loss data source:
+	//   "ebpf"      — eBPF tracepoint tcp_retransmit_skb via ring buffer (default, production)
+	//   "tracepipe" — legacy text scrape of trace_pipe (fallback/debug)
+	LossSource string `yaml:"loss_source"`
 }
 
 // MetadataSourceConfig описывает HTTP источник для обновления metadata
@@ -180,6 +184,7 @@ func DefaultConfig() *Config {
 			MetricsPort:   9876,
 			MetricsAddr:   "0.0.0.0",
 			TracePipePath: "/sys/kernel/tracing/trace_pipe",
+			LossSource:    "ebpf",
 		},
 		Metadata: MetadataConfig{
 			Locations: FileMetadataConfig{
@@ -330,6 +335,15 @@ func (c *Config) Validate() error {
 
 	if c.Global.TracePipePath == "" {
 		return fmt.Errorf("trace_pipe_path is required")
+	}
+
+	// Validate loss source (empty defaults to ebpf for backward compatibility)
+	if c.Global.LossSource == "" {
+		c.Global.LossSource = "ebpf"
+	}
+	validLossSources := map[string]bool{"ebpf": true, "tracepipe": true}
+	if !validLossSources[c.Global.LossSource] {
+		return fmt.Errorf("invalid loss_source: %s (valid: ebpf, tracepipe)", c.Global.LossSource)
 	}
 
 	// Validate discovery settings
