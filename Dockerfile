@@ -32,13 +32,16 @@ COPY . .
 # =============================================================================
 FROM base AS bpf-builder
 
-# Install eBPF build dependencies
+# Install eBPF build dependencies.
+# libbpf-dev provides bpf/bpf_helpers.h, which conntrack.bpf.c / tcploss.bpf.c
+# include; without it `make -C bpf all` fails with "'bpf/bpf_helpers.h' file not found".
 RUN apk add --no-cache \
     clang \
     llvm \
     elfutils-dev \
     zlib-dev \
-    linux-headers
+    linux-headers \
+    libbpf-dev
 
 WORKDIR /build/bpf
 
