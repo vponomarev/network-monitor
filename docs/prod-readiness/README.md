@@ -56,7 +56,7 @@
 
 ### Фаза 4 — Сборка, CI, документация
 - [`TASK-12`](TASK-12-ci-ebpf-build-and-hygiene.md) — ✅ **DONE** (я) — `ebpf-build.yml` переписан: build из исходников + smoke-load `tcploss.bpf.o` на ядре раннера + struct-check. `release.yml` пересобирает eBPF перед `go build` (нет stale embed). Бинарники (`netmon`, `dist/`) убраны из git, `.gitignore` дополнен. Побочно: починен красный `ci.yml` (устаревший conntrack-тест) и задокументирован CO-RE-баг conntrack на новых ядрах ([[APPENDIX-conntrack-later]] C-7/C-8).
-- [`TASK-13`](TASK-13-prod-docs.md) — 👷 qwen-ok — Документация прод-развёртывания (systemd, capabilities, требования к ядру/BTF) + описание разметки ролей.
+- [`TASK-13`](TASK-13-prod-docs.md) — ✅ **DONE** (я) — Документация прод-развёртывания (`docs/PRODUCTION_en.md` + `_ru.md`) выверена по реальному коду: набор меток по уровням кардинальности (`role`/`network`/`ip`), имена метрик, ядро **5.8+** (проверено 5.15/6.1/6.8/6.12). **Ключевая находка:** hardened-юнит с `CAP_BPF CAP_PERFMON` НЕ делает attach трейспоинта (`perf_event_open` EPERM при `perf_event_paranoid>1`) — рекомендуемый набор изменён на `CAP_SYS_ADMIN CAP_NET_RAW`, проверено на debian13 (6.12): юнит `active`, `/ready`=200, `netmon_loss_collector_up 1`.
 
 ### Дополнительные задачи
 - [`TASK-14`](TASK-14-gofmt-hygiene.md) — ✅ **DONE** (qwen) — Репозиторий приведён к `gofmt` (10 файлов). `gofmt -l .` пуст.

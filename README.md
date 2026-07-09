@@ -516,6 +516,15 @@ netmon_dns_latency_seconds{domain="google.com"}
 
 ## 📚 Documentation
 
+### Production Deployment
+
+| Document | Description |
+|----------|-------------|
+| **[PRODUCTION_en.md](docs/PRODUCTION_en.md)** | 🏭 Production deployment guide (eBPF, systemd, capabilities, metrics, alerts) |
+| **[PRODUCTION_ru.md](docs/PRODUCTION_ru.md)** | 🏭 Руководство по развёртыванию в продакшене (eBPF, systemd, capabilities, метрики, алерты) |
+
+### General Documentation
+
 | Document | Description |
 |----------|-------------|
 | **[QUICKSTART.md](QUICKSTART.md)** | 🚀 Быстрый старт — установка и запуск |

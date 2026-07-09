@@ -1,6 +1,25 @@
 # TASK-13 — Документация production-развёртывания
 
-**Метка исполнителя:** 👷 qwen-ok
+> ✅ **СТАТУС: ВЫПОЛНЕНО** (основная сессия). `docs/PRODUCTION_en.md` и
+> `docs/PRODUCTION_ru.md` выверены по реальному коду; `packaging/netmon.service`
+> исправлен; ссылки добавлены в корневой `README.md`.
+>
+> **Ключевая находка (проверено на debian13, ядро 6.12):** hardened-юнит с
+> `CAP_BPF CAP_PERFMON CAP_NET_RAW` НЕ делает attach трейспоинта
+> `tcp_retransmit_skb` — `link.Tracepoint` → `perf_event_open` возвращает EPERM при
+> `kernel.perf_event_paranoid > 1` (дефолт Debian/Ubuntu 3/4). Программа грузится
+> (CAP_BPF), но не attach'ится. Прежние E2E проходили только потому, что бинарь
+> запускался неограниченным root. Рекомендуемый набор изменён на
+> **`CAP_SYS_ADMIN CAP_NET_RAW`** (split-набор оставлен опциональной least-privilege
+> альтернативой с предупреждением). Проверено установкой реального юнита:
+> `systemctl is-active`=`active`, `/ready`=200, `netmon_loss_collector_up 1`,
+> CapEff/CapBnd = `0x202000` (CAP_SYS_ADMIN + CAP_NET_RAW).
+>
+> Также в `_ru.md` исправлено: имя метрики `netmon_loss_parse_errors_total`,
+> порог ядра `5.8+`, метки по уровням кардинальности (`vrf` вместо ложного
+> `network` на уровне `role`), добавлен алерт `NetmonReadNotParsed`.
+
+**Метка исполнителя:** 👷 qwen-ok → 🧠 strong 🐧 linux-host (из-за находки по capabilities)
 **Зависит от:** желательно после TASK-06, TASK-10, TASK-11 (чтобы документировать финальные конфиг-опции)
 **Оценка:** ~0.5 дня
 
