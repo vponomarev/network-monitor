@@ -39,7 +39,32 @@ eBPF-программы и парсинга).
 это может незаметно подменить реальные данные фейковыми. Рассмотреть: в прод-режиме
 при недоступности eBPF — ошибка/`up=0`, а не тихая симуляция.
 
+## C-7. conntrack.bpf.o не грузится на новых ядрах (CO-RE relocation)
+Обнаружено при работе над TASK-12 (smoke-load на ядре 6.12). `bpftool prog loadall
+bpf/conntrack.bpf.o` падает:
+```
+<invalid CO-RE relocation>
+failed to resolve CO-RE relocation <byte_off> [48] struct trace_event_raw_inet_sock_set_state.saddr
+libbpf: prog 'trace_outgoing': failed to load: -22
+```
+Причина: ручная структура `trace_event_raw_inet_sock_set_state` в `bpf/vmlinux.h`
+объявляет все поля как `__u32` (oldstate/newstate/sport/dport/family/protocol/saddr/…),
+а реальная BTF ядра имеет другие типы/офсеты (`__u16 sport/dport/family/protocol`,
+`__u8 saddr[4]`), поэтому CO-RE не может релоцировать офсет `saddr`. На старых ядрах
+проходило, на 6.8/6.12 — нет.
+**Как чинить:** объявить структуру с корректными типами (как сделано для
+`trace_event_raw_tcp_event_sk_skb` в TASK-04) ИЛИ генерировать полный `vmlinux.h`
+через `bpftool btf dump`. После фикса — smoke-load conntrack в `ebpf-build.yml`
+сделать блокирующим (сейчас `continue-on-error`).
+
+## C-8. (ИСПРАВЛЕНО в TASK-12) устаревший тест conntrack
+`conntrack_linux_test.go::TestTracker_connectionKey` вызывал несуществующий
+`tracker.connectionKey` → тест-пакет conntrack не компилировался на Linux (на macOS
+скрыто build-тегом), из-за чего job `test` в `ci.yml` был красным. Исправлено:
+вызов заменён на свободную функцию `makeConnectionKey(...)`.
+
 ---
 
-> Приоритет при возврате к conntrack: C-2 и C-1 (стабильность/производительность),
+> Приоритет при возврате к conntrack: **C-7** (переносимость eBPF — блокер для
+> conntrack на новых ядрах), C-2 и C-1 (стабильность/производительность),
 > затем C-4 (наблюдаемость), затем C-3, C-6, C-5.

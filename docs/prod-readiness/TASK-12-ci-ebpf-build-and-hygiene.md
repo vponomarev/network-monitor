@@ -1,5 +1,13 @@
 # TASK-12 — CI-сборка eBPF + smoke-load, гигиена репозитория
 
+> ✅ **СТАТУС: ВЫПОЛНЕНО** (основная сессия). Реализовано и проверено на реальных ядрах:
+> - `.github/workflows/ebpf-build.yml` переписан: toolchain → `make -C bpf all` (явный `all`, не bare `make`, который регенерит `vmlinux.h`) → сверка embedded `.o` (advisory `::warning::`, т.к. релиз пересобирает) → **smoke-load `tcploss.bpf.o`** через bpftool на ядре раннера (verifier+CO-RE, блокирующе) → conntrack load информационно (`continue-on-error`) → struct-check `go test -run Validate\|HandleRecord ./internal/losscollector/...`.
+> - `.github/workflows/release.yml`: `build-netmon` теперь пересобирает eBPF и копирует в `pkg/embedded/bpf/` перед `go build` — релиз не embed'ит устаревший `.o`.
+> - Гигиена: `git rm --cached netmon dist/*`; `.gitignore` дополнен (`dist/`, `/netmon`, `/conntrack`, `/pktloss`). Embedded `.o` (`pkg/embedded/bpf/*.o`) остаются в git.
+> - **Побочно:** починен красный job `test` в `ci.yml` — устаревший `conntrack_linux_test.go` (несуществующие `tracker.connectionKey`/`sendEvent`/`simulateEvents(ctx)`, канал теперь `*Connection`); `connectionKey`→`makeConnectionKey`, два obsolete-теста удалены. Полная `ci.yml`-команда `test` зелёная на Linux (все пакеты `ok`).
+> - **Найден отложенный баг:** `conntrack.bpf.o` не грузится на 6.8/6.12 (CO-RE `trace_event_raw_inet_sock_set_state.saddr`) → [[APPENDIX-conntrack-later]] C-7.
+> - Проверено на debian13 (6.12): `make all`, copy, bpftool load `tcploss.bpf.o`, `go test -run` losscollector, полная `ci.yml`-команда `test`.
+
 **Метка исполнителя:** 🧠 strong 🐧 linux-host
 **Зависит от:** TASK-04 (для сборки tcploss.bpf.o)
 **Оценка:** ~1 день

@@ -96,6 +96,16 @@ jobs:
         run: |
           go mod download
 
+      - name: Rebuild & embed eBPF objects
+        # netmon embeds pkg/embedded/bpf/*.o via //go:embed. Rebuild from source
+        # and refresh the embed location so releases never ship a stale eBPF
+        # object that lags behind bpf/*.c.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev linux-headers-$(uname -r)
+          make -C bpf all
+          cp bpf/conntrack.bpf.o bpf/tcploss.bpf.o pkg/embedded/bpf/
+
       - name: Build binary
         env:
           VERSION: ${{ needs.validate.outputs.version }}

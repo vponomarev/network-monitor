@@ -55,7 +55,7 @@
 - [`TASK-11`](TASK-11-http-bind-and-auth.md) — ✅ **DONE** (qwen) — `metrics_addr` (валидация IP) + `auth_token` (env `NETMON_AUTH_TOKEN`, `subtle.ConstantTimeCompare`); `/metrics` и `/api/*` под auth, `/health`+`/ready` — нет.
 
 ### Фаза 4 — Сборка, CI, документация
-- [`TASK-12`](TASK-12-ci-ebpf-build-and-hygiene.md) — 🧠 strong 🐧 linux-host — CI-сборка eBPF `.o` + smoke-load; убрать бинарники из git.
+- [`TASK-12`](TASK-12-ci-ebpf-build-and-hygiene.md) — ✅ **DONE** (я) — `ebpf-build.yml` переписан: build из исходников + smoke-load `tcploss.bpf.o` на ядре раннера + struct-check. `release.yml` пересобирает eBPF перед `go build` (нет stale embed). Бинарники (`netmon`, `dist/`) убраны из git, `.gitignore` дополнен. Побочно: починен красный `ci.yml` (устаревший conntrack-тест) и задокументирован CO-RE-баг conntrack на новых ядрах ([[APPENDIX-conntrack-later]] C-7/C-8).
 - [`TASK-13`](TASK-13-prod-docs.md) — 👷 qwen-ok — Документация прод-развёртывания (systemd, capabilities, требования к ядру/BTF) + описание разметки ролей.
 
 ### Дополнительные задачи

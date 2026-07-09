@@ -1,49 +1,107 @@
-name: eBPF Build
+name: eBPF Build & Verify
 
 on:
   push:
     branches: [main, master]
     paths:
       - 'bpf/**'
-      - '**.c'
-      - '**.h'
+      - 'pkg/embedded/**'
+      - 'internal/losscollector/**'
+      - 'internal/conntrack/**'
+      - '.github/workflows/ebpf-build.yml'
   pull_request:
     branches: [main, master]
     paths:
       - 'bpf/**'
-      - '**.c'
-      - '**.h'
+      - 'pkg/embedded/**'
+      - 'internal/losscollector/**'
+      - 'internal/conntrack/**'
+      - '.github/workflows/ebpf-build.yml'
+
+env:
+  GO_VERSION: '1.24'
 
 jobs:
-  build-ebpf:
+  # Build the eBPF objects from source, verify they load on the runner kernel,
+  # and confirm the Go event structs still match the compiled C structs.
+  build-and-verify:
+    name: Build, smoke-load & struct-check
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Install eBPF toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            clang \
-            llvm \
-            libbpf-dev \
-            linux-headers-$(uname -r) \
-            linux-tools-generic
-          
-          # bpftool is included in linux-tools-generic
-          sudo ln -sf /usr/lib/linux-tools/generic/bpftool /usr/local/bin/bpftool || true
+            clang llvm libbpf-dev \
+            linux-headers-$(uname -r) linux-tools-$(uname -r) linux-tools-generic
+          # bpftool: prefer the kernel-matched one, fall back to generic symlink
+          if ! command -v bpftool >/dev/null; then
+            sudo ln -sf /usr/lib/linux-tools/*/bpftool /usr/local/bin/bpftool || true
+          fi
+          clang --version
+          bpftool version
 
-      - name: Build eBPF programs
-        run: |
-          cd bpf
-          make
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
-      - name: Verify eBPF objects
+      - name: Build eBPF objects from source
         run: |
+          # NOTE: use the explicit `all` target — bare `make` regenerates
+          # vmlinux.h. We build against the committed (trimmed) bpf/vmlinux.h.
+          make -C bpf all
+          echo "--- built objects ---"
           ls -la bpf/*.o
           file bpf/*.o
+
+      - name: Verify committed embedded objects are not stale
+        run: |
+          # Releases rebuild eBPF from source, so a byte diff here is advisory,
+          # not fatal (compiler versions differ). Warn loudly if it drifts so a
+          # maintainer refreshes pkg/embedded/bpf/*.o.
+          cp bpf/conntrack.bpf.o bpf/tcploss.bpf.o pkg/embedded/bpf/
+          if ! git diff --quiet -- pkg/embedded/bpf/; then
+            echo "::warning title=Embedded eBPF drift::pkg/embedded/bpf/*.o differs from a fresh build. Rebuild and commit: make -C bpf all && cp bpf/*.bpf.o pkg/embedded/bpf/"
+            git --no-pager diff --stat -- pkg/embedded/bpf/ || true
+          else
+            echo "Committed embedded objects match a fresh build."
+          fi
+
+      - name: Smoke-load TCP-loss program (verifier + CO-RE on runner kernel)
+        run: |
+          echo "runner kernel: $(uname -r)"
+          sudo mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true
+          set -e
+          sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
+          sudo bpftool prog loadall bpf/tcploss.bpf.o /sys/fs/bpf/_ci
+          sudo bpftool prog show | grep -E 'tracepoint' | head
+          sudo rm -rf /sys/fs/bpf/_ci
+          echo "tcploss.bpf.o loaded successfully."
+
+      - name: Smoke-load conntrack program (informational — deferred track)
+        continue-on-error: true
+        run: |
+          # conntrack.bpf.o has a known CO-RE issue on newer kernels
+          # (trace_event_raw_inet_sock_set_state layout); tracked in
+          # docs/prod-readiness/APPENDIX-conntrack-later.md. Non-blocking here.
+          sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
+          sudo bpftool prog loadall bpf/conntrack.bpf.o /sys/fs/bpf/_ci \
+            && echo "conntrack.bpf.o loaded" \
+            || echo "::warning title=conntrack eBPF::conntrack.bpf.o failed to load on $(uname -r) (deferred track)"
+          sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
+
+      - name: Verify Go loss-event struct matches freshly built object
+        run: |
+          # The linux collector validates its event layout against the C struct
+          # (validateBpfLossEvent) and parses synthetic events.
+          go test -run 'Validate|HandleRecord' -v ./internal/losscollector/...
 
       - name: Upload eBPF artifacts
         uses: actions/upload-artifact@v4
@@ -51,24 +109,3 @@ jobs:
           name: ebpf-objects
           path: bpf/*.o
           retention-days: 7
-
-  # Test eBPF on multiple kernel versions (simulated)
-  test-ebpf-compat:
-    runs-on: ubuntu-latest
-    needs: build-ebpf
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download eBPF artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ebpf-objects
-          path: bpf/
-
-      - name: Verify eBPF compatibility
-        run: |
-          # Check ELF format
-          file bpf/*.o | grep -q "ELF 64-bit"
-          echo "eBPF objects are valid ELF files"
