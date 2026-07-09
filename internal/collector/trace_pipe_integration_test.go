@@ -65,7 +65,7 @@ func TestTracePipeCollector_WithMockTracePipe(t *testing.T) {
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -91,7 +91,7 @@ func TestTracePipeCollector_EmptyFile(t *testing.T) {
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -121,7 +121,7 @@ tcp_retransmit_skb: saddr=invalid-ip daddr=also-invalid
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -140,7 +140,7 @@ func TestTracePipeCollector_Concurrent(t *testing.T) {
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -192,7 +192,7 @@ tcp_retransmit_skb: saddr=127.0.0.1 daddr=127.0.0.1
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -221,7 +221,7 @@ func TestTracePipeCollector_RapidEvents(t *testing.T) {
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -239,7 +239,7 @@ func TestTracePipeCollector_ContextCancellation(t *testing.T) {
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -256,7 +256,7 @@ func TestTracePipeCollector_ContextCancellation(t *testing.T) {
 func TestTracePipeCollector_NonExistentPath(t *testing.T) {
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector("/nonexistent/trace_pipe", exporter, logger)
+	collector := NewTracePipeCollector("/nonexistent/trace_pipe", exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -273,7 +273,7 @@ func TestTracePipeCollector_ExporterNil(t *testing.T) {
 
 	logger := zap.NewNop()
 	// Pass nil exporter - should handle gracefully
-	collector := NewTracePipeCollector(tmpfile.Name(), nil, logger)
+	collector := NewTracePipeCollector(tmpfile.Name(), nil, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -294,7 +294,7 @@ func TestTracePipeCollector_Integration(t *testing.T) {
 
 	logger := zap.NewNop()
 	exporter := &mockExporterForIntegration{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(TracePipePath, exporter, logger)
+	collector := NewTracePipeCollector(TracePipePath, exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

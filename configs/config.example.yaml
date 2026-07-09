@@ -4,16 +4,53 @@
 global:
   ttl_hours: 3
   metrics_port: 9876
+  metrics_addr: 0.0.0.0       # Bind address for HTTP server (default: 0.0.0.0)
+  # auth_token: ""            # Optional: Bearer token for /metrics and /api/* endpoints
+                              # Can also be set via NETMON_AUTH_TOKEN environment variable
+                              # /health and /ready are NEVER protected
+  # TCP-loss data source:
+  #   ebpf      — eBPF tracepoint tcp_retransmit_skb via ring buffer (DEFAULT, production)
+  #   tracepipe — legacy text scrape of trace_pipe (fallback/debug; single global consumer)
+  loss_source: ebpf
+  # trace_pipe_path is only used when loss_source: tracepipe
   trace_pipe_path: /sys/kernel/tracing/trace_pipe
 
 metadata:
   locations:
-    type: file
     path: locations.yaml
-    
+    # Optional: HTTP update source for automatic updates
+    # First poll happens 30 seconds after startup, then at poll_interval
+    # update_source:
+    #   url: https://config.example.com/locations.yaml
+    #   poll_interval: 20m  # Check every 20 minutes (default)
+    #   timeout: 10s        # HTTP request timeout
+
   roles:
-    type: file
     path: roles.yaml
+    # Optional: HTTP update source
+    # update_source:
+    #   url: https://config.example.com/roles.yaml
+    #   poll_interval: 20m
+    #   timeout: 10s
+
+  topology:
+    path: topology.yaml
+    # Optional: HTTP update source (topology changes rarely)
+    # update_source:
+    #   url: https://config.example.com/topology.yaml
+    #   poll_interval: 60m  # Check every hour
+    #   timeout: 10s
+
+# HTTP Update Source Behavior:
+# - Local file is REQUIRED for startup (fail-fast if missing)
+# - HTTP polling is OPTIONAL
+# - First poll: 30 seconds after startup
+# - Validation: type-specific (locations/roles/topology)
+# - Auto-reload: memory updated after successful file update
+# - Atomic writes: write to temp file + rename
+# - Metrics: metadata_update_total, metadata_update_errors_total,
+#            metadata_last_update_timestamp_seconds, metadata_last_hash
+# - API: GET /api/v1/metadata/status for source status
 
 discovery:
   traceroute:
@@ -48,6 +85,16 @@ metrics:
     - src_network
     - dst_network
     - path_id
+  # Cardinality control for netmon_tcp_loss_total (protects Prometheus from OOM).
+  cardinality:
+    # level:
+    #   role    — aggregate by location/role/vrf, NO per-IP labels (DEFAULT, production-safe)
+    #   network — aggregate by /24 network (no per-IP labels)
+    #   ip      — full src_ip/dst_ip labels (UNBOUNDED cardinality; only for small/known IP spaces)
+    level: role
+    # Hard cap on the number of active series. New series beyond this are dropped
+    # and counted in netmon_loss_series_dropped_total. 0 = unlimited (not recommended).
+    max_series: 10000
 
 logging:
   level: info

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -39,21 +40,52 @@ type TracePipeCollector struct {
 	exporter RetransmitExporter
 	logger   *zap.Logger
 	pattern  *regexp.Regexp
+	metrics  *CollectorMetrics
+
+	// onReady, if set, is invoked exactly once after the trace_pipe is first
+	// opened successfully — i.e. when the collector starts consuming events.
+	onReady   func()
+	readyOnce sync.Once
+}
+
+// SetReadyFunc registers a callback invoked once when the collector has
+// successfully opened trace_pipe and begins consuming events. Used to signal
+// readiness (see internal/health). Safe to call before Run.
+func (c *TracePipeCollector) SetReadyFunc(f func()) {
+	c.onReady = func() {
+		if c.metrics != nil {
+			c.metrics.SetUp(true)
+		}
+		if f != nil {
+			f()
+		}
+	}
+}
+
+// signalReady invokes the onReady callback at most once.
+func (c *TracePipeCollector) signalReady() {
+	if c.onReady == nil {
+		return
+	}
+	c.readyOnce.Do(c.onReady)
 }
 
 // NewTracePipeCollector creates a new trace pipe collector
-func NewTracePipeCollector(path string, exporter RetransmitExporter, logger *zap.Logger) *TracePipeCollector {
+func NewTracePipeCollector(path string, exporter RetransmitExporter, logger *zap.Logger, metrics *CollectorMetrics) *TracePipeCollector {
 	// Pattern to match tcp_retransmit_skb events
 	// New format: tcp_retransmit_skb: family=AF_INET sport=7005 dport=30792 saddr=10.181.208.50 daddr=10.179.64.23 ...
 	// Old format: tcp_retransmit_skb: addr=0xffff888012345678 sk=0xffff888012345678 saddr=192.168.1.1 daddr=192.168.1.2 ...
 	pattern := regexp.MustCompile(`tcp_retransmit_skb:.*?saddr=([0-9.]+).*?daddr=([0-9.]+)`)
 
-	return &TracePipeCollector{
+	c := &TracePipeCollector{
 		path:     path,
 		exporter: exporter,
 		logger:   logger.Named("collector"),
 		pattern:  pattern,
+		metrics:  metrics,
 	}
+
+	return c
 }
 
 // Run starts the collector
@@ -96,6 +128,9 @@ func (c *TracePipeCollector) readTracePipe(ctx context.Context) error {
 		return fmt.Errorf("opening trace_pipe: %w", err)
 	}
 	defer file.Close()
+
+	// trace_pipe opened successfully — the collector is now consuming events.
+	c.signalReady()
 
 	reader := bufio.NewReader(file)
 
@@ -145,6 +180,11 @@ func (c *TracePipeCollector) readTracePipe(ctx context.Context) error {
 
 // processLine processes a single line from trace pipe
 func (c *TracePipeCollector) processLine(line string) {
+	// Count all lines read
+	if c.metrics != nil {
+		c.metrics.IncEventsRead()
+	}
+
 	// Only process tcp_retransmit_skb events
 	if !contains(line, "tcp_retransmit_skb") {
 		return
@@ -153,6 +193,9 @@ func (c *TracePipeCollector) processLine(line string) {
 	matches := c.pattern.FindStringSubmatch(line)
 	if len(matches) != 3 {
 		c.logger.Debug("No match in line", zap.String("line", line))
+		if c.metrics != nil {
+			c.metrics.IncParseErrors()
+		}
 		return
 	}
 
@@ -164,6 +207,10 @@ func (c *TracePipeCollector) processLine(line string) {
 		zap.String("dst", dstIP))
 
 	c.exporter.RecordRetransmit(srcIP, dstIP)
+
+	if c.metrics != nil {
+		c.metrics.IncEventsParsed()
+	}
 }
 
 // contains is a helper to check if a string contains a substring

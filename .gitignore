@@ -1,5 +1,9 @@
 # Binaries
 bin/
+dist/
+/netmon
+/conntrack
+/pktloss
 *.exe
 *.exe~
 *.dll

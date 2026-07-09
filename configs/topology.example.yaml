@@ -186,3 +186,20 @@ devices:
     labels:
       vendor: juniper
       model: MX960
+
+# HTTP Update Source (Optional):
+# To enable automatic updates from HTTP endpoint, add to config.yaml:
+# metadata:
+#   topology:
+#     path: /etc/netmon/topology.yaml
+#     update_source:
+#       url: https://config.example.com/topology.yaml
+#       poll_interval: 60m  # Topology changes rarely
+#       timeout: 10s
+#
+# Behavior:
+# - Local file required for startup
+# - First HTTP poll: 30 seconds after startup
+# - Subsequent polls: every poll_interval (default: 60m)
+# - Validation: checks devices array structure
+# - Auto-reload: memory updated after successful update

@@ -23,20 +23,20 @@ var (
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 
-	ebpfProgram      string
-	configFile       string
-	syslogNetwork    string
-	syslogAddress    string
-	syslogTag        string
-	syslogFacility   string
-	syslogHostname   bool
-	synTimeout       string
-	trackIncoming    bool
-	trackOutgoing    bool
-	trackCloses      bool
-	showConfig       bool
-	installPath      string
-	exportEBPFPath   string
+	ebpfProgram    string
+	configFile     string
+	syslogNetwork  string
+	syslogAddress  string
+	syslogTag      string
+	syslogFacility string
+	syslogHostname bool
+	synTimeout     string
+	trackIncoming  bool
+	trackOutgoing  bool
+	trackCloses    bool
+	showConfig     bool
+	installPath    string
+	exportEBPFPath string
 )
 
 func main() {

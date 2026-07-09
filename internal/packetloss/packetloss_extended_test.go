@@ -335,8 +335,8 @@ func TestNewMonitor_WithDifferentConfigs(t *testing.T) {
 	logger := zap.NewNop()
 
 	tests := []struct {
-		name   string
-		cfg    config.PacketLossConfig
+		name string
+		cfg  config.PacketLossConfig
 	}{
 		{
 			name: "default config",

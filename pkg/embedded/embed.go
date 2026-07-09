@@ -13,6 +13,9 @@ import (
 //go:embed bpf/conntrack.bpf.o
 var ebpfData []byte
 
+//go:embed bpf/tcploss.bpf.o
+var tcpLossEBPFData []byte
+
 //go:embed configs/config.example.yaml
 var configData []byte
 
@@ -25,6 +28,19 @@ func GetEBPFProgram() ([]byte, error) {
 		return nil, fmt.Errorf("embedded eBPF program not available")
 	}
 	return ebpfData, nil
+}
+
+// GetTCPLossEBPFProgram возвращает embedded tcploss.bpf.o как []byte
+func GetTCPLossEBPFProgram() ([]byte, error) {
+	if len(tcpLossEBPFData) == 0 {
+		return nil, fmt.Errorf("embedded tcploss eBPF program not available")
+	}
+	return tcpLossEBPFData, nil
+}
+
+// HasTCPLossEBPF проверяет, доступна ли embedded tcploss программа
+func HasTCPLossEBPF() bool {
+	return len(tcpLossEBPFData) > 0
 }
 
 // GetSampleConfig возвращает sample config как []byte

@@ -1,6 +1,11 @@
 //go:build linux
 // +build linux
 
+// Package main is the entry point for the pktloss binary.
+//
+// EXPERIMENTAL — NOT production-ready.
+// This tool uses heuristic trace_pipe scraping and does not produce meaningful loss metrics.
+// Use netmon for production TCP loss monitoring.
 package main
 
 import (
@@ -28,8 +33,8 @@ var (
 func main() {
 	rootCmd := &cobra.Command{
 		Use:     "pktloss",
-		Short:   "Packet Loss Monitor",
-		Long:    "Monitors network packet loss using /sys/kernel/tracing/trace_pipe (Linux only)",
+		Short:   "[EXPERIMENTAL] Packet Loss Monitor",
+		Long:    "[EXPERIMENTAL — NOT production-ready] Monitors network packet loss using /sys/kernel/tracing/trace_pipe (Linux only). For production TCP loss metrics, use the netmon binary instead.",
 		Version: Version,
 		RunE:    run,
 	}

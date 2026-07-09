@@ -16,7 +16,13 @@ type Server struct {
 	logger *zap.Logger
 }
 
-// NewServer creates a new HTTP server for metrics
+// NewServer creates a new HTTP server for metrics.
+//
+// Deprecated: netmon builds its own mux in cmd/netmon/main.go with real
+// liveness/readiness handlers (see internal/health). This helper is currently
+// unused; its /health and /ready stubs always return 200 and must NOT be used
+// as a production readiness surface. Kept only to avoid breaking external
+// references; wire internal/health.State if you revive it.
 func NewServer(port int, exporter *Exporter, logger *zap.Logger) *Server {
 	mux := http.NewServeMux()
 

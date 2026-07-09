@@ -170,27 +170,27 @@ func TestStateMachine_EstablishedConnection(t *testing.T) {
 
 	// Process new connection
 	newEvt := &ConnectionEventRaw{
-		SourceIP:    net.ParseIP("192.168.1.100"),
-		SourcePort:  54321,
-		DestIP:      net.ParseIP("8.8.8.8"),
-		DestPort:    443,
-		Protocol:    6,
-		Direction:   DirectionOutgoing,
-		EventType:   EventNew,
-		Timestamp:   time.Now(),
+		SourceIP:   net.ParseIP("192.168.1.100"),
+		SourcePort: 54321,
+		DestIP:     net.ParseIP("8.8.8.8"),
+		DestPort:   443,
+		Protocol:   6,
+		Direction:  DirectionOutgoing,
+		EventType:  EventNew,
+		Timestamp:  time.Now(),
 	}
 	sm.ProcessEvent(newEvt)
 
 	// Process established event
 	estEvt := &ConnectionEventRaw{
-		SourceIP:    net.ParseIP("192.168.1.100"),
-		SourcePort:  54321,
-		DestIP:      net.ParseIP("8.8.8.8"),
-		DestPort:    443,
-		Protocol:    6,
-		Direction:   DirectionOutgoing,
-		EventType:   EventEstablished,
-		Timestamp:   time.Now(),
+		SourceIP:   net.ParseIP("192.168.1.100"),
+		SourcePort: 54321,
+		DestIP:     net.ParseIP("8.8.8.8"),
+		DestPort:   443,
+		Protocol:   6,
+		Direction:  DirectionOutgoing,
+		EventType:  EventEstablished,
+		Timestamp:  time.Now(),
 	}
 	sm.ProcessEvent(estEvt)
 
@@ -219,14 +219,14 @@ func TestStateMachine_SYNTimeout(t *testing.T) {
 
 	// Process new connection (SYN sent)
 	evt := &ConnectionEventRaw{
-		SourceIP:    net.ParseIP("192.168.1.100"),
-		SourcePort:  54321,
-		DestIP:      net.ParseIP("8.8.8.8"),
-		DestPort:    443,
-		Protocol:    6,
-		Direction:   DirectionOutgoing,
-		EventType:   EventNew,
-		Timestamp:   time.Now(),
+		SourceIP:   net.ParseIP("192.168.1.100"),
+		SourcePort: 54321,
+		DestIP:     net.ParseIP("8.8.8.8"),
+		DestPort:   443,
+		Protocol:   6,
+		Direction:  DirectionOutgoing,
+		EventType:  EventNew,
+		Timestamp:  time.Now(),
 	}
 	sm.ProcessEvent(evt)
 
@@ -265,14 +265,14 @@ func TestStateMachine_GetAllConnections(t *testing.T) {
 	// Add multiple connections
 	for i := 0; i < 5; i++ {
 		evt := &ConnectionEventRaw{
-			SourceIP:    net.ParseIP("192.168.1.100"),
-			SourcePort:  uint16(54321 + i),
-			DestIP:      net.ParseIP("8.8.8.8"),
-			DestPort:    443,
-			Protocol:    6,
-			Direction:   DirectionOutgoing,
-			EventType:   EventNew,
-			Timestamp:   time.Now(),
+			SourceIP:   net.ParseIP("192.168.1.100"),
+			SourcePort: uint16(54321 + i),
+			DestIP:     net.ParseIP("8.8.8.8"),
+			DestPort:   443,
+			Protocol:   6,
+			Direction:  DirectionOutgoing,
+			EventType:  EventNew,
+			Timestamp:  time.Now(),
 		}
 		sm.ProcessEvent(evt)
 	}

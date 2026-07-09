@@ -22,17 +22,17 @@ func TestSyslogWriter_FormatMessage(t *testing.T) {
 
 	now := time.Now()
 	conn := &Connection{
-		SourceIP:      net.ParseIP("192.168.1.100"),
-		SourcePort:    54321,
-		DestIP:        net.ParseIP("8.8.8.8"),
-		DestPort:      443,
-		Protocol:      6,
-		Direction:     DirectionOutgoing,
-		State:         StateEstablished,
-		PID:           1234,
-		ProcessName:   "curl",
-		Timestamp:     now,
-		SynSentTime:   now,
+		SourceIP:        net.ParseIP("192.168.1.100"),
+		SourcePort:      54321,
+		DestIP:          net.ParseIP("8.8.8.8"),
+		DestPort:        443,
+		Protocol:        6,
+		Direction:       DirectionOutgoing,
+		State:           StateEstablished,
+		PID:             1234,
+		ProcessName:     "curl",
+		Timestamp:       now,
+		SynSentTime:     now,
 		EstablishedTime: now.Add(50 * time.Millisecond),
 	}
 
@@ -121,15 +121,15 @@ func TestSyslogWriter_FormatClosedConnection(t *testing.T) {
 
 	now := time.Now()
 	conn := &Connection{
-		SourceIP:    net.ParseIP("192.168.1.100"),
-		SourcePort:  54321,
-		DestIP:      net.ParseIP("8.8.8.8"),
-		DestPort:    443,
-		Protocol:    6,
-		Direction:   DirectionOutgoing,
-		State:       StateClosed,
-		Timestamp:   now.Add(-120 * time.Second),
-		ClosedTime:  now,
+		SourceIP:   net.ParseIP("192.168.1.100"),
+		SourcePort: 54321,
+		DestIP:     net.ParseIP("8.8.8.8"),
+		DestPort:   443,
+		Protocol:   6,
+		Direction:  DirectionOutgoing,
+		State:      StateClosed,
+		Timestamp:  now.Add(-120 * time.Second),
+		ClosedTime: now,
 	}
 
 	msg := writer.formatMessage(conn, EventClosed)
@@ -241,14 +241,14 @@ func TestSyslogWriter_WithHostname(t *testing.T) {
 	defer writer.Close()
 
 	conn := &Connection{
-		SourceIP:    net.ParseIP("192.168.1.100"),
-		SourcePort:  54321,
-		DestIP:      net.ParseIP("8.8.8.8"),
-		DestPort:    443,
-		Protocol:    6,
-		Direction:   DirectionOutgoing,
-		State:       StateNew,
-		Timestamp:   time.Now(),
+		SourceIP:   net.ParseIP("192.168.1.100"),
+		SourcePort: 54321,
+		DestIP:     net.ParseIP("8.8.8.8"),
+		DestPort:   443,
+		Protocol:   6,
+		Direction:  DirectionOutgoing,
+		State:      StateNew,
+		Timestamp:  time.Now(),
 	}
 
 	msg := writer.formatMessage(conn, EventNew)

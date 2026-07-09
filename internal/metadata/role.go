@@ -111,7 +111,7 @@ func (m *RoleMatcher) Reload(path string) error {
 	return m.Load(path)
 }
 
-// GetRole returns the best-match role for an IP
+// GetRole returns the best-match role for an IP (longest prefix match)
 func (m *RoleMatcher) GetRole(ip string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -121,13 +121,21 @@ func (m *RoleMatcher) GetRole(ip string) string {
 		return "unknown"
 	}
 
+	best := ""
+	bestLen := -1
 	for _, nwr := range m.networks {
 		if nwr.network.Contains(parsedIP) {
-			return nwr.role
+			ones, _ := nwr.network.Mask.Size()
+			if ones > bestLen {
+				bestLen = ones
+				best = nwr.role
+			}
 		}
 	}
-
-	return "unknown"
+	if bestLen < 0 {
+		return "unknown"
+	}
+	return best
 }
 
 // Count returns the number of loaded networks

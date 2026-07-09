@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,7 +12,43 @@ import (
 	"go.uber.org/zap"
 )
 
-// Exporter exports TCP retransmit metrics to Prometheus
+// Cardinality levels control the label set of the loss metric and therefore the
+// number of Prometheus series a busy host can produce.
+const (
+	// LevelIP labels every series with the full src_ip/dst_ip pair. Highest
+	// fidelity, unbounded cardinality — only safe on small/known IP spaces.
+	LevelIP = "ip"
+	// LevelNetwork aggregates to /24 networks (no per-IP labels).
+	LevelNetwork = "network"
+	// LevelRole aggregates to location/role/vrf (no IP, no network). Default —
+	// bounded cardinality suitable for production.
+	LevelRole = "role"
+)
+
+// seriesKeySep separates label values when building the internal series key.
+// Unit Separator (0x1f) never appears in IPs/roles/locations.
+const seriesKeySep = "\x1f"
+
+// CardinalityConfig controls the loss metric label granularity and the hard
+// cap on the number of active series.
+type CardinalityConfig struct {
+	// Level is one of LevelIP, LevelNetwork, LevelRole.
+	Level string
+	// MaxSeries caps the number of distinct active series. 0 means unlimited.
+	MaxSeries int
+}
+
+// defaultedLevel returns a valid level, falling back to LevelRole.
+func (c CardinalityConfig) defaultedLevel() string {
+	switch c.Level {
+	case LevelIP, LevelNetwork, LevelRole:
+		return c.Level
+	default:
+		return LevelRole
+	}
+}
+
+// Exporter exports TCP retransmit metrics to Prometheus.
 type Exporter struct {
 	mu              sync.RWMutex
 	metricName      string
@@ -21,21 +59,32 @@ type Exporter struct {
 	logger          *zap.Logger
 	ttl             time.Duration
 
-	// Internal tracking for TTL
-	events map[pairKey]*pairData
+	// Cardinality controls label granularity and the series cap.
+	level     string
+	maxSeries int
+
+	// Cardinality observability.
+	activeSeries  prometheus.Gauge
+	seriesDropped prometheus.Counter
+	lastDropLog   time.Time
+
+	// Internal tracking, keyed by the series identity (joined label values).
+	series map[string]*seriesData
 }
 
-type pairKey struct {
-	src string
-	dst string
-}
-
-type pairData struct {
+// seriesData tracks one Prometheus series: its label values, accumulated count,
+// last-seen time (for TTL) and a representative IP pair used to recompute labels
+// on matcher reload.
+type seriesData struct {
+	labels   []string
 	count    uint64
 	lastSeen time.Time
+	repSrc   string
+	repDst   string
 }
 
-// NewExporter creates a new metrics exporter
+// NewExporter creates a new metrics exporter on the default registry with the
+// legacy IP-level, unbounded label set (kept for backward compatibility).
 func NewExporter(
 	metricName string,
 	locationMatcher *metadata.LocationMatcher,
@@ -45,7 +94,9 @@ func NewExporter(
 	return NewExporterWithRegistry(metricName, locationMatcher, roleMatcher, logger, prometheus.DefaultRegisterer)
 }
 
-// NewExporterWithRegistry creates a new metrics exporter with a custom registry
+// NewExporterWithRegistry creates an exporter on a custom registry with the
+// legacy IP-level, unbounded label set (kept for backward compatibility with
+// existing callers and tests).
 func NewExporterWithRegistry(
 	metricName string,
 	locationMatcher *metadata.LocationMatcher,
@@ -53,26 +104,44 @@ func NewExporterWithRegistry(
 	logger *zap.Logger,
 	reg prometheus.Registerer,
 ) *Exporter {
+	return NewExporterWithConfig(metricName, locationMatcher, roleMatcher, logger, reg,
+		CardinalityConfig{Level: LevelIP, MaxSeries: 0})
+}
+
+// NewExporterWithConfig creates an exporter with an explicit cardinality config.
+// This is the production constructor (see cmd/netmon/main.go).
+func NewExporterWithConfig(
+	metricName string,
+	locationMatcher *metadata.LocationMatcher,
+	roleMatcher *metadata.RoleMatcher,
+	logger *zap.Logger,
+	reg prometheus.Registerer,
+	card CardinalityConfig,
+) *Exporter {
+	level := card.defaultedLevel()
+
 	counter := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: metricName,
 			Help: "Total number of TCP retransmissions by connection pair",
 		},
-		[]string{
-			"src_ip",
-			"dst_ip",
-			"src_location",
-			"dst_location",
-			"src_role",
-			"dst_role",
-			"src_network",
-			"dst_network",
-			"src_vrf",
-			"dst_vrf",
-		},
+		labelNamesForLevel(level),
 	)
 
-	reg.MustRegister(counter)
+	activeSeries := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "netmon_loss_active_series",
+		Help: "Current number of active TCP loss series being exported",
+	})
+	seriesDropped := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "netmon_loss_series_dropped_total",
+		Help: "Total number of loss events dropped because the max_series cap was reached",
+	})
+
+	reg.MustRegister(counter, activeSeries, seriesDropped)
+
+	logger.Named("exporter").Info("Loss exporter cardinality configured",
+		zap.String("level", level),
+		zap.Int("max_series", card.MaxSeries))
 
 	return &Exporter{
 		metricName:      metricName,
@@ -81,65 +150,131 @@ func NewExporterWithRegistry(
 		roleMatcher:     roleMatcher,
 		logger:          logger.Named("exporter"),
 		ttl:             3 * time.Hour, // Default TTL
-		events:          make(map[pairKey]*pairData),
+		level:           level,
+		maxSeries:       card.MaxSeries,
+		activeSeries:    activeSeries,
+		seriesDropped:   seriesDropped,
+		series:          make(map[string]*seriesData),
 	}
 }
 
-// RecordRetransmit records a single retransmit event
-func (e *Exporter) RecordRetransmit(srcIP, dstIP string) {
-	key := pairKey{src: srcIP, dst: dstIP}
+// labelNamesForLevel returns the Prometheus label names for a cardinality level.
+func labelNamesForLevel(level string) []string {
+	switch level {
+	case LevelNetwork:
+		return []string{
+			"src_network", "dst_network",
+			"src_location", "dst_location",
+			"src_role", "dst_role",
+			"src_vrf", "dst_vrf",
+		}
+	case LevelRole:
+		return []string{
+			"src_location", "dst_location",
+			"src_role", "dst_role",
+			"src_vrf", "dst_vrf",
+		}
+	default: // LevelIP
+		return []string{
+			"src_ip", "dst_ip",
+			"src_location", "dst_location",
+			"src_role", "dst_role",
+			"src_network", "dst_network",
+			"src_vrf", "dst_vrf",
+		}
+	}
+}
 
+// labelsFor computes the label values for a src/dst pair in the order matching
+// labelNamesForLevel(e.level).
+func (e *Exporter) labelsFor(src, dst string) []string {
+	srcLocation := e.locationMatcher.GetLocation(src)
+	dstLocation := e.locationMatcher.GetLocation(dst)
+	srcRole := e.roleMatcher.GetRole(src)
+	dstRole := e.roleMatcher.GetRole(dst)
+	srcVrf := e.locationMatcher.GetVrf(src)
+	dstVrf := e.locationMatcher.GetVrf(dst)
+
+	switch e.level {
+	case LevelNetwork:
+		return []string{
+			getNetwork(src), getNetwork(dst),
+			srcLocation, dstLocation,
+			srcRole, dstRole,
+			srcVrf, dstVrf,
+		}
+	case LevelRole:
+		return []string{
+			srcLocation, dstLocation,
+			srcRole, dstRole,
+			srcVrf, dstVrf,
+		}
+	default: // LevelIP
+		return []string{
+			src, dst,
+			srcLocation, dstLocation,
+			srcRole, dstRole,
+			getNetwork(src), getNetwork(dst),
+			srcVrf, dstVrf,
+		}
+	}
+}
+
+// seriesKeyOf builds the internal map key identifying a series.
+func seriesKeyOf(labels []string) string {
+	return strings.Join(labels, seriesKeySep)
+}
+
+// RecordRetransmit records a single retransmit event.
+func (e *Exporter) RecordRetransmit(srcIP, dstIP string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if data, ok := e.events[key]; ok {
-		data.count++
-		data.lastSeen = time.Now()
-	} else {
-		e.events[key] = &pairData{
-			count:    1,
-			lastSeen: time.Now(),
+	labels := e.labelsFor(srcIP, dstIP)
+	key := seriesKeyOf(labels)
+
+	data, ok := e.series[key]
+	if !ok {
+		// New series — enforce the cardinality cap before creating it.
+		if e.maxSeries > 0 && len(e.series) >= e.maxSeries {
+			e.seriesDropped.Inc()
+			e.logDropRateLimited(srcIP, dstIP)
+			return
 		}
+		data = &seriesData{
+			labels: labels,
+			repSrc: srcIP,
+			repDst: dstIP,
+		}
+		e.series[key] = data
+		e.activeSeries.Set(float64(len(e.series)))
 	}
 
-	// Update Prometheus metric
-	e.updateMetric(key)
+	data.count++
+	data.lastSeen = time.Now()
+
+	// Increment the Prometheus counter by exactly 1 per event.
+	e.counter.WithLabelValues(labels...).Inc()
 }
 
-// updateMetric updates the Prometheus counter for a pair
-func (e *Exporter) updateMetric(key pairKey) {
-	data := e.events[key]
-	if data == nil {
+// logDropRateLimited logs a max_series overflow at most once per 30s. Caller
+// must hold e.mu.
+func (e *Exporter) logDropRateLimited(srcIP, dstIP string) {
+	now := time.Now()
+	if now.Sub(e.lastDropLog) < 30*time.Second {
 		return
 	}
-
-	srcLocation := e.locationMatcher.GetLocation(key.src)
-	dstLocation := e.locationMatcher.GetLocation(key.dst)
-	srcRole := e.roleMatcher.GetRole(key.src)
-	dstRole := e.roleMatcher.GetRole(key.dst)
-	srcNetwork := getNetwork(key.src)
-	dstNetwork := getNetwork(key.dst)
-	srcVrf := e.locationMatcher.GetVrf(key.src)
-	dstVrf := e.locationMatcher.GetVrf(key.dst)
-
-	e.counter.WithLabelValues(
-		key.src,
-		key.dst,
-		srcLocation,
-		dstLocation,
-		srcRole,
-		dstRole,
-		srcNetwork,
-		dstNetwork,
-		srcVrf,
-		dstVrf,
-	).Add(float64(data.count))
+	e.lastDropLog = now
+	e.logger.Warn("max_series cap reached — dropping new loss series",
+		zap.Int("max_series", e.maxSeries),
+		zap.Int("active_series", len(e.series)),
+		zap.String("dropped_src", srcIP),
+		zap.String("dropped_dst", dstIP))
 }
 
-// getNetwork returns the /24 network for an IP
+// getNetwork returns the /24 network for an IP.
 func getNetwork(ip string) string {
-	// Simple /24 network extraction
-	// For production, use proper IP parsing
+	// Simple /24 network extraction.
 	parts := splitIP(ip)
 	if len(parts) != 4 {
 		return "0.0.0.0/24"
@@ -147,7 +282,7 @@ func getNetwork(ip string) string {
 	return parts[0] + "." + parts[1] + "." + parts[2] + ".0/24"
 }
 
-// splitIP splits an IP string into octets
+// splitIP splits an IP string into octets.
 func splitIP(ip string) []string {
 	var parts []string
 	start := 0
@@ -161,118 +296,134 @@ func splitIP(ip string) []string {
 	return parts
 }
 
-// cleanupOld removes events older than TTL
+// cleanupOld removes series older than TTL and deletes them from the CounterVec.
 func (e *Exporter) cleanupOld() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	now := time.Now()
-	for key, data := range e.events {
+	removed := 0
+	for key, data := range e.series {
 		if now.Sub(data.lastSeen) > e.ttl {
-			delete(e.events, key)
-			e.logger.Debug("Cleaned up old event",
-				zap.String("src", key.src),
-				zap.String("dst", key.dst))
+			if len(data.labels) > 0 {
+				if !e.counter.DeleteLabelValues(data.labels...) {
+					e.logger.Debug("Failed to delete label values from counter",
+						zap.String("src", data.repSrc),
+						zap.String("dst", data.repDst))
+				}
+			}
+			delete(e.series, key)
+			removed++
 		}
+	}
+	if removed > 0 {
+		e.activeSeries.Set(float64(len(e.series)))
 	}
 }
 
-// SetTTL sets the TTL for events
+// StartJanitor runs periodic TTL cleanup until ctx is cancelled. It is required
+// in production because the exporter registers the raw CounterVec (not itself)
+// with the registry, so Collect — and thus cleanupOld — is never triggered by
+// scrapes. Call once from main.
+func (e *Exporter) StartJanitor(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				e.cleanupOld()
+			}
+		}
+	}()
+}
+
+// SetTTL sets the TTL for events.
 func (e *Exporter) SetTTL(ttl time.Duration) {
 	e.mu.Lock()
 	e.ttl = ttl
 	e.mu.Unlock()
 }
 
-// GetEventCount returns the number of tracked events (for testing)
+// GetEventCount returns the number of active series (for testing).
 func (e *Exporter) GetEventCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return len(e.events)
+	return len(e.series)
 }
 
-// Describe implements prometheus.Collector
+// Describe implements prometheus.Collector.
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.counter.Describe(ch)
 }
 
-// Collect implements prometheus.Collector
+// Collect implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.cleanupOld()
 	e.counter.Collect(ch)
 }
 
-// Collector returns the exporter as a prometheus.Collector for HTTP handler
+// Collector returns the exporter as a prometheus.Collector for HTTP handler.
 func (e *Exporter) Collector() prometheus.Collector {
 	return e
 }
 
-// SetMatchers updates the location and role matchers (for SIGHUP reload)
-// Updates labels for all metrics while preserving counter values
+// SetMatchers updates the location and role matchers (for SIGHUP reload) and
+// recomputes labels for all series, preserving counts. Series whose new labels
+// collide are merged.
 func (e *Exporter) SetMatchers(locationMatcher *metadata.LocationMatcher, roleMatcher *metadata.RoleMatcher) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Save current events with their counts
-	savedEvents := make(map[pairKey]*pairData, len(e.events))
-	for k, v := range e.events {
-		savedEvents[k] = v
-	}
+	saved := e.series
 
-	// Update matchers
+	// Update matchers.
 	e.locationMatcher = locationMatcher
 	e.roleMatcher = roleMatcher
 
-	// Clear old Prometheus metrics
+	// Reset Prometheus metrics and rebuild the series map with new labels.
 	e.counter.Reset()
+	e.series = make(map[string]*seriesData, len(saved))
 
-	// Clear events map
-	e.events = make(map[pairKey]*pairData)
-
-	// Restore events and recreate metrics with NEW labels but SAME counts
-	for key, data := range savedEvents {
-		e.events[key] = data
-		e.updateMetricLocked(key)
+	for _, data := range saved {
+		newLabels := e.labelsFor(data.repSrc, data.repDst)
+		newKey := seriesKeyOf(newLabels)
+		if existing, ok := e.series[newKey]; ok {
+			// Two old series collapse to the same new series — merge counts.
+			existing.count += data.count
+			if data.lastSeen.After(existing.lastSeen) {
+				existing.lastSeen = data.lastSeen
+			}
+			continue
+		}
+		data.labels = newLabels
+		e.series[newKey] = data
 	}
+
+	// Recreate Prometheus metrics with new labels but preserved counts.
+	for _, data := range e.series {
+		e.counter.WithLabelValues(data.labels...).Add(float64(data.count))
+	}
+	e.activeSeries.Set(float64(len(e.series)))
 
 	e.logger.Info("Matchers updated, metrics recreated with new labels (counters preserved)",
-		zap.Int("events_preserved", len(savedEvents)))
+		zap.Int("series", len(e.series)))
 }
 
-// updateMetricLocked updates metric without acquiring lock (caller must hold lock)
-func (e *Exporter) updateMetricLocked(key pairKey) {
-	data := e.events[key]
-	if data == nil {
-		return
-	}
-
-	srcLocation := e.locationMatcher.GetLocation(key.src)
-	dstLocation := e.locationMatcher.GetLocation(key.dst)
-	srcRole := e.roleMatcher.GetRole(key.src)
-	dstRole := e.roleMatcher.GetRole(key.dst)
-	srcNetwork := getNetwork(key.src)
-	dstNetwork := getNetwork(key.dst)
-	srcVrf := e.locationMatcher.GetVrf(key.src)
-	dstVrf := e.locationMatcher.GetVrf(key.dst)
-
-	e.counter.WithLabelValues(
-		key.src,
-		key.dst,
-		srcLocation,
-		dstLocation,
-		srcRole,
-		dstRole,
-		srcNetwork,
-		dstNetwork,
-		srcVrf,
-		dstVrf,
-	).Add(float64(data.count))
-}
-
-// SetTopology sets the network topology (for SIGHUP reload)
+// SetTopology sets the network topology (for SIGHUP reload).
 func (e *Exporter) SetTopology(topology *topology.Topology) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.topology = topology
 	e.logger.Info("Topology updated")
+}
+
+// Registry returns the Prometheus registerer used by the exporter.
+func (e *Exporter) Registry() prometheus.Registerer {
+	return prometheus.DefaultRegisterer
 }

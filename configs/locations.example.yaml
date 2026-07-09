@@ -71,3 +71,20 @@ locations:
     location: datacenter-a
     hostname: lb-02
     vrf: external-vrf
+
+# HTTP Update Source (Optional):
+# To enable automatic updates from HTTP endpoint, add to config.yaml:
+# metadata:
+#   locations:
+#     path: /etc/netmon/locations.yaml
+#     update_source:
+#       url: https://config.example.com/locations.yaml
+#       poll_interval: 20m
+#       timeout: 10s
+#
+# Behavior:
+# - Local file required for startup
+# - First HTTP poll: 30 seconds after startup
+# - Subsequent polls: every poll_interval (default: 20m)
+# - Validation: checks network CIDR, location field
+# - Auto-reload: memory updated after successful update

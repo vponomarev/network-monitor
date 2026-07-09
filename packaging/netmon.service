@@ -1,6 +1,6 @@
 [Unit]
-Description=Network Monitor - TCP Packet Loss Tracking
-Documentation=https://github.com/vponomarev/network-monitor
+Description=Network Monitor - TCP Packet Loss Tracking (eBPF)
+Documentation=https://github.com/vponomarev/network-monitor/blob/main/docs/PRODUCTION_en.md
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -13,8 +13,9 @@ Group=root
 ExecStart=/usr/local/bin/netmon --config /etc/netmon/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 
-# Restart policy
-Restart=always
+# Restart policy. With fatal-error handling (TASK-09) a failed loss collector
+# makes netmon exit non-zero, so on-failure restarts it; a clean SIGTERM does not.
+Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=60
 StartLimitBurst=5
@@ -22,26 +23,41 @@ StartLimitBurst=5
 # Environment
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=GOMAXPROCS=2
+# Environment=NETMON_AUTH_TOKEN=your-secret-token-here
 
 # Working directory
 WorkingDirectory=/var/lib/netmon
 
 # Security hardening
-NoNewPrivileges=false
-ProtectSystem=false
+NoNewPrivileges=true
+ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ProtectKernelTunables=false
-ProtectKernelModules=false
-ProtectControlGroups=false
+ReadWritePaths=/var/lib/netmon /var/log/netmon
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
 
-# Capabilities (required for trace_pipe and raw sockets)
+# Capabilities. eBPF loss collection attaches the tcp_retransmit_skb tracepoint
+# via perf_event_open, which on kernels with kernel.perf_event_paranoid > 1
+# (Debian/Ubuntu default is 3/4) is NOT granted by CAP_BPF+CAP_PERFMON alone —
+# the attach fails with EPERM. CAP_SYS_ADMIN covers the whole eBPF+perf path and
+# is the tested, recommended set. CAP_NET_RAW is only needed for traceroute
+# (discovery). Verified on kernels 5.15 / 6.1 / 6.8 / 6.12.
 AmbientCapabilities=CAP_SYS_ADMIN CAP_NET_RAW
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_RAW
+# Optional least-privilege alternative (may fail to attach the tracepoint on
+# kernels with perf_event_paranoid > 1 — verify on your kernel before relying on it,
+# or lower it via sysctl kernel.perf_event_paranoid=1):
+# AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_NET_RAW
+# CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_RAW
 
 # File descriptors
 LimitNOFILE=65536
 LimitNPROC=4096
+
+# Memory limit (adjust for cardinality)
+MemoryMax=512M
 
 # Logging
 StandardOutput=journal

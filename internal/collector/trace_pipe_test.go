@@ -27,7 +27,7 @@ func (m *mockExporter) RecordRetransmit(srcIP, dstIP string) {
 func TestTracePipeCollector_processLine(t *testing.T) {
 	logger := zap.NewNop()
 	exporter := &mockExporter{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(TracePipePath, exporter, logger)
+	collector := NewTracePipeCollector(TracePipePath, exporter, logger, nil)
 
 	// Test valid retransmit line
 	line := "          <...>-12345 [001] d.H. 12345.678901: tcp_retransmit_skb: addr=0xffff888012345678 sk=0xffff888012345678 saddr=192.168.1.10 daddr=192.168.1.20 seq=123456789"
@@ -41,7 +41,7 @@ func TestTracePipeCollector_processLine(t *testing.T) {
 func TestTracePipeCollector_processLine_Ignored(t *testing.T) {
 	logger := zap.NewNop()
 	exporter := &mockExporter{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(TracePipePath, exporter, logger)
+	collector := NewTracePipeCollector(TracePipePath, exporter, logger, nil)
 
 	// Test non-retransmit line
 	line := "          <...>-12345 [001] d.H. 12345.678901: tcp_connect: ..."
@@ -53,7 +53,7 @@ func TestTracePipeCollector_processLine_Ignored(t *testing.T) {
 func TestTracePipeCollector_processLine_NoMatch(t *testing.T) {
 	logger := zap.NewNop()
 	exporter := &mockExporter{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(TracePipePath, exporter, logger)
+	collector := NewTracePipeCollector(TracePipePath, exporter, logger, nil)
 
 	// Test line without IP addresses
 	line := "          <...>-12345 [001] d.H. 12345.678901: tcp_retransmit_skb: some other format"
@@ -86,7 +86,7 @@ func Test_contains(t *testing.T) {
 func TestTracePipeCollector_Run_ContextCancellation(t *testing.T) {
 	logger := zap.NewNop()
 	exporter := &mockExporter{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector("/nonexistent/trace_pipe", exporter, logger)
+	collector := NewTracePipeCollector("/nonexistent/trace_pipe", exporter, logger, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

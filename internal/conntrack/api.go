@@ -43,12 +43,12 @@ type ConnectionResponse struct {
 
 // StatsResponse represents connection statistics
 type StatsResponse struct {
-	TotalOutgoing    int `json:"total_outgoing"`
-	TotalIncoming    int `json:"total_incoming"`
-	PendingOutgoing  int `json:"pending_outgoing"`
-	PendingIncoming  int `json:"pending_incoming"`
-	Established      int `json:"established"`
-	Total            int `json:"total"`
+	TotalOutgoing   int `json:"total_outgoing"`
+	TotalIncoming   int `json:"total_incoming"`
+	PendingOutgoing int `json:"pending_outgoing"`
+	PendingIncoming int `json:"pending_incoming"`
+	Established     int `json:"established"`
+	Total           int `json:"total"`
 }
 
 // ListConnections handles GET /api/v1/conntrack/connections

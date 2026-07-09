@@ -37,7 +37,7 @@ func TestTracePipeCollector_WithRealData(t *testing.T) {
 	// Create collector with mock exporter
 	logger := zap.NewNop()
 	exporter := &mockExporterForFileTest{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(testDataFile, exporter, logger)
+	collector := NewTracePipeCollector(testDataFile, exporter, logger, nil)
 
 	// Read and process first 100 lines
 	scanner := bufio.NewScanner(file)
@@ -106,7 +106,7 @@ func TestTracePipeCollector_ParseAllFormats(t *testing.T) {
 	for _, tc := range testCases {
 		logger := zap.NewNop()
 		exporter := &mockExporterForFileTest{events: make([]TCPRetransmitEvent, 0)}
-		collector := NewTracePipeCollector("/dev/null", exporter, logger)
+		collector := NewTracePipeCollector("/dev/null", exporter, logger, nil)
 
 		collector.processLine(tc.line)
 
@@ -137,7 +137,7 @@ func TestTracePipeCollector_StatisticsFromRealData(t *testing.T) {
 	// Create collector with mock exporter
 	logger := zap.NewNop()
 	exporter := &mockExporterForFileTest{events: make([]TCPRetransmitEvent, 0)}
-	collector := NewTracePipeCollector(testDataFile, exporter, logger)
+	collector := NewTracePipeCollector(testDataFile, exporter, logger, nil)
 
 	// Process entire file
 	scanner := bufio.NewScanner(file)

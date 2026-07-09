@@ -132,13 +132,13 @@ func NewStateMachine(cfg StateMachineConfig) *StateMachine {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sm := &StateMachine{
-		connections:    make(map[string]*Connection),
-		synTimeout:     cfg.SYNTimeout,
-		cleanupDelay:   cfg.CleanupDelay,
-		onStateChange:  cfg.OnStateChange,
-		onEvent:        cfg.OnEvent,
-		ctx:            ctx,
-		cancel:         cancel,
+		connections:   make(map[string]*Connection),
+		synTimeout:    cfg.SYNTimeout,
+		cleanupDelay:  cfg.CleanupDelay,
+		onStateChange: cfg.OnStateChange,
+		onEvent:       cfg.OnEvent,
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 
 	// Start timeout checker
@@ -205,19 +205,19 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) *Connection {
 	now := time.Now()
 	conn := &Connection{
-		ID:            sm.makeKey(evt),
-		SourceIP:      evt.SourceIP,
-		SourcePort:    evt.SourcePort,
-		DestIP:        evt.DestIP,
-		DestPort:      evt.DestPort,
-		Protocol:      evt.Protocol,
-		Direction:     evt.Direction,
-		State:         StateNew,
-		Timestamp:     now,
-		LastUpdated:   now,
-		PID:           evt.PID,
-		ProcessName:   evt.ProcessName,
-		SynSentTime:   now,
+		ID:          sm.makeKey(evt),
+		SourceIP:    evt.SourceIP,
+		SourcePort:  evt.SourcePort,
+		DestIP:      evt.DestIP,
+		DestPort:    evt.DestPort,
+		Protocol:    evt.Protocol,
+		Direction:   evt.Direction,
+		State:       StateNew,
+		Timestamp:   now,
+		LastUpdated: now,
+		PID:         evt.PID,
+		ProcessName: evt.ProcessName,
+		SynSentTime: now,
 	}
 
 	sm.connections[conn.ID] = conn
@@ -359,11 +359,11 @@ func (sm *StateMachine) GetStats() Stats {
 
 // Stats holds connection statistics
 type Stats struct {
-	TotalOutgoing    int
-	TotalIncoming    int
-	PendingOutgoing  int // SYN sent, waiting SYN+ACK
-	PendingIncoming  int // SYN received, waiting accept
-	Established      int
+	TotalOutgoing   int
+	TotalIncoming   int
+	PendingOutgoing int // SYN sent, waiting SYN+ACK
+	PendingIncoming int // SYN received, waiting accept
+	Established     int
 }
 
 // ConnectionEventRaw represents raw connection event from eBPF

@@ -50,10 +50,6 @@ func TestConnection_DirectionString(t *testing.T) {
 }
 
 func TestTracker_connectionKey(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := Config{}
-	tracker, _ := NewTracker(cfg, logger)
-
 	conn := &Connection{
 		SourceIP:   net.ParseIP("192.168.1.1"),
 		SourcePort: 12345,
@@ -62,11 +58,11 @@ func TestTracker_connectionKey(t *testing.T) {
 		Protocol:   6,
 	}
 
-	key := tracker.connectionKey(conn)
+	key := makeConnectionKey(conn.SourceIP, conn.SourcePort, conn.DestIP, conn.DestPort, conn.Protocol)
 	assert.Equal(t, "192.168.1.1:12345-10.0.0.1:443-6", key)
 
 	// Same connection should produce same key
-	key2 := tracker.connectionKey(conn)
+	key2 := makeConnectionKey(conn.SourceIP, conn.SourcePort, conn.DestIP, conn.DestPort, conn.Protocol)
 	assert.Equal(t, key, key2)
 }
 
@@ -100,42 +96,11 @@ func TestTracker_Events(t *testing.T) {
 	require.NotNil(t, events)
 }
 
-func TestTracker_sendEvent(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := Config{}
-	tracker, _ := NewTracker(cfg, logger)
-
-	conn := &Connection{
-		Timestamp:   time.Now(),
-		SourceIP:    net.ParseIP("192.168.1.100"),
-		SourcePort:  54321,
-		DestIP:      net.ParseIP("8.8.8.8"),
-		DestPort:    443,
-		Protocol:    6,
-		Direction:   DirectionOutgoing,
-		PID:         1234,
-		ProcessName: "test",
-	}
-
-	tracker.sendEvent(conn)
-
-	// Check connection was stored
-	assert.Equal(t, 1, tracker.GetConnectionCount())
-
-	// Check event was sent
-	select {
-	case event := <-tracker.Events():
-		assert.Equal(t, EventTypeNewConnection, event.Type)
-		assert.Equal(t, "conntrack", event.Source)
-		data, ok := event.Data.(map[string]interface{})
-		require.True(t, ok)
-		assert.Equal(t, "192.168.1.100", data["source_ip"])
-		assert.Equal(t, uint16(443), data["dest_port"])
-		assert.Equal(t, "outgoing", data["direction"])
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("Expected event not received")
-	}
-}
+// NOTE: TestTracker_sendEvent and TestTracker_simulateEvents were removed in
+// TASK-12 — they targeted a removed conntrack API (Tracker.sendEvent,
+// simulateEvents(ctx), and an events.Event-typed channel). The events channel
+// now carries *Connection. See docs/prod-readiness/APPENDIX-conntrack-later.md
+// (C-8); rewriting conntrack tests belongs to the deferred conntrack track.
 
 func TestTracker_parseConnectionEvent(t *testing.T) {
 	logger := zap.NewNop()
@@ -166,29 +131,6 @@ func TestTracker_Run_ContextCancellation(t *testing.T) {
 	// Run should exit on context cancellation
 	err = tracker.Run(ctx)
 	assert.NoError(t, err)
-}
-
-func TestTracker_simulateEvents(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := Config{}
-	tracker, _ := NewTracker(cfg, logger)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start simulation in background
-	go tracker.simulateEvents(ctx)
-
-	// Wait for event
-	select {
-	case event := <-tracker.Events():
-		assert.Equal(t, EventTypeNewConnection, event.Type)
-		data, ok := event.Data.(map[string]interface{})
-		require.True(t, ok)
-		assert.Equal(t, "outgoing", data["direction"])
-	case <-time.After(6 * time.Second):
-		t.Fatal("Expected simulated event not received")
-	}
 }
 
 func Test_sanitizeProcessName(t *testing.T) {
@@ -248,15 +190,15 @@ func Test_enrichProcessName(t *testing.T) {
 func Test_bpfConnectionEvent_StructAlignment(t *testing.T) {
 	// Test that Go struct matches C struct
 	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
-	
+
 	// Check total size
-	assert.Equal(t, uintptr(88), unsafe.Sizeof(bpfConnectionEvent{}), 
+	assert.Equal(t, uintptr(88), unsafe.Sizeof(bpfConnectionEvent{}),
 		"bpfConnectionEvent size must be 88 bytes")
-	
+
 	// Check Comm offset (must be 72 after 7-byte padding)
 	assert.Equal(t, uintptr(72), unsafe.Offsetof(bpfConnectionEvent{}.Comm),
 		"bpfConnectionEvent.Comm must start at offset 72")
-	
+
 	// Check other critical offsets
 	assert.Equal(t, uintptr(0), unsafe.Offsetof(bpfConnectionEvent{}.TimestampNs))
 	assert.Equal(t, uintptr(8), unsafe.Offsetof(bpfConnectionEvent{}.PidTgid))
