@@ -128,10 +128,12 @@ jobs:
       - name: Run gosec
         uses: securego/gosec@master
         with:
-          # G301/G302: this tool writes world-readable config/eBPF files to system
-          #   paths on purpose (0644/0755); those perms are intentional, not a leak.
-          # G304: file paths come from operator-controlled config, not untrusted input.
-          args: -exclude=G301,G302,G304 ./...
+          # Gate on medium+ severity only. The codebase has ~45 G104 (LOW,
+          # "errors unhandled" — e.g. deferred Close(), best-effort writes) that
+          # are not worth failing CI over; they still surface in the security-scan
+          # workflow's SARIF upload. G301/G302 (intentional 0644/0755 perms) and
+          # G304 (operator-controlled paths) are excluded outright.
+          args: -severity=medium -exclude=G301,G302,G304 ./...
 
       - name: Run govulncheck
         run: |

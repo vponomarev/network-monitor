@@ -76,37 +76,6 @@ jobs:
         with:
           category: "/language:go"
 
-  # Container scanning (best-effort: depends on external Trivy action + registry)
-  container-scan:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      contents: read
-      security-events: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: |
-          docker build -t network-monitor:scan . || {
-            echo "Docker build failed, creating empty SARIF report"
-            echo '{"runs":[{"tool":{"driver":{"name":"trivy"}},"results":[]}]}' > trivy-results.sarif
-            exit 0
-          }
-
-      - name: Run Trivy vulnerability scanner
-        if: success()
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: 'network-monitor:scan'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
-        if: always()
+  # NOTE: a container-scan (Trivy) job was removed — Docker images are not a
+  # current deliverable, and the external trivy-action was flaky. Re-add it when
+  # Docker publishing returns (see release/docker workflows).
