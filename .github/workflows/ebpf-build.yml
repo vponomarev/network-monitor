@@ -96,7 +96,7 @@ jobs:
             sudo bpftool prog show | grep -E 'tracepoint' | head
             echo "tcploss.bpf.o loaded successfully on $(uname -r)."
           else
-            echo "::warning title=tcploss eBPF load::tcploss.bpf.o failed to load on the runner kernel $(uname -r) (CO-RE relocation). Verify on a target kernel (<=6.12); see docs/prod-readiness."
+            echo "::warning title=tcploss eBPF load::tcploss.bpf.o failed to load on the runner kernel $(uname -r) (CO-RE relocation). Verify on a target kernel (<=6.12); see docs/completed/prod-readiness."
           fi
           sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
 
@@ -105,7 +105,7 @@ jobs:
         run: |
           # conntrack.bpf.o has a known CO-RE issue on newer kernels
           # (trace_event_raw_inet_sock_set_state layout); tracked in
-          # docs/prod-readiness/APPENDIX-conntrack-later.md. Non-blocking here.
+          # docs/completed/prod-readiness/APPENDIX-conntrack-later.md. Non-blocking here.
           sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
           sudo bpftool prog loadall bpf/conntrack.bpf.o /sys/fs/bpf/_ci \
             && echo "conntrack.bpf.o loaded" \

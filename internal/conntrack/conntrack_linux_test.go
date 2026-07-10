@@ -99,7 +99,7 @@ func TestTracker_Events(t *testing.T) {
 // NOTE: TestTracker_sendEvent and TestTracker_simulateEvents were removed in
 // TASK-12 — they targeted a removed conntrack API (Tracker.sendEvent,
 // simulateEvents(ctx), and an events.Event-typed channel). The events channel
-// now carries *Connection. See docs/prod-readiness/APPENDIX-conntrack-later.md
+// now carries *Connection. See docs/completed/prod-readiness/APPENDIX-conntrack-later.md
 // (C-8); rewriting conntrack tests belongs to the deferred conntrack track.
 
 func TestTracker_parseConnectionEvent(t *testing.T) {

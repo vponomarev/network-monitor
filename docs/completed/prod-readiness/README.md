@@ -1,5 +1,12 @@
 # Production-Readiness Plan — netmon (TCP loss + role labeling)
 
+> ✅ **ФАЗА 1 — ЗАВЕРШЕНА** (выпущено в релизе **v2.0.0**). Все задачи TASK-01…TASK-14
+> выполнены. Этот каталог перенесён в `docs/completed/` как архив. Дальнейшая
+> работа — в [`docs/phase-2-conntrack/`](../../phase-2-conntrack/README.md)
+> (доработка conntrack + переносимость eBPF на ядро 6.17). Отложенные пункты из
+> [`APPENDIX-conntrack-later.md`](APPENDIX-conntrack-later.md) (C-1…C-7) перенесены
+> в задачи Фазы 2.
+
 > **Цель проекта на этот план:** довести приложение **netmon** до production-ready
 > состояния для сбора метрик **потерь TCP-пакетов** (ретрансмиты) с разметкой
 > src/dst по **ролям и локациям** (конфиг-файлы с масками IP: `roles.yaml`,
