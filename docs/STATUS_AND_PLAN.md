@@ -1,113 +1,110 @@
-# Network Monitor — Статус и План Разработки
+# Network Monitor — актуальный статус и план развития
 
-*Документ обновлён: 2026-04-27*
+*Обновлено: 2026-07-11*
 
----
+## Граница production-ready
 
-## 📊 ОБЗОР ПРОЕКТА
+Репозиторий содержит два eBPF-контура с разной степенью готовности. Их нельзя
+оценивать и выпускать одним общим статусом.
 
-Сетевой монитор состоит из **двух независимых приложений**:
+| Контур | Назначение | Статус | Политика CI |
+|---|---|---|---|
+| **netmon / tcploss** | Мониторинг TCP-ретрансмитов (`tcp_retransmit_skb`) | Production-ready после закрытия P0 ниже | Сборка, C↔Go contract и smoke-load — блокирующие |
+| **conntrack** | Общий трекинг TCP-соединений | Experimental / roadmap | Проверки информативные; smoke-load пока `continue-on-error` |
 
-| Приложение | Каталог | Назначение | Готовность |
-|------------|---------|------------|------------|
-| **netmon** | `cmd/netmon` | Мониторинг TCP-потерь через trace_pipe | 100% |
-| **conntrack** | `cmd/conntrack` | Трекинг соединений через eBPF | 95% |
+Основной поддерживаемый продукт сейчас — `cmd/netmon` с
+`global.loss_source: ebpf`. `tracepipe` остаётся диагностическим fallback.
+`cmd/conntrack` и conntrack-функции внутри общего бинаря не входят в текущий
+production SLA. Известные ограничения этого контура перечислены в
+`prod-readiness/APPENDIX-conntrack-later.md`.
 
----
+## Что уже выполнено для netmon
 
-## ✅ ВЫПОЛНЕНО В PHASE 1
+- eBPF-сбор TCP-ретрансмитов через ring buffer, IPv4 и CO-RE;
+- обогащение ролями, локациями и топологией;
+- управляемая кардинальность метрик (`role`, `network`, `ip`, `max_series`);
+- реальные `/health` и `/ready`, фатальный выход при остановке критичного
+  коллектора или HTTP-сервера;
+- опциональная bearer-аутентификация `/metrics` и `/api/*`;
+- production systemd unit, release pipeline и руководства развёртывания;
+- legacy trace_pipe fallback для диагностики и миграции.
 
-### conntrack
-- [x] #1 Создан Makefile для сборки eBPF (`bpf/Makefile`)
-- [x] #2 Интегрирована загрузка eBPF из ELF файла (`tracker_linux.go`)
-- [x] #3 Создан `vmlinux.h` с необходимыми определениями ядра
-- [x] #4 Конфигурация перемещена в `types.go` (общий файл)
-- [x] #5 Добавлен `DefaultEBPFProgramPath` для пути по умолчанию
-- [x] #6 Обновлён `cmd/conntrack/main.go` для использования пути по умолчанию
+Подробная история выполненных задач: `docs/prod-readiness/README.md`.
 
-### netmon
-- [x] #1 Trace pipe collector готов к работе
-- [x] #2 Topology полностью интегрирован в main.go
-- [x] #3 Созданы integration tests (`tests/integration/core_test.go`)
+## Ближайший план
 
----
+### P0 — достоверность production-мониторинга
 
-## ✅ ВЫПОЛНЕНО В PHASE 2
+- [x] Разделить blocking CI для `tcploss` и advisory CI для `conntrack`.
+- [x] Учитывать kernel-side отбрасывания при переполнении ring buffer и
+  экспортировать `netmon_loss_events_dropped_total{reason="ringbuf_full"}`.
+- [x] Применять `global.ttl_hours` к сериям exporter, а не всегда использовать
+  внутренний дефолт 3 часа.
+- [x] Собрать, smoke-load и запустить обновлённый netmon на Debian 13,
+  ядро 6.12.85: race-тесты, vet, verifier, `/ready` и drops-метрика прошли.
+- [x] Выполнить регрессионную verifier/runtime-матрицу на ядрах 5.15, 6.1 и
+  6.8: build eBPF, bpftool load, `/ready`, drops-метрика и штатный SIGTERM
+  прошли на всех узлах.
 
-### netmon
-- [x] #4 Dashboard update — добавлены панели Discovery & Path Analysis
-- [x] #5 API documentation — создан `docs/DISCOVERY_API.md`
-- [x] #6 Config validation — расширена валидация всех секций конфига
+### P1 — эксплуатационная зрелость netmon
 
-### conntrack
-- [x] #4 Byte count tracking — добавлены метрики `conntrack_bytes_total` и `conntrack_bytes_per_connection`
-- [x] #5 Connection duration metrics — добавлены гистограммы длительности соединений
-- [x] #6 Process name resolution — улучшена очистка имён процессов из eBPF
+- [ ] Добавить alert rules: collector down, parse errors, ring-buffer drops,
+  cardinality drops и отсутствие входящих событий при ожидаемом трафике.
+- [ ] Добавить нагрузочный профиль с контролируемым потоком retransmit-событий
+  и зафиксировать пределы CPU, памяти и долю drops.
+- [ ] Добавить Kubernetes DaemonSet и Helm chart без изменения standalone
+  systemd-пути.
+- [ ] Унифицировать дублирующиеся systemd/config assets и проверять примеры
+  конфигурации в CI.
+- [ ] Добавить release qualification: запуск бинаря, `/ready`, scrape метрик и
+  smoke traffic на Linux VM до публикации артефактов.
 
----
+### P2 — развитие качества данных
 
-## ✅ ВЫПОЛНЕНО В PHASE 3
+- [ ] IPv6 для TCP-loss контура.
+- [ ] Явно различать retransmit как proxy потерь и подтверждённую причину потери;
+  добавить документацию по интерпретации и SLO.
+- [ ] Исследовать дополнительные TCP tracepoints/сигналы (RTO, fast retransmit,
+  reset) без увеличения кардинальности по умолчанию.
+- [ ] Версионировать схему метрик и контракт dashboards/alerts.
 
-### Infrastructure
-- [x] #1 Docker multi-stage build — поддержка netmon, conntrack и combined образов
-- [x] #2 Docker Compose — обновлён для обоих приложений + Prometheus/Grafana профили
-- [x] #3 GitHub Actions release workflow — сборка обоих приложений, eBPF, Docker
-- [x] #4 README — полная документация с архитектурой, API, метриками
+### Отдельный трек — conntrack
 
----
+Возвращаться к нему только отдельной серией задач. Минимальный порядок:
 
-## 📊 МЕТРИКИ ГОТОВНОСТИ
+1. Исправить CO-RE relocation на новых ядрах (C-7).
+2. Убрать busy-loop и `bpf_printk` из hot path (C-2, C-1).
+3. Сделать drops наблюдаемыми и ограничить дорогой process enrichment (C-4, C-3).
+4. Добавить матрицу E2E ядер и только после неё сделать conntrack smoke-load
+   блокирующим.
+5. После выполнения критериев выпустить conntrack как отдельный поддерживаемый
+   продукт либо осознанно включить его в единый daemon.
 
-| Приложение | Код | Тесты | Документация | Сборка | Итого |
-|------------|-----|-------|--------------|--------|-------|
-| netmon | 100% | 95% | 100% | 100% | 100% |
-| conntrack | 95% | 90% | 95% | 95% | 95% |
+До завершения этого трека ошибки conntrack не должны блокировать релизы netmon,
+но также не должны интерпретироваться как production-ready функциональность.
 
----
+## Критерии следующего production-релиза netmon
 
-## 📝 НОВЫЕ МЕТРИКИ CONNTRACK (Phase 2)
+1. `go test -race ./...`, `go vet ./...`, `gofmt` и Go build проходят.
+2. `tcploss.bpf.c` собирается, C↔Go layout тестируется, объект успешно грузится
+   на контролируемом поддерживаемом ядре; все проверки блокируют выпуск.
+3. При искусственном переполнении/дропах растёт соответствующая Prometheus
+   метрика; оператор может отличить отсутствие потерь от потери телеметрии.
+4. Конфигурационный TTL реально управляет временем жизни серий.
+5. Release-кандидат стартует под production systemd unit, становится ready и
+   отдаёт ожидаемые метрики на smoke traffic.
 
-### Byte Tracking
-```prometheus
-# Total bytes transferred by direction and type
-conntrack_bytes_total{direction="outgoing", type="sent"}
-conntrack_bytes_total{direction="outgoing", type="received"}
-conntrack_bytes_total{direction="incoming", type="sent"}
-conntrack_bytes_total{direction="incoming", type="received"}
+## Матрица совместимости, проверенная 2026-07-11
 
-# Bytes per connection histogram
-conntrack_bytes_per_connection{direction="outgoing"}
-conntrack_bytes_per_connection{direction="incoming"}
-```
+| Хост | ОС | Ядро | eBPF build/load | Runtime smoke |
+|---|---|---|---|---|
+| `192.168.5.217` | Ubuntu 22.04 | 5.15.0-185 | PASS | PASS |
+| `192.168.5.193` | Debian 12 | 6.1.0-45 | PASS | PASS |
+| `192.168.5.99` | Debian 12 / PVE | 6.8.12-20-pve | PASS | PASS |
+| `192.168.5.214` | Debian 13 | 6.12.85 | PASS | PASS |
 
-### Connection Duration
-```prometheus
-# TCP handshake duration histogram
-conntrack_handshake_duration_seconds{direction="outgoing"}
-conntrack_handshake_duration_seconds{direction="incoming"}
-
-# Total connection duration histogram
-conntrack_connection_duration_seconds{direction="outgoing"}
-conntrack_connection_duration_seconds{direction="incoming"}
-```
-
----
-
-## 📋 СЛЕДУЮЩИЕ ШАГИ (Phase 4 — Polish)
-
-### Опциональные улучшения
-- [ ] WebSocket API для real-time событий conntrack
-- [ ] JSON file export с ротацией для conntrack
-- [ ] Kubernetes manifests (DaemonSet + ConfigMap)
-- [ ] Helm chart для развёртывания
-- [ ] Alert rules для Prometheus
-- [ ] Performance benchmarks
-
-### Документация
-- [ ] Production deployment guide
-- [ ] Troubleshooting guide
-- [ ] Performance tuning guide
-
----
-
-*Документ будет обновляться по мере выполнения задач*
+На хостах 5.15/6.1/6.8 системный Go (`1.18.1`/`1.19.8`) старее требований
+проекта, поэтому текущий бинарь для runtime-матрицы собирался Go 1.24 отдельно.
+Полные race-тесты и vet выполнены на узле 6.12 с актуальным toolchain. Это не
+ограничение runtime: релиз поставляет готовый статический бинарь, но локальная
+сборка проекта требует современную версию Go.

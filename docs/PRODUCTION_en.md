@@ -207,6 +207,11 @@ global:
 **Protected endpoints:** `/metrics`, `/api/*`
 **Public endpoints:** `/health`, `/ready`
 
+Telemetry integrity: monitor
+`netmon_loss_events_dropped_total{reason="ringbuf_full"}`. Any increase means the
+kernel ring buffer was full and the primary loss metric is under-reporting;
+treat this as monitoring degradation.
+
 **Example curl with auth:**
 ```bash
 curl -H "Authorization: Bearer your-secret-token-here" http://localhost:9876/metrics

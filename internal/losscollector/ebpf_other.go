@@ -22,6 +22,7 @@ type Metrics interface {
 	IncEventsRead()
 	IncEventsParsed()
 	IncParseErrors()
+	AddEventsDropped(reason string, count uint64)
 }
 
 // Options mirrors the Linux type.

@@ -156,6 +156,7 @@ func main() {
 		},
 	)
 	exporter.SetTopology(networkTopology)
+	exporter.SetTTL(cfg.TTL())
 	// Periodic TTL cleanup: the raw CounterVec is registered (not the exporter),
 	// so scrapes never trigger Collect/cleanupOld — run a janitor instead.
 	exporter.StartJanitor(ctx, time.Minute)
