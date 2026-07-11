@@ -57,6 +57,14 @@ struct {
     __uint(max_entries, 256 * 1024);
 } loss_events SEC(".maps");
 
+/* Per-CPU counter of events discarded before they reached userspace. */
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} loss_drops SEC(".maps");
+
 SEC("tracepoint/tcp/tcp_retransmit_skb")
 int handle_tcp_retransmit(struct trace_event_raw_tcp_event_sk_skb *ctx)
 {
@@ -66,8 +74,13 @@ int handle_tcp_retransmit(struct trace_event_raw_tcp_event_sk_skb *ctx)
         return 0;
 
     struct tcploss_event *evt = bpf_ringbuf_reserve(&loss_events, sizeof(*evt), 0);
-    if (!evt)
+    if (!evt) {
+        __u32 key = 0;
+        __u64 *drops = bpf_map_lookup_elem(&loss_drops, &key);
+        if (drops)
+            (*drops)++;
         return 0;
+    }
 
     __builtin_memset(evt, 0, sizeof(*evt));
     evt->timestamp_ns = bpf_ktime_get_ns();

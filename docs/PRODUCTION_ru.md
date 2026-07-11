@@ -207,6 +207,11 @@ global:
 **Защищённые эндпоинты:** `/metrics`, `/api/*`
 **Публичные эндпоинты:** `/health`, `/ready`
 
+Контроль целостности телеметрии: следите за
+`netmon_loss_events_dropped_total{reason="ringbuf_full"}`. Рост метрики означает,
+что kernel ring buffer переполнен и основная метрика потерь занижена; это должно
+считаться деградацией мониторинга.
+
 **Пример curl с аутентификацией:**
 ```bash
 curl -H "Authorization: Bearer ваш-секретный-токен" http://localhost:9876/metrics

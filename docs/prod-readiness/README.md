@@ -60,6 +60,14 @@
 
 ### Дополнительные задачи
 - [`TASK-14`](TASK-14-gofmt-hygiene.md) — ✅ **DONE** (qwen) — Репозиторий приведён к `gofmt` (10 файлов). `gofmt -l .` пуст.
+- **Аудит 2026-07-11** — исправлена граница CI: smoke-load production-программы
+  `tcploss` блокирует сборку, а только отложенный `conntrack` остаётся
+  `continue-on-error`. Добавлен kernel-side счётчик переполнения ring buffer
+  `netmon_loss_events_dropped_total{reason="ringbuf_full"}` и подключён
+  конфигурационный `global.ttl_hours` к exporter. Обновлённый объект проверен
+  на Debian 13 / Linux 6.12.85: build, race-тесты, vet, bpftool verifier/load,
+  runtime `/ready` и scrape drops-метрики прошли. Дополнительная runtime-матрица
+  успешно пройдена на 5.15.0-185, 6.1.0-45 и 6.8.12-20-pve.
 
 ### Приложение
 - [`APPENDIX-conntrack-later.md`](APPENDIX-conntrack-later.md) — Отложенные задачи по conntrack (не для этого этапа, чтобы не потерять).

@@ -21,8 +21,8 @@ func TestCollectorMetrics_Registration(t *testing.T) {
 	metricFamilies, err := reg.Gather()
 	require.NoError(t, err)
 
-	// Should have 5 metrics
-	assert.Len(t, metricFamilies, 5)
+	// Should have 6 metrics
+	assert.Len(t, metricFamilies, 6)
 
 	// Check metric names
 	metricNames := make(map[string]bool)
@@ -33,6 +33,7 @@ func TestCollectorMetrics_Registration(t *testing.T) {
 	assert.True(t, metricNames["netmon_loss_collector_up"])
 	assert.True(t, metricNames["netmon_loss_events_read_total"])
 	assert.True(t, metricNames["netmon_loss_events_parsed_total"])
+	assert.True(t, metricNames["netmon_loss_events_dropped_total"])
 	assert.True(t, metricNames["netmon_loss_parse_errors_total"])
 	assert.True(t, metricNames["netmon_loss_source_info"])
 }
@@ -97,6 +98,7 @@ func TestCollectorMetrics_Counters(t *testing.T) {
 	metrics.IncEventsParsed()
 
 	metrics.IncParseErrors()
+	metrics.AddEventsDropped("ringbuf_full", 4)
 
 	// Gather and verify
 	metricFamilies, err := reg.Gather()
@@ -111,6 +113,7 @@ func TestCollectorMetrics_Counters(t *testing.T) {
 
 	assert.Equal(t, 3.0, counters["netmon_loss_events_read_total"])
 	assert.Equal(t, 2.0, counters["netmon_loss_events_parsed_total"])
+	assert.Equal(t, 4.0, counters["netmon_loss_events_dropped_total"])
 	assert.Equal(t, 1.0, counters["netmon_loss_parse_errors_total"])
 }
 

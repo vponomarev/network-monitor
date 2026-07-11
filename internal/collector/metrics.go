@@ -7,11 +7,12 @@ import (
 
 // CollectorMetrics holds self-observation metrics for the loss collector
 type CollectorMetrics struct {
-	up           prometheus.Gauge
-	eventsRead   prometheus.Counter
-	eventsParsed prometheus.Counter
-	parseErrors  prometheus.Counter
-	sourceInfo   prometheus.Gauge
+	up            prometheus.Gauge
+	eventsRead    prometheus.Counter
+	eventsParsed  prometheus.Counter
+	parseErrors   prometheus.Counter
+	eventsDropped *prometheus.CounterVec
+	sourceInfo    prometheus.Gauge
 }
 
 // NewCollectorMetrics creates and registers collector metrics. An optional
@@ -39,6 +40,10 @@ func NewCollectorMetrics(reg prometheus.Registerer, logger *zap.Logger, source .
 			Name: "netmon_loss_parse_errors_total",
 			Help: "Total number of events that failed to parse",
 		}),
+		eventsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "netmon_loss_events_dropped_total",
+			Help: "Total number of loss events dropped before parsing",
+		}, []string{"reason"}),
 		sourceInfo: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "netmon_loss_source_info",
 			Help: "Information about the loss data source (labelled by source; value always 1)",
@@ -49,10 +54,11 @@ func NewCollectorMetrics(reg prometheus.Registerer, logger *zap.Logger, source .
 	}
 
 	// Register metrics
-	reg.MustRegister(m.up, m.eventsRead, m.eventsParsed, m.parseErrors, m.sourceInfo)
+	reg.MustRegister(m.up, m.eventsRead, m.eventsParsed, m.parseErrors, m.eventsDropped, m.sourceInfo)
 
 	// Set source info to 1
 	m.sourceInfo.Set(1)
+	m.eventsDropped.WithLabelValues("ringbuf_full").Add(0)
 
 	logger.Info("Collector self-metrics registered",
 		zap.String("source", src))
@@ -82,6 +88,14 @@ func (m *CollectorMetrics) IncEventsParsed() {
 // IncParseErrors increments the parse errors counter
 func (m *CollectorMetrics) IncParseErrors() {
 	m.parseErrors.Inc()
+}
+
+// AddEventsDropped records events discarded before they reached the parser.
+func (m *CollectorMetrics) AddEventsDropped(reason string, count uint64) {
+	if count == 0 {
+		return
+	}
+	m.eventsDropped.WithLabelValues(reason).Add(float64(count))
 }
 
 // SetSourceInfo sets the source info gauge

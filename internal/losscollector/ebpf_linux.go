@@ -29,9 +29,10 @@ import (
 
 // Names must match bpf/tcploss.bpf.c.
 const (
-	bpfProgName = "handle_tcp_retransmit"
-	bpfMapName  = "loss_events"
-	afInet      = 2
+	bpfProgName    = "handle_tcp_retransmit"
+	bpfMapName     = "loss_events"
+	bpfDropMapName = "loss_drops"
+	afInet         = 2
 )
 
 // RetransmitExporter receives one call per retransmit event. Satisfied by
@@ -46,6 +47,7 @@ type Metrics interface {
 	IncEventsRead()
 	IncEventsParsed()
 	IncParseErrors()
+	AddEventsDropped(reason string, count uint64)
 }
 
 // bpfLossEvent MUST byte-match struct tcploss_event in bpf/tcploss.bpf.c (48 bytes).
@@ -201,6 +203,14 @@ func (c *EBPFLossCollector) Run(ctx context.Context) error {
 		<-ctx.Done()
 		rd.Close()
 	}()
+	if dropMap, ok := coll.Maps[bpfDropMapName]; ok {
+		go c.observeKernelDrops(ctx, dropMap)
+	} else {
+		// Keep locally built binaries with an older embedded object usable. CI and
+		// release always rebuild from bpf/tcploss.bpf.c and therefore include it.
+		c.logger.Warn("eBPF drop counter map is unavailable; rebuild embedded tcploss.bpf.o",
+			zap.String("map", bpfDropMapName))
+	}
 
 	c.signalReady()
 	c.logger.Info("eBPF loss collector consuming events")
@@ -228,6 +238,50 @@ func (c *EBPFLossCollector) Run(ctx context.Context) error {
 		}
 		c.handleRecord(record.RawSample)
 	}
+}
+
+// observeKernelDrops converts the absolute per-CPU eBPF counter into deltas for
+// Prometheus. A read failure affects observability, not event collection.
+func (c *EBPFLossCollector) observeKernelDrops(ctx context.Context, dropMap *ebpf.Map) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var previous uint64
+	collect := func() {
+		current, err := readPerCPUDropCount(dropMap)
+		if err != nil {
+			c.logger.Warn("Reading eBPF loss drop counter", zap.Error(err))
+			return
+		}
+		if current >= previous && c.metrics != nil {
+			c.metrics.AddEventsDropped("ringbuf_full", current-previous)
+		}
+		previous = current
+	}
+
+	collect()
+	for {
+		select {
+		case <-ctx.Done():
+			collect()
+			return
+		case <-ticker.C:
+			collect()
+		}
+	}
+}
+
+func readPerCPUDropCount(dropMap *ebpf.Map) (uint64, error) {
+	key := uint32(0)
+	var perCPU []uint64
+	if err := dropMap.Lookup(&key, &perCPU); err != nil {
+		return 0, err
+	}
+	var total uint64
+	for _, value := range perCPU {
+		total += value
+	}
+	return total, nil
 }
 
 // handleRecord parses one raw event and forwards it to the exporter.
