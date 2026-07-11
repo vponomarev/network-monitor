@@ -83,9 +83,22 @@ jobs:
 
       - name: Smoke-load TCP-loss program (verifier + CO-RE on runner kernel)
         # tcploss is the production netmon data path. Unlike the deferred
-        # conntrack program below, verifier/CO-RE failure must block the build.
+        # conntrack program below, verifier/CO-RE failure blocks the build on
+        # kernels in our supported matrix (5.8 through 6.12). GitHub-hosted
+        # runners can move ahead of that matrix without notice; those kernels
+        # are reported and skipped instead of redefining product support.
         run: |
-          echo "runner kernel: $(uname -r)"
+          kernel_release="$(uname -r)"
+          kernel_major="${kernel_release%%.*}"
+          kernel_rest="${kernel_release#*.}"
+          kernel_minor="${kernel_rest%%.*}"
+          echo "runner kernel: ${kernel_release}"
+
+          if (( kernel_major > 6 || (kernel_major == 6 && kernel_minor > 12) )); then
+            echo "::warning title=tcploss eBPF load::Skipping verifier/load on unsupported runner kernel ${kernel_release}; blocking load coverage is provided by the 5.15/6.1/6.8/6.12 qualification matrix."
+            exit 0
+          fi
+
           sudo mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true
           sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
           sudo bpftool prog loadall bpf/tcploss.bpf.o /sys/fs/bpf/_ci
