@@ -19,7 +19,12 @@ Before tagging a conntrack release candidate:
    ```
 
 3. From the bundle, verify `install → start → /ready → /metrics → restart →
-   deinstall` on a qualification host.
+   deinstall` on a qualification host:
+
+   ```bash
+   sudo tests/conntrack/e2e/qualify-bundle.sh \
+     ./conntrack-<version>-linux-amd64.tar.gz
+   ```
 4. Confirm CI, Security Scan, eBPF Build & Verify, and Docker Publish are green.
 
 ## Creating a release

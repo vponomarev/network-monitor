@@ -27,3 +27,14 @@ The orchestrator prompts for SSH credentials, pins each known host key, uploads
 the binary and host script to a unique `/tmp` directory, and removes them after
 the test. Never put the password in the repository or command history. Prefer
 SSH keys/Pageant when unattended execution is introduced.
+
+Qualify the complete release bundle on a systemd host:
+
+```bash
+sudo tests/conntrack/e2e/qualify-bundle.sh \
+  ./conntrack-v2.2.0-linux-amd64.tar.gz
+```
+
+This test backs up the existing conntrack binary, config, unit and service
+state; verifies install, readiness, metrics, restart, deinstall and config
+preservation; and restores the original host state even when a check fails.
