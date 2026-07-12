@@ -47,14 +47,18 @@ runtime-хостов. Conntrack пока выпускается отдельны
 | `192.168.5.99` | Proxmox VE 8 / Debian 12 | `6.8.12-20-pve` |
 | `192.168.5.214` | Debian 13 | `6.12.85` |
 
-## Текущий релизный scope
+## Релиз v2.2.0 — завершён 2026-07-13
 
 1. [x] Убрать ARM из GitHub Release и документации поставки.
 2. [x] Прогнать новый E2E-скрипт одним `conntrack-linux-amd64` артефактом на
    четырёх поддерживаемых ядрах — PASS на 5.15, 6.1, 6.8 и 6.12.
-3. [ ] Собрать release-кандидат на Linux-хосте, проверить установку из bundle,
+3. [x] Собрать release-кандидат на Linux-хосте, проверить установку из bundle,
    readiness, метрики, трафик, restart и deinstall.
-4. [ ] После успешной qualification выпустить новую minor-версию.
+4. [x] После успешной qualification выпустить новую minor-версию `v2.2.0`.
+
+Финальные netmon/conntrack binaries и bundles собраны на Debian 13 из commit
+`a7adb3b`; опубликованные GitHub assets сверены по SHA256. Release workflow,
+post-merge CI, Security Scan и Docker Publish прошли успешно.
 
 Alerts относятся к внешнему контуру мониторинга и не блокируют этот релиз.
 
@@ -71,6 +75,8 @@ Alerts относятся к внешнему контуру мониторин�
 ### Плановое развитие
 
 - расширенные lifecycle/API/concurrency/error-path тесты conntrack;
+- исправление environment-dependent `TestTracerouteFactory_Create`: при наличии
+  системного traceroute тест ошибочно ожидает failure и разыменовывает `nil`;
 - усиление systemd sandbox и переход с `CAP_SYS_ADMIN` на минимальные capability
   там, где это совместимо с поддерживаемыми ядрами;
 - IPv6 для conntrack и TCP-loss;
