@@ -1,0 +1,5 @@
+# Shell scripts are uploaded from Windows to Linux qualification hosts.
+*.sh text eol=lf
+
+# Keep PowerShell scripts native to Windows checkouts.
+*.ps1 text eol=crlf
