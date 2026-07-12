@@ -51,14 +51,18 @@ RUN make -C /build/bpf all
 # =============================================================================
 # NETMON BUILDER
 # =============================================================================
-FROM base AS netmon-builder
+FROM bpf-builder AS netmon-builder
+
+WORKDIR /build
 
 ARG VERSION=dev
-ARG BUILD_TIME=${BUILD_TIME:-unknown}
-ARG GIT_COMMIT=${GIT_COMMIT:-unknown}
+ARG BUILD_TIME=unknown
+ARG GIT_COMMIT=unknown
 
-# Build netmon binary
-RUN CGO_ENABLED=0 GOOS=linux go build \
+# Embed the objects produced in this build instead of the copies committed for
+# environments that cannot compile eBPF locally.
+RUN cp bpf/conntrack.bpf.o bpf/tcploss.bpf.o pkg/embedded/bpf/ && \
+    CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
     -o /build/bin/netmon \
     ./cmd/netmon
@@ -68,15 +72,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =============================================================================
 FROM bpf-builder AS conntrack-builder
 
+WORKDIR /build
+
 ARG VERSION=dev
-ARG BUILD_TIME=${BUILD_TIME:-unknown}
-ARG GIT_COMMIT=${GIT_COMMIT:-unknown}
+ARG BUILD_TIME=unknown
+ARG GIT_COMMIT=unknown
 
-# Copy built eBPF programs
-COPY --from=bpf-builder /build/bpf/*.o /build/bpf/
-
-# Build conntrack binary
-RUN CGO_ENABLED=0 GOOS=linux go build \
+# Embed the objects produced in this build before compiling the binary.
+RUN cp bpf/conntrack.bpf.o bpf/tcploss.bpf.o pkg/embedded/bpf/ && \
+    CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
     -o /build/bin/conntrack \
     ./cmd/conntrack
