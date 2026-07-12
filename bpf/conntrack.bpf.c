@@ -12,6 +12,12 @@
 #ifndef TCP_SYN_SENT
 #define TCP_SYN_SENT 2
 #endif
+#ifndef TCP_ESTABLISHED
+#define TCP_ESTABLISHED 1
+#endif
+#ifndef TCP_CLOSE
+#define TCP_CLOSE 7
+#endif
 
 /*
  * eBPF Connection Tracker - tracepoint based for outgoing connections
@@ -70,12 +76,35 @@ struct {
     __uint(max_entries, 256 * 1024);
 } events SEC(".maps");
 
+/* Events discarded because userspace did not drain the ring buffer in time. */
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} event_drops SEC(".maps");
+
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, MAX_CONNECTIONS);
     __type(key, struct connection_key);
     __type(value, struct connection_entry);
 } connections SEC(".maps");
+
+/* Socket saved across tcp_v4_connect entry/return so the return probe sees
+ * the final ephemeral source port assigned by the kernel. */
+struct pending_outgoing_meta {
+    __u64 timestamp_ns;
+    __u64 pid_tgid;
+    char comm[TASK_COMM_LEN];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 16384);
+    __type(key, __u64);
+    __type(value, struct pending_outgoing_meta);
+} pending_outgoing SEC(".maps");
 
 volatile const bool track_incoming = true;
 volatile const bool track_outgoing = true;
@@ -84,8 +113,13 @@ volatile const bool track_closes = true;
 static __always_inline void submit_event(struct connection_event *evt)
 {
     struct connection_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-    if (!event)
+    if (!event) {
+        __u32 key = 0;
+        __u64 *drops = bpf_map_lookup_elem(&event_drops, &key);
+        if (drops)
+            (*drops)++;
         return;
+    }
     *event = *evt;
     bpf_ringbuf_submit(event, 0);
 }
@@ -115,17 +149,10 @@ static __always_inline void extract_ipv4_addrs(struct sock *sk, __u8 *saddr, __u
     daddr[10] = 0xff;
     daddr[11] = 0xff;
 
-    // Copy bytes directly from network-order __u32
-    // saddr4 = [byte0][byte1][byte2][byte3] in big-endian
-    saddr[12] = (__u8)((saddr4 >> 24) & 0xFF);  // byte0 (MSB)
-    saddr[13] = (__u8)((saddr4 >> 16) & 0xFF);  // byte1
-    saddr[14] = (__u8)((saddr4 >> 8) & 0xFF);   // byte2
-    saddr[15] = (__u8)(saddr4 & 0xFF);          // byte3 (LSB)
-
-    daddr[12] = (__u8)((daddr4 >> 24) & 0xFF);
-    daddr[13] = (__u8)((daddr4 >> 16) & 0xFF);
-    daddr[14] = (__u8)((daddr4 >> 8) & 0xFF);
-    daddr[15] = (__u8)(daddr4 & 0xFF);
+    /* Values are stored in network byte order; copying their memory bytes
+     * preserves dotted-quad order on little- and big-endian hosts. */
+    __builtin_memcpy(&saddr[12], &saddr4, sizeof(saddr4));
+    __builtin_memcpy(&daddr[12], &daddr4, sizeof(daddr4));
 }
 
 /* Extract ports from sock */
@@ -139,74 +166,20 @@ static __always_inline void extract_ports(struct sock *sk, __u16 *sport, __u16 *
 /* Create connection key from sock - RAW socket values (no swap) */
 static __always_inline void make_key_from_sock(struct sock *sk, struct connection_key *key)
 {
+    __u16 sport, dport;
+
     extract_ipv4_addrs(sk, key->src_ip, key->dst_ip);
-    extract_ports(sk, &key->src_port, &key->dst_port);
+    extract_ports(sk, &sport, &dport);
+    key->src_port = sport;
+    key->dst_port = dport;
     key->protocol = IPPROTO_TCP;
 }
 
 /* -------------------------------------------------------------------------
  * kprobe/tcp_connect — outgoing connections (fallback for kernels < 5.14).
  *
- * This is used when tracepoint/sock/inet_sock_set_state is not available.
- * Note: Some kernels (e.g., Ubuntu 22.04 with 5.15) may block kprobe/tcp_connect
- * for userspace processes due to security restrictions.
+ * Outgoing connections are correlated through inet_sock_set_state below.
  * ---------------------------------------------------------------------- */
-SEC("kprobe/tcp_connect")
-int BPF_KPROBE(tcp_connect, struct sock *sk)
-{
-    if (!track_outgoing)
-        return 0;
-
-    // Check socket family - only IPv4 supported
-    __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    if (family != AF_INET)
-        return 0;
-
-    struct connection_event evt = {};
-    struct connection_key key = {};
-
-    evt.timestamp_ns = bpf_ktime_get_ns();
-    evt.pid_tgid = bpf_get_current_pid_tgid();
-    evt.pid = evt.pid_tgid >> 32;
-    evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.direction = DIR_OUTGOING;
-    evt.state = CONN_STATE_SYN_SENT;
-    evt.event_type = CONN_EVENT_NEW;
-    evt.tcp_flags = TCP_SYN;
-
-    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
-
-    make_key_from_sock(sk, &key);
-
-    /* Filter out invalid connections (qemu-ga, etc.) */
-    __u32 src_ip4 = ((__u32)key.src_ip[12] << 24) | ((__u32)key.src_ip[13] << 16) |
-                    ((__u32)key.src_ip[14] << 8) | (__u32)key.src_ip[15];
-    __u32 dst_ip4 = ((__u32)key.dst_ip[12] << 24) | ((__u32)key.dst_ip[13] << 16) |
-                    ((__u32)key.dst_ip[14] << 8) | (__u32)key.dst_ip[15];
-
-    if (src_ip4 == 0 && dst_ip4 == 0) {
-        return 0;
-    }
-
-    __builtin_memcpy(evt.src_ip, key.src_ip, 16);
-    __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
-    evt.src_port = key.src_port;
-    evt.dst_port = key.dst_port;
-    evt.protocol = key.protocol;
-
-    struct connection_entry entry = {};
-    entry.timestamp_ns = evt.timestamp_ns;
-    entry.pid = evt.pid;
-    entry.direction = DIR_OUTGOING;
-    entry.state = CONN_STATE_SYN_SENT;
-    entry.tcp_flags = TCP_SYN;
-    __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
-
-    bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
-    submit_event(&evt);
-    return 0;
-}
-
 /* -------------------------------------------------------------------------
  * tracepoint/sock/inet_sock_set_state — outgoing connections (PRIMARY for 5.14+).
  *
@@ -217,32 +190,50 @@ int BPF_KPROBE(tcp_connect, struct sock *sk)
 SEC("tracepoint/sock/inet_sock_set_state")
 int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
 {
-    if (!track_outgoing)
+    if (!track_outgoing && !track_closes)
         return 0;
 
-    /* Only IPv4 TCP transitioning to SYN_SENT */
+    /* Correlate SYN_SENT (process context) with ESTABLISHED (complete tuple). */
     if (BPF_CORE_READ(ctx, protocol) != IPPROTO_TCP)
-        return 0;
-    if (BPF_CORE_READ(ctx, newstate) != TCP_SYN_SENT)
         return 0;
     if (BPF_CORE_READ(ctx, family) != AF_INET)
         return 0;
 
-    bpf_printk("conntrack: tracepoint fired, protocol=%d, newstate=%d",
-               BPF_CORE_READ(ctx, protocol), BPF_CORE_READ(ctx, newstate));
+    __u32 oldstate = BPF_CORE_READ(ctx, oldstate);
+    __u32 newstate = BPF_CORE_READ(ctx, newstate);
+    __u64 skaddr = (__u64)BPF_CORE_READ(ctx, skaddr);
+
+    if (track_outgoing && newstate == TCP_SYN_SENT) {
+        struct pending_outgoing_meta meta = {};
+        meta.timestamp_ns = bpf_ktime_get_ns();
+        meta.pid_tgid = bpf_get_current_pid_tgid();
+        bpf_get_current_comm(&meta.comm, sizeof(meta.comm));
+        bpf_map_update_elem(&pending_outgoing, &skaddr, &meta, BPF_ANY);
+        return 0;
+    }
+    bool established = track_outgoing && oldstate == TCP_SYN_SENT && newstate == TCP_ESTABLISHED;
+    bool closed = track_closes && newstate == TCP_CLOSE;
+    if (!established && !closed)
+        return 0;
+
+    struct pending_outgoing_meta *meta = established ?
+        bpf_map_lookup_elem(&pending_outgoing, &skaddr) : 0;
 
     struct connection_event evt = {};
-    evt.timestamp_ns = bpf_ktime_get_ns();
-    evt.pid_tgid = bpf_get_current_pid_tgid();
+    evt.timestamp_ns = meta ? meta->timestamp_ns : bpf_ktime_get_ns();
+    evt.pid_tgid = meta ? meta->pid_tgid : bpf_get_current_pid_tgid();
     evt.pid = (__u32)(evt.pid_tgid >> 32);
     evt.tid = (__u32)(evt.pid_tgid & 0xFFFFFFFF);
-    evt.direction = DIR_OUTGOING;
-    evt.state = CONN_STATE_SYN_SENT;
-    evt.event_type = CONN_EVENT_NEW;
-    evt.tcp_flags = TCP_SYN;
+    evt.direction = established ? DIR_OUTGOING : DIR_UNKNOWN;
+    evt.state = established ? CONN_STATE_ESTABLISHED : CONN_STATE_CLOSED;
+    evt.event_type = established ? CONN_EVENT_ESTABLISHED : CONN_EVENT_CLOSED;
+    evt.tcp_flags = established ? (TCP_SYN | TCP_ACK) : TCP_FIN;
     evt.protocol = IPPROTO_TCP;
 
-    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
+    if (meta)
+        __builtin_memcpy(evt.comm, meta->comm, TASK_COMM_LEN);
+    else
+        bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
 
     /* ctx->saddr / ctx->daddr are __u8[4] in network byte order (big-endian)
      * Reconstruct __u32 from bytes: byte[0] is MSB, byte[3] is LSB
@@ -254,9 +245,6 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
         return 0;
     if (bpf_core_read(&daddr_bytes, sizeof(daddr_bytes), &ctx->daddr) != 0)
         return 0;
-
-    bpf_printk("conntrack: tracepoint fired, sport=%d, dport=%d",
-               (__u32)ctx->sport, (__u32)ctx->dport);
 
     __builtin_memset(evt.src_ip, 0, 16);
     __builtin_memset(evt.dst_ip, 0, 16);
@@ -274,8 +262,8 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
     evt.dst_ip[14] = daddr_bytes[2];
     evt.dst_ip[15] = daddr_bytes[3];
 
-    evt.src_port = ctx->sport;
-    evt.dst_port = ctx->dport;
+    evt.src_port = BPF_CORE_READ(ctx, sport);
+    evt.dst_port = BPF_CORE_READ(ctx, dport);
 
     /* Filter out invalid connections (qemu-ga, etc.) */
     __u32 saddr4 = ((__u32)saddr_bytes[0] << 24) | ((__u32)saddr_bytes[1] << 16) |
@@ -284,7 +272,6 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
                    ((__u32)daddr_bytes[2] << 8) | (__u32)daddr_bytes[3];
 
     if (saddr4 == 0 && daddr4 == 0) {
-        bpf_printk("conntrack: filtering out (both IPs zero)");
         return 0;
     }
 
@@ -295,16 +282,40 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
     key.dst_port = evt.dst_port;
     key.protocol = IPPROTO_TCP;
 
-    struct connection_entry entry = {};
-    entry.timestamp_ns = evt.timestamp_ns;
-    entry.pid = evt.pid;
-    entry.direction = DIR_OUTGOING;
-    entry.state = CONN_STATE_SYN_SENT;
-    entry.tcp_flags = TCP_SYN;
-    __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
+    if (established) {
+        struct connection_entry entry = {};
+        entry.timestamp_ns = evt.timestamp_ns;
+        entry.pid = evt.pid;
+        entry.direction = DIR_OUTGOING;
+        entry.state = CONN_STATE_ESTABLISHED;
+        entry.tcp_flags = TCP_SYN | TCP_ACK;
+        __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
+        bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
+        bpf_map_delete_elem(&pending_outgoing, &skaddr);
+    } else {
+        struct connection_entry *entry = bpf_map_lookup_elem(&connections, &key);
+        if (entry) {
+            evt.direction = entry->direction;
+            evt.pid = entry->pid;
+            __builtin_memcpy(evt.comm, entry->comm, TASK_COMM_LEN);
 
-    bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
-    bpf_printk("conntrack: tracepoint submitting event");
+            if (entry->direction == DIR_INCOMING) {
+                __u8 tmp_ip[16];
+                __u16 tmp_port;
+                __builtin_memcpy(tmp_ip, evt.src_ip, sizeof(tmp_ip));
+                __builtin_memcpy(evt.src_ip, evt.dst_ip, sizeof(evt.src_ip));
+                __builtin_memcpy(evt.dst_ip, tmp_ip, sizeof(evt.dst_ip));
+                tmp_port = evt.src_port;
+                evt.src_port = evt.dst_port;
+                evt.dst_port = tmp_port;
+            }
+            bpf_map_delete_elem(&connections, &key);
+        } else {
+            /* Ignore duplicate closes and sockets that predate the tracker. */
+            return 0;
+        }
+    }
+
     submit_event(&evt);
     return 0;
 }
@@ -322,7 +333,8 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
  * evt.comm semantics: name of the process calling accept() (the server).
  * May occasionally be a kernel thread name if the scheduler context
  * switches between accept() and the kretprobe firing — this is a known
- * limitation. Userspace should fall back to /proc/{pid}/comm if needed.
+ * limitation. Userspace reports "unknown" when comm is unavailable and never
+ * blocks the ring-buffer consumer on /proc I/O.
  *
  * tcp_flags = TCP_SYN|TCP_ACK is symbolic — the handshake is already done.
  * ---------------------------------------------------------------------- */

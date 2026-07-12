@@ -15,7 +15,6 @@ import (
 
 const (
 	defaultInstallPath = "/usr/local/bin"
-	defaultEBPFPath    = "/usr/share/conntrack/bpf/conntrack.bpf.o"
 	defaultConfigPath  = "/etc/conntrack/config.yaml"
 	defaultSystemdPath = "/etc/systemd/system/conntrack.service"
 )
@@ -24,7 +23,7 @@ const (
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install conntrack to system",
-	Long:  "Install conntrack binary, eBPF program, systemd unit and configuration",
+	Long:  "Install the conntrack binary, systemd unit and configuration",
 	RunE:  runInstall,
 }
 
@@ -77,14 +76,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("✓ Installed binary: %s\n", binaryPath)
 
-	// 2. Установка eBPF программы
-	if err := embedded.WriteEBPFToFile(defaultEBPFPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to install eBPF program: %v\n", err)
-		return fmt.Errorf("installing eBPF program: %w", err)
-	}
-	fmt.Printf("✓ Installed eBPF program: %s\n", defaultEBPFPath)
-
-	// 3. Установка config (если не существует)
+	// 2. Install config without overwriting operator changes.
 	if _, err := os.Stat(defaultConfigPath); err == nil {
 		fmt.Printf("⚠ Config already exists: %s (skipped)\n", defaultConfigPath)
 	} else if os.IsNotExist(err) {
@@ -98,14 +90,14 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking config: %w", err)
 	}
 
-	// 4. Установка systemd unit
+	// 3. Install systemd unit.
 	if err := embedded.WriteSystemdUnitToFile(defaultSystemdPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to install systemd unit: %v\n", err)
 		return fmt.Errorf("installing systemd unit: %w", err)
 	}
 	fmt.Printf("✓ Installed systemd unit: %s\n", defaultSystemdPath)
 
-	// 5. Reload systemd
+	// 4. Reload systemd.
 	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
 		fmt.Printf("⚠ Failed to reload systemd: %v\n", err)
 		fmt.Println("  Run 'sudo systemctl daemon-reload' manually")
@@ -134,16 +126,12 @@ func runDeinstall(cmd *cobra.Command, args []string) error {
 	exec.Command("systemctl", "disable", "conntrack").Run()
 	fmt.Println("✓ Stopped and disabled systemd service")
 
-	// 2. Reload systemd
-	exec.Command("systemctl", "daemon-reload").Run()
-
-	// 3. Удаление файлов (config НЕ удаляется)
+	// 2. Remove managed files (config is preserved).
 	files := []struct {
 		path string
 		name string
 	}{
 		{defaultInstallPath + "/conntrack", "binary"},
-		{defaultEBPFPath, "eBPF program"},
 		{defaultSystemdPath, "systemd unit"},
 	}
 
@@ -159,10 +147,15 @@ func runDeinstall(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 4. Удаление директории eBPF если пуста
-	os.RemoveAll("/usr/share/conntrack")
+	// Remove the legacy external object from pre-embedded installations.
+	_ = os.Remove("/usr/share/conntrack/bpf/conntrack.bpf.o")
+	_ = os.Remove("/usr/share/conntrack/bpf")
+	_ = os.Remove("/usr/share/conntrack")
 
-	// 5. Config НЕ удаляется
+	// Reload after removing the unit so systemd forgets it.
+	_ = exec.Command("systemctl", "daemon-reload").Run()
+
+	// 3. Config is intentionally preserved.
 	fmt.Printf("✓ Preserved config: %s\n", defaultConfigPath)
 
 	fmt.Println()
@@ -173,6 +166,9 @@ func runDeinstall(cmd *cobra.Command, args []string) error {
 
 // checkWritePermissions проверяет возможность записи в директорию
 func checkWritePermissions(dir string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
+	}
 	testFile := filepath.Join(dir, ".conntrack-install-test")
 	if err := os.WriteFile(testFile, []byte(""), 0644); err != nil {
 		return fmt.Errorf("cannot write to %s: %w", dir, err)

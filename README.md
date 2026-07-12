@@ -87,7 +87,10 @@ curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scr
 
 **Conntrack:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scripts/install-conntrack.sh | sudo bash
+wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack-linux-amd64
+chmod +x conntrack-linux-amd64
+sudo ./conntrack-linux-amd64 install
+sudo systemctl enable --now conntrack
 ```
 
 ### Prerequisites

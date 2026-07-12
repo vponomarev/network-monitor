@@ -35,10 +35,10 @@ jobs:
           fi
 
   # =====================
-  # Build netmon binaries
+  # Build production binaries
   # =====================
   build-netmon:
-    name: Build netmon-${{ matrix.os }}/${{ matrix.arch }}
+    name: Build binaries-${{ matrix.os }}/${{ matrix.arch }}
     runs-on: ubuntu-latest
     needs: [validate]
     strategy:
@@ -83,12 +83,20 @@ jobs:
               -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X main.GitCommit=$(git rev-parse --short HEAD)" \
             -o netmon-${{ matrix.os }}-${{ matrix.arch }} ./cmd/netmon
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
+            go build -ldflags="-s -w \
+              -X main.Version=${VERSION} \
+              -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+              -X main.GitCommit=$(git rev-parse --short HEAD)" \
+            -o conntrack-${{ matrix.os }}-${{ matrix.arch }} ./cmd/conntrack
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: netmon-${{ matrix.os }}-${{ matrix.arch }}
-          path: netmon-${{ matrix.os }}-${{ matrix.arch }}
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            netmon-${{ matrix.os }}-${{ matrix.arch }}
+            conntrack-${{ matrix.os }}-${{ matrix.arch }}
           retention-days: 1
 
   # =====================
@@ -116,7 +124,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           for arch in amd64 arm64; do
-            bin="downloaded/netmon-linux-${arch}/netmon-linux-${arch}"
+            bin="downloaded/binaries-linux-${arch}/netmon-linux-${arch}"
+            conntrack_bin="downloaded/binaries-linux-${arch}/conntrack-linux-${arch}"
             # Raw binary + checksum (for direct download)
             cp "$bin" "dist/netmon-linux-${arch}"
             chmod +x "dist/netmon-linux-${arch}"
@@ -134,10 +143,21 @@ jobs:
             cp docs/PRODUCTION_en.md          "dist/${stage}/PRODUCTION.md"
             tar -czf "dist/${stage}.tar.gz" -C dist "${stage}"
             rm -rf "dist/${stage}"
+
+            cp "$conntrack_bin" "dist/conntrack-linux-${arch}"
+            chmod +x "dist/conntrack-linux-${arch}"
+            conntrack_stage="conntrack-${VERSION}-linux-${arch}"
+            mkdir -p "dist/${conntrack_stage}/configs"
+            cp "$conntrack_bin" "dist/${conntrack_stage}/conntrack"
+            chmod +x "dist/${conntrack_stage}/conntrack"
+            cp configs/conntrack.example.yaml "dist/${conntrack_stage}/configs/config.yaml"
+            cp packaging/systemd/conntrack.service "dist/${conntrack_stage}/conntrack.service"
+            tar -czf "dist/${conntrack_stage}.tar.gz" -C dist "${conntrack_stage}"
+            rm -rf "dist/${conntrack_stage}"
           done
 
           # Single checksums file over all published assets
-          ( cd dist && sha256sum netmon-linux-* *.tar.gz > checksums.txt )
+          ( cd dist && sha256sum netmon-linux-* conntrack-linux-* *.tar.gz > checksums.txt )
           echo "=== release assets ==="
           ls -la dist/
 
@@ -188,6 +208,13 @@ jobs:
 
             Prefer just the binary? Download `netmon-linux-amd64` / `netmon-linux-arm64` directly.
 
+            ## Connection tracking
+
+            Standalone conntrack bundles are published as
+            `conntrack-${{ needs.validate.outputs.version }}-linux-{amd64,arm64}.tar.gz`.
+            They contain the embedded-eBPF binary, minimal configuration, and
+            the qualified systemd unit.
+
             ## 🔍 Verify checksums
 
             ```bash
@@ -210,6 +237,10 @@ jobs:
             dist/netmon-linux-arm64
             dist/netmon-*-linux-amd64.tar.gz
             dist/netmon-*-linux-arm64.tar.gz
+            dist/conntrack-linux-amd64
+            dist/conntrack-linux-arm64
+            dist/conntrack-*-linux-amd64.tar.gz
+            dist/conntrack-*-linux-arm64.tar.gz
             dist/checksums.txt
           token: ${{ secrets.GITHUB_TOKEN }}
         env:

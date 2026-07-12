@@ -16,7 +16,7 @@ var ebpfData []byte
 //go:embed bpf/tcploss.bpf.o
 var tcpLossEBPFData []byte
 
-//go:embed configs/config.example.yaml
+//go:embed configs/conntrack.example.yaml
 var configData []byte
 
 //go:embed systemd/conntrack.service

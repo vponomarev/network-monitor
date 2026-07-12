@@ -16,7 +16,7 @@ type MetricsCollector struct {
 	connectionDuration *prometheus.HistogramVec
 	bytesTransferred   *prometheus.CounterVec
 	bytesPerConnection *prometheus.HistogramVec
-	droppedEventsTotal prometheus.Gauge
+	droppedEventsTotal *prometheus.GaugeVec
 }
 
 // NewMetricsCollector creates a new metrics collector
@@ -83,11 +83,12 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 	)
 
 	// Dropped events gauge (absolute count)
-	mc.droppedEventsTotal = prometheus.NewGauge(
+	mc.droppedEventsTotal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "conntrack_dropped_events_total",
-			Help: "Total number of dropped connection events (buffer overflow)",
+			Help: "Total number of dropped connection events by reason",
 		},
+		[]string{"reason"},
 	)
 
 	// Register metrics
@@ -98,6 +99,8 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 	prometheus.MustRegister(mc.bytesTransferred)
 	prometheus.MustRegister(mc.bytesPerConnection)
 	prometheus.MustRegister(mc.droppedEventsTotal)
+	mc.droppedEventsTotal.WithLabelValues("event_channel_full").Set(0)
+	mc.droppedEventsTotal.WithLabelValues("ringbuf_full").Set(0)
 
 	return mc
 }
@@ -143,8 +146,8 @@ func (mc *MetricsCollector) UpdateStateMetrics(stats Stats) {
 }
 
 // UpdateDroppedMetrics updates the dropped events metric
-func (mc *MetricsCollector) UpdateDroppedMetrics(dropped uint64) {
-	mc.droppedEventsTotal.Set(float64(dropped))
+func (mc *MetricsCollector) UpdateDroppedMetrics(reason string, dropped uint64) {
+	mc.droppedEventsTotal.WithLabelValues(reason).Set(float64(dropped))
 }
 
 // Stop unregisters metrics

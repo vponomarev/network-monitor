@@ -94,7 +94,7 @@ prepare-embedded:
 	@echo "Preparing embedded resources..."
 	@mkdir -p pkg/embedded/bpf pkg/embedded/configs pkg/embedded/systemd
 	@cp bpf/conntrack.bpf.o pkg/embedded/bpf/
-	@cp configs/config.example.yaml pkg/embedded/configs/
+	@cp configs/conntrack.example.yaml pkg/embedded/configs/
 	@cp packaging/systemd/conntrack.service pkg/embedded/systemd/ 2>/dev/null || true
 	@echo "✓ Embedded resources prepared"
 

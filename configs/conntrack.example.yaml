@@ -1,0 +1,15 @@
+# Standalone conntrack configuration
+global:
+  metrics_addr: 127.0.0.1
+  metrics_port: 9876
+  # auth_token: "change-me"
+
+connections:
+  enabled: true
+  track_incoming: true
+  track_outgoing: true
+  event_buffer_size: 10000
+
+logging:
+  level: info
+  format: json
