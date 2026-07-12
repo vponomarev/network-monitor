@@ -1,127 +1,83 @@
-# Network Monitor — актуальный статус и план развития
+# Network Monitor — статус и план развития
 
-*Обновлено: 2026-07-11*
+*Актуализировано: 2026-07-13*
 
-## Граница production-ready
+## Поддерживаемый scope
 
-Репозиторий содержит два eBPF-контура с разной степенью готовности. Их нельзя
-оценивать и выпускать одним общим статусом.
+| Компонент | Назначение | Статус |
+|---|---|---|
+| `netmon` / `tcploss` | Мониторинг TCP-ретрансмитов | Production-ready |
+| standalone `conntrack` | Трекинг жизненного цикла TCP-соединений | Release candidate |
+| `pktloss` | Legacy trace_pipe-прототип | Experimental, не для production |
 
-| Контур | Назначение | Статус | Политика CI |
-|---|---|---|---|
-| **netmon / tcploss** | Мониторинг TCP-ретрансмитов (`tcp_retransmit_skb`) | Production-ready после закрытия P0 ниже | Сборка, C↔Go contract и smoke-load — блокирующие |
-| **conntrack** | Общий трекинг TCP-соединений | Experimental / roadmap | Проверки информативные; smoke-load пока `continue-on-error` |
+Production-поставка поддерживает только Linux `amd64`. ARM-артефакты не
+публикуются: для них нет архитектурно корректной eBPF qualification и доступных
+runtime-хостов. Conntrack пока выпускается отдельным бинарником и systemd unit;
+включение в единый daemon не входит в текущий релиз.
 
-Основной поддерживаемый продукт сейчас — `cmd/netmon` с
-`global.loss_source: ebpf`. `tracepipe` остаётся диагностическим fallback.
-`cmd/conntrack` и conntrack-функции внутри общего бинаря не входят в текущий
-production SLA. Известные ограничения этого контура перечислены в
-`prod-readiness/APPENDIX-conntrack-later.md`.
+## Закрытые задачи
 
-## Что уже выполнено для netmon
+### Netmon
 
-- eBPF-сбор TCP-ретрансмитов через ring buffer, IPv4 и CO-RE;
-- обогащение ролями, локациями и топологией;
-- управляемая кардинальность метрик (`role`, `network`, `ip`, `max_series`);
-- реальные `/health` и `/ready`, фатальный выход при остановке критичного
-  коллектора или HTTP-сервера;
-- опциональная bearer-аутентификация `/metrics` и `/api/*`;
-- production systemd unit, release pipeline и руководства развёртывания;
-- legacy trace_pipe fallback для диагностики и миграции.
+- eBPF ring buffer для `tcp_retransmit_skb`, CO-RE и C↔Go layout checks;
+- наблюдаемые kernel/userspace drops и ограничение cardinality/TTL;
+- реальные `/health` и `/ready`, bearer auth и graceful shutdown;
+- production systemd, документация и release pipeline;
+- verifier/runtime-проверки на ядрах 5.15, 6.1, 6.8 и 6.12.
 
-Подробная история выполненных задач: `docs/prod-readiness/README.md`.
+### Conntrack
 
-## Ближайший план
+- исправлены CO-RE layout и загрузка на ядрах 5.15–6.12;
+- удалены `bpf_printk`, busy-loop и production simulation;
+- добавлены kernel/userspace drop metrics;
+- PID/comm фиксируются без синхронного чтения `/proc`;
+- incoming/outgoing `ESTABLISHED` и `CLOSED` имеют полный tuple и не дублируются;
+- реализованы `/health`, `/ready`, `/metrics`, embedded eBPF, config и systemd;
+- пройден обратимый `install → start → ready → deinstall`;
+- Docker build публикует проверенный `linux/amd64` image;
+- добавлены `tests/conntrack/e2e/run-host.sh` и `run-matrix.ps1` для повторяемой
+  квалификации одного release-кандидата на всей матрице ядер.
 
-### P0 — достоверность production-мониторинга
+Проверенная матрица:
 
-- [x] Разделить blocking CI для `tcploss` и advisory CI для `conntrack`.
-- [x] Учитывать kernel-side отбрасывания при переполнении ring buffer и
-  экспортировать `netmon_loss_events_dropped_total{reason="ringbuf_full"}`.
-- [x] Применять `global.ttl_hours` к сериям exporter, а не всегда использовать
-  внутренний дефолт 3 часа.
-- [x] Собрать, smoke-load и запустить обновлённый netmon на Debian 13,
-  ядро 6.12.85: race-тесты, vet, verifier, `/ready` и drops-метрика прошли.
-- [x] Выполнить регрессионную verifier/runtime-матрицу на ядрах 5.15, 6.1 и
-  6.8: build eBPF, bpftool load, `/ready`, drops-метрика и штатный SIGTERM
-  прошли на всех узлах.
+| Хост | ОС | Ядро |
+|---|---|---|
+| `192.168.5.217` | Ubuntu 22.04 | `5.15.0-185` |
+| `192.168.5.193` | Debian 12 | `6.1.0-45` |
+| `192.168.5.99` | Proxmox VE 8 / Debian 12 | `6.8.12-20-pve` |
+| `192.168.5.214` | Debian 13 | `6.12.85` |
 
-### P1 — эксплуатационная зрелость netmon
+## Текущий релизный scope
 
-- [ ] Добавить alert rules: collector down, parse errors, ring-buffer drops,
-  cardinality drops и отсутствие входящих событий при ожидаемом трафике.
-- [ ] Добавить нагрузочный профиль с контролируемым потоком retransmit-событий
-  и зафиксировать пределы CPU, памяти и долю drops.
-- [ ] Добавить Kubernetes DaemonSet и Helm chart без изменения standalone
-  systemd-пути.
-- [ ] Унифицировать дублирующиеся systemd/config assets и проверять примеры
-  конфигурации в CI.
-- [ ] Добавить release qualification: запуск бинаря, `/ready`, scrape метрик и
-  smoke traffic на Linux VM до публикации артефактов.
+1. [x] Убрать ARM из GitHub Release и документации поставки.
+2. [x] Прогнать новый E2E-скрипт одним `conntrack-linux-amd64` артефактом на
+   четырёх поддерживаемых ядрах — PASS на 5.15, 6.1, 6.8 и 6.12.
+3. [ ] Собрать release-кандидат на Linux-хосте, проверить установку из bundle,
+   readiness, метрики, трафик, restart и deinstall.
+4. [ ] После успешной qualification выпустить новую minor-версию.
 
-### P2 — развитие качества данных
+Alerts относятся к внешнему контуру мониторинга и не блокируют этот релиз.
 
-- [ ] IPv6 для TCP-loss контура.
-- [ ] Явно различать retransmit как proxy потерь и подтверждённую причину потери;
-  добавить документацию по интерпретации и SLO.
-- [ ] Исследовать дополнительные TCP tracepoints/сигналы (RTO, fast retransmit,
-  reset) без увеличения кардинальности по умолчанию.
-- [ ] Версионировать схему метрик и контракт dashboards/alerts.
+## Roadmap после первого production-релиза conntrack
 
-### Текущий приоритет — productionization conntrack
+### Повышенный приоритет
 
-Conntrack выбран следующим этапом развития. Минимальный порядок:
+- retention/TTL и жёсткие лимиты для незакрытых соединений, потерянных `CLOSE`,
+  kernel correlation maps и userspace state; отдельные метрики очистки;
+- безопасный upgrade и rollback: сохранение config, проверка совместимости,
+  повторная установка и восстановление после неуспешного обновления;
+- продолжительный soak/load-профиль с пределами CPU, RSS и допустимой долей drops.
 
-1. [x] Исправить CO-RE relocation на новых ядрах (C-7; verifier load пройден на
-   5.15, 6.1, 6.8 и 6.12).
-2. [x] Убрать busy-loop и `bpf_printk` из hot path (C-2, C-1; ожидает runtime-тест).
-3. [x] Сделать drops наблюдаемыми и убрать синхронный process enrichment из
-   consumer hot path (C-4, C-3).
-4. Добавить матрицу E2E ядер и только после неё сделать conntrack smoke-load
-   блокирующим.
-5. После выполнения критериев выпустить conntrack как отдельный поддерживаемый
-   продукт либо осознанно включить его в единый daemon.
+### Плановое развитие
 
-Текущий статус поставки:
+- расширенные lifecycle/API/concurrency/error-path тесты conntrack;
+- усиление systemd sandbox и переход с `CAP_SYS_ADMIN` на минимальные capability
+  там, где это совместимо с поддерживаемыми ядрами;
+- IPv6 для conntrack и TCP-loss;
+- ARM64: отдельный `vmlinux.h`, архитектурная eBPF-сборка и реальный runtime-хост;
+- container deployment guide, Compose и Kubernetes/Helm;
+- обновление GitHub Actions, использующих устаревающий Node.js 20;
+- версионирование схемы метрик, dashboards и внешних alert rules.
 
-- [x] verifier/runtime-матрица 5.15, 6.1, 6.8, 6.12;
-- [x] blocking conntrack smoke-load на поддерживаемых ядрах в CI;
-- [x] канонические standalone config и systemd unit с проверкой embedded-копий;
-- [x] обратимый install/start/readiness/deinstall тест на Debian 13;
-- [x] conntrack amd64/arm64 binaries и bundles добавлены в release workflow;
-- [ ] прогнать обновлённые GitHub pipelines и выпустить первый release candidate.
-
-Runtime-матрица ESTABLISHED/CLOSE пройдена на ядрах 5.15, 6.1, 6.8 и 6.12:
-исходящее и входящее события имеют одинаковый полный tuple, сохраняют PID/comm и
-закрываются без дублей. Conntrack остаётся experimental до закрытия остальных
-production-критериев (packaging и release qualification). Standalone `/health`,
-`/ready` и `/metrics` реализованы; readiness зависит от успешного eBPF attach.
-
-До завершения этого трека ошибки conntrack не должны блокировать релизы netmon,
-но также не должны интерпретироваться как production-ready функциональность.
-
-## Критерии следующего production-релиза netmon
-
-1. `go test -race ./...`, `go vet ./...`, `gofmt` и Go build проходят.
-2. `tcploss.bpf.c` собирается, C↔Go layout тестируется, объект успешно грузится
-   на контролируемом поддерживаемом ядре; все проверки блокируют выпуск.
-3. При искусственном переполнении/дропах растёт соответствующая Prometheus
-   метрика; оператор может отличить отсутствие потерь от потери телеметрии.
-4. Конфигурационный TTL реально управляет временем жизни серий.
-5. Release-кандидат стартует под production systemd unit, становится ready и
-   отдаёт ожидаемые метрики на smoke traffic.
-
-## Матрица совместимости, проверенная 2026-07-11
-
-| Хост | ОС | Ядро | eBPF build/load | Runtime smoke |
-|---|---|---|---|---|
-| `192.168.5.217` | Ubuntu 22.04 | 5.15.0-185 | PASS | PASS |
-| `192.168.5.193` | Debian 12 | 6.1.0-45 | PASS | PASS |
-| `192.168.5.99` | Debian 12 / PVE | 6.8.12-20-pve | PASS | PASS |
-| `192.168.5.214` | Debian 13 | 6.12.85 | PASS | PASS |
-
-На хостах 5.15/6.1/6.8 системный Go (`1.18.1`/`1.19.8`) старее требований
-проекта, поэтому текущий бинарь для runtime-матрицы собирался Go 1.24 отдельно.
-Полные race-тесты и vet выполнены на узле 6.12 с актуальным toolchain. Это не
-ограничение runtime: релиз поставляет готовый статический бинарь, но локальная
-сборка проекта требует современную версию Go.
+Нагрузочные испытания, расширенные тесты, sandbox hardening, upgrade/rollback,
+IPv6, ARM64 и orchestration сознательно отложены и не входят в текущий scope.

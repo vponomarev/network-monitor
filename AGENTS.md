@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`cmd/netmon` is the production entry point. `cmd/conntrack` remains experimental. Core Go packages live under `internal/` (collection, metrics, configuration, discovery, health, and topology). Shared event and embedded-resource packages are in `pkg/`. eBPF sources are under `bpf/`; generated `.o` files used by single-binary builds belong in `pkg/embedded/bpf/`.
+`cmd/netmon` is the production TCP-loss entry point. `cmd/conntrack` is a standalone release candidate for TCP lifecycle tracking. Core Go packages live under `internal/` (collection, metrics, configuration, discovery, health, and topology). Shared event and embedded-resource packages are in `pkg/`. eBPF sources are under `bpf/`; generated `.o` files used by single-binary builds belong in `pkg/embedded/bpf/`.
 
 Configuration examples are in `configs/`, deployment assets in `packaging/`, dashboards in `dashboards/`, and operational/design documentation in `docs/`. Unit tests are colocated as `*_test.go`; privileged and cross-component tests live in `tests/` and `tests/integration/`.
 
@@ -25,6 +25,8 @@ Use standard Go formatting and idioms: tabs as emitted by `gofmt`, short lower-c
 ## Testing Guidelines
 
 Name tests `TestXxx` and prefer table-driven cases with descriptive subtest names. Add tests beside changed Go code. Changes to eBPF collection require both Go tests and a Linux load/runtime smoke test; document tested kernel versions in the PR.
+
+For conntrack release qualification, run `tests/conntrack/e2e/run-host.sh` on Linux or use `tests/conntrack/e2e/run-matrix.ps1 -BinaryPath <conntrack-linux-amd64>` from Windows. Release artifacts are Linux amd64 only; cross-compilation does not establish runtime support for another architecture.
 
 Use the following kernel matrix for remote eBPF checks. Connect over SSH as `root`; request the current password from the user before testing and never store it in files, commands committed to Git, or documentation.
 

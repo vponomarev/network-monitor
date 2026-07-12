@@ -46,8 +46,6 @@ jobs:
         include:
           - os: linux
             arch: amd64
-          - os: linux
-            arch: arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -123,7 +121,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          for arch in amd64 arm64; do
+          for arch in amd64; do
             bin="downloaded/binaries-linux-${arch}/netmon-linux-${arch}"
             conntrack_bin="downloaded/binaries-linux-${arch}/conntrack-linux-${arch}"
             # Raw binary + checksum (for direct download)
@@ -191,7 +189,7 @@ jobs:
             binary, example configs, and a systemd unit.
 
             ```bash
-            # amd64 (replace with -arm64 on ARM hosts)
+            # Supported release architecture: amd64
             wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/netmon-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz
             tar -xzf netmon-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz
             cd netmon-${{ needs.validate.outputs.version }}-linux-amd64
@@ -206,12 +204,12 @@ jobs:
             curl -s http://localhost:9876/ready
             ```
 
-            Prefer just the binary? Download `netmon-linux-amd64` / `netmon-linux-arm64` directly.
+            Prefer just the binary? Download `netmon-linux-amd64` directly.
 
             ## Connection tracking
 
             Standalone conntrack bundles are published as
-            `conntrack-${{ needs.validate.outputs.version }}-linux-{amd64,arm64}.tar.gz`.
+            `conntrack-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz`.
             They contain the embedded-eBPF binary, minimal configuration, and
             the qualified systemd unit.
 
@@ -234,13 +232,9 @@ jobs:
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           files: |
             dist/netmon-linux-amd64
-            dist/netmon-linux-arm64
             dist/netmon-*-linux-amd64.tar.gz
-            dist/netmon-*-linux-arm64.tar.gz
             dist/conntrack-linux-amd64
-            dist/conntrack-linux-arm64
             dist/conntrack-*-linux-amd64.tar.gz
-            dist/conntrack-*-linux-arm64.tar.gz
             dist/checksums.txt
           token: ${{ secrets.GITHUB_TOKEN }}
         env:
