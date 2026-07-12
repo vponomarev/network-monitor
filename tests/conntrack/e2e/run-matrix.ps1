@@ -22,6 +22,12 @@ foreach ($path in @($plink, $pscp, $hostScript)) {
     }
 }
 
+# A CRLF shebang is interpreted as /bin/sh\r on Linux. Normalize a temporary
+# upload copy even if the Windows checkout did not honor .gitattributes.
+$normalizedHostScript = Join-Path ([IO.Path]::GetTempPath()) "conntrack-e2e-run-host-$([Guid]::NewGuid().ToString('N')).sh"
+$scriptContent = [IO.File]::ReadAllText($hostScript).Replace("`r`n", "`n")
+[IO.File]::WriteAllText($normalizedHostScript, $scriptContent, [Text.UTF8Encoding]::new($false))
+
 $hostKeys = @{
     "192.168.5.99"  = "ssh-ed25519 255 b3:70:94:2f:14:0e:8e:5e:65:d2:d3:26:a5:2e:53:85"
     "192.168.5.193" = "ssh-ed25519 255 5d:20:bb:11:01:fc:6c:22:4f:0c:d0:23:58:d9:6d:4b"
@@ -54,9 +60,12 @@ try {
 
         & $pscp -batch -hostkey $hostKeys[$hostName] -pw $password `
             (Resolve-Path -LiteralPath $BinaryPath).Path `
-            (Resolve-Path -LiteralPath $hostScript).Path `
-            "${target}:${remoteDir}/"
-        if ($LASTEXITCODE -ne 0) { throw "Failed to upload E2E files to $hostName" }
+            "${target}:${remoteDir}/conntrack-linux-amd64"
+        if ($LASTEXITCODE -ne 0) { throw "Failed to upload E2E binary to $hostName" }
+        & $pscp -batch -hostkey $hostKeys[$hostName] -pw $password `
+            $normalizedHostScript `
+            "${target}:${remoteDir}/run-host.sh"
+        if ($LASTEXITCODE -ne 0) { throw "Failed to upload E2E script to $hostName" }
 
         $remoteCommand = "chmod 0755 '$remoteDir/conntrack-linux-amd64' '$remoteDir/run-host.sh' && '$remoteDir/run-host.sh' '$remoteDir/conntrack-linux-amd64'"
         $output = & $plink -batch -hostkey $hostKeys[$hostName] -pw $password $target $remoteCommand 2>&1
@@ -81,4 +90,5 @@ finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
     }
     $password = $null
+    Remove-Item -Force -LiteralPath $normalizedHostScript -ErrorAction SilentlyContinue
 }
