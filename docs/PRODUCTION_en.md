@@ -23,7 +23,7 @@
 
 | Component | Requirement | Notes |
 |-----------|-------------|-------|
-| **OS** | Linux | x86_64 (arm64 builds provided; eBPF verified on x86_64) |
+| **OS / architecture** | Linux x86_64 (`amd64`) | ARM builds are not published or supported |
 | **Kernel** | **5.8+ minimum**, tested 5.15 / 6.1 / 6.8 / 6.12 | Ring buffer (`BPF_MAP_TYPE_RINGBUF`) requires 5.8+. On `<5.8` the eBPF path is unavailable — use `loss_source: tracepipe` |
 | **BTF** | `/sys/kernel/btf/vmlinux` must exist | CO-RE requires kernel BTF information |
 

@@ -11,7 +11,7 @@ Automated CI/CD pipelines for Network Monitor.
 **Jobs:**
 - ✅ **Lint** - golangci-lint
 - ✅ **Test** - go test with coverage
-- ✅ **Build** - Multi-platform binaries (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64)
+- ✅ **Build** - Cross-compilation checks; release artifacts are Linux amd64 only
 - ✅ **Security** - gosec + govulncheck
 - ✅ **Docker** - Build test (PR only)
 
