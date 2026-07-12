@@ -30,18 +30,13 @@ wget https://github.com/vponomarev/network-monitor/releases/latest/download/conn
 chmod +x conntrack-linux-amd64
 sudo mv conntrack-linux-amd64 /usr/local/bin/conntrack
 
-# Создать директорию для eBPF программ
-sudo mkdir -p /usr/share/netmon/bpf
-
-# Скачать eBPF программу
-wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack.bpf.o -O /usr/share/netmon/bpf/conntrack.bpf.o
-
 # Скачать конфигурацию
 sudo mkdir -p /etc/netmon
-wget https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/config.example.yaml -O /etc/netmon/conntrack.yaml
+wget https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/conntrack.example.yaml -O /etc/conntrack/config.yaml
 
 # Запустить
-sudo conntrack --config /etc/netmon/conntrack.yaml
+sudo conntrack install
+sudo systemctl enable --now conntrack
 ```
 
 ---
@@ -53,7 +48,7 @@ sudo conntrack --config /etc/netmon/conntrack.yaml
 curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scripts/install-netmon.sh | sudo bash
 
 # Conntrack
-curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scripts/install-conntrack.sh | sudo bash
+sudo conntrack install
 ```
 
 ---
@@ -100,21 +95,18 @@ sudo /opt/netmon/netmon --config /etc/netmon/config.yaml
 
 ```bash
 # Создать директорию
-sudo mkdir -p /opt/conntrack /usr/share/netmon/bpf /etc/netmon
+sudo mkdir -p /etc/conntrack
 
 # Скачать бинарник
-cd /opt/conntrack
-sudo wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack-linux-amd64 -O conntrack
-sudo chmod +x conntrack
-
-# Скачать eBPF программу
-sudo wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack.bpf.o -O /usr/share/netmon/bpf/conntrack.bpf.o
+sudo wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack-linux-amd64 -O /usr/local/bin/conntrack
+sudo chmod +x /usr/local/bin/conntrack
 
 # Скачать конфигурацию
-sudo wget https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/config.example.yaml -O /etc/netmon/conntrack.yaml
+sudo wget https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/conntrack.example.yaml -O /etc/conntrack/config.yaml
 
 # Запустить
-sudo /opt/conntrack/conntrack --config /etc/netmon/conntrack.yaml
+sudo /usr/local/bin/conntrack install
+sudo systemctl enable --now conntrack
 ```
 
 ---
@@ -213,7 +205,7 @@ curl http://localhost:9876/metrics
 sudo conntrack --version
 
 # Запуск с конфигом
-sudo conntrack --config /etc/netmon/conntrack.yaml
+sudo conntrack --config /etc/conntrack/config.yaml
 
 # Проверка работы
 curl http://localhost:9876/api/v1/conntrack/connections
@@ -263,7 +255,8 @@ ls -la /sys/kernel/tracing/trace_pipe
 
 ```bash
 # Проверить наличие eBPF программы
-ls -la /usr/share/netmon/bpf/conntrack.bpf.o
+sudo conntrack --export-ebpf-prog /tmp/conntrack.bpf.o
+ls -la /tmp/conntrack.bpf.o
 
 # Проверить логи
 sudo journalctl -u conntrack -f

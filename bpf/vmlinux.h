@@ -289,16 +289,17 @@ struct trace_entry {
 /* Trace event raw */
 struct trace_event_raw_inet_sock_set_state {
     struct trace_entry ent;
-    __u32 oldstate;
-    __u32 newstate;
-    __u32 sport;
-    __u32 dport;
-    __u32 family;
-    __u32 protocol;
-    __u32 saddr;
-    __u32 daddr;
-    __u32 saddr_v6[4];
-    __u32 daddr_v6[4];
+    const void *skaddr;
+    int oldstate;
+    int newstate;
+    __u16 sport;
+    __u16 dport;
+    __u16 family;
+    __u16 protocol;
+    __u8 saddr[4];
+    __u8 daddr[4];
+    __u8 saddr_v6[16];
+    __u8 daddr_v6[16];
 };
 
 /* tcp_event_sk_skb class — used by tracepoint/tcp/tcp_retransmit_skb.

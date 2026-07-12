@@ -5,12 +5,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/internal/conntrack"
@@ -148,18 +152,10 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid syn-timeout: %w", err)
 	}
 
-	// Create tracker config
-	ebpfPath := ebpfProgram
-	if ebpfPath == "" {
-		// Only use default path if embedded eBPF is available
-		if embedded.HasEmbeddedEBPF() {
-			ebpfPath = conntrack.DefaultEBPFProgramPath
-		}
-		// Otherwise, leave empty to trigger simulation mode
-	}
-
 	trackerCfg := conntrack.Config{
-		EBPFProgramPath: ebpfPath,
+		// An empty path tells Tracker to use the embedded production object.
+		// A non-empty path is an explicit operator override.
+		EBPFProgramPath: ebpfProgram,
 		TrackIncoming:   trackIncoming && cfg.Connections.TrackIncoming,
 		TrackOutgoing:   trackOutgoing && cfg.Connections.TrackOutgoing,
 		TrackCloses:     trackCloses,
@@ -180,12 +176,81 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create connection tracker: %w", err)
 	}
 
-	// Start tracking
-	if err := tracker.Run(ctx); err != nil {
-		return fmt.Errorf("connection tracker error: %w", err)
+	return runServices(ctx, tracker, cfg, logger)
+}
+
+func runServices(ctx context.Context, tracker *conntrack.Tracker, cfg *config.Config, logger *zap.Logger) error {
+	serviceCtx, stopServices := context.WithCancel(ctx)
+	defer stopServices()
+	mux := http.NewServeMux()
+	metricsHandler := promhttp.Handler()
+	if cfg.Global.AuthToken != "" {
+		metricsHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+cfg.Global.AuthToken {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			promhttp.Handler().ServeHTTP(w, r)
+		})
+	}
+	mux.Handle("/metrics", metricsHandler)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
+		if !tracker.Ready() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready\n"))
+	})
+
+	addr := net.JoinHostPort(cfg.Global.MetricsAddr, fmt.Sprintf("%d", cfg.Global.MetricsPort))
+	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	serverErr := make(chan error, 1)
+	go func() {
+		logger.Info("Starting conntrack HTTP server", zap.String("address", addr))
+		serverErr <- server.ListenAndServe()
+	}()
+	trackerErr := make(chan error, 1)
+	go func() { trackerErr <- tracker.Run(serviceCtx) }()
+
+	var result error
+	trackerFinished := false
+	select {
+	case <-ctx.Done():
+	case err := <-trackerErr:
+		trackerFinished = true
+		if err != nil {
+			result = fmt.Errorf("connection tracker error: %w", err)
+		}
+	case err := <-serverErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			result = fmt.Errorf("conntrack HTTP server: %w", err)
+		}
+	}
+	stopServices()
+	if !trackerFinished {
+		select {
+		case err := <-trackerErr:
+			if err != nil && result == nil {
+				result = fmt.Errorf("connection tracker error: %w", err)
+			}
+		case <-time.After(5 * time.Second):
+			if result == nil {
+				result = fmt.Errorf("timed out stopping connection tracker")
+			}
+		}
 	}
 
-	return nil
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil && result == nil {
+		result = fmt.Errorf("shutting down conntrack HTTP server: %w", err)
+	}
+	return result
 }
 
 func initLogger(cfg *config.Config) (*zap.Logger, error) {

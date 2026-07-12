@@ -1,8 +1,8 @@
-# APPENDIX — Отложенные задачи по conntrack (не для текущего этапа)
+# APPENDIX — Productionization conntrack
 
-Эти проблемы найдены в коде conntrack (eBPF-трекинг соединений). Он остаётся в том
-же бинаре netmon, но НЕ в фокусе текущего плана (нужен позже). Фиксируем здесь,
-чтобы не потерять. **Не выполнять без отдельного запроса владельца.**
+Эти проблемы найдены в коде conntrack (eBPF-трекинг соединений). С 2026-07-12
+conntrack является активным приоритетом: цель — пройти production-критерии и затем
+включить его в поддерживаемую поставку.
 
 ---
 
@@ -19,11 +19,11 @@ netmon. После перехода netmon на eBPF-loss (TASK-04..06) связ
 CPU-спин на 100%. Исправить по образцу TASK-05 (обработка `ringbuf.ErrClosed` +
 backoff). Тот же паттерн нужно применить и здесь.
 
-## C-3. Синхронный `/proc/{pid}/comm` в пути обработки событий
+## C-3. (ИСПРАВЛЕНО 2026-07-12) `/proc/{pid}/comm` в пути обработки событий
 `internal/conntrack/tracker_linux.go:461, 526` (`enrichProcessName` → `getProcessComm`)
-делает синхронный read из `/proc` на каждом событии в потребителе ringbuf. При
-высоком churn соединений добавляет задержку и провоцирует дропы. Вынести в
-асинхронное обогащение / кэш PID→comm с TTL.
+Ранее fallback делал синхронный read из `/proc` в потребителе ringbuf. Теперь
+PID/comm фиксируются в eBPF в контексте SYN_SENT и переносятся в ESTABLISHED;
+userspace только очищает строку и возвращает `unknown`, не выполняя файловый I/O.
 
 ## C-4. Дропы событий conntrack без явной метрики в /metrics
 `droppedEvents` считается (`atomic`), но убедись, что он экспонируется как
@@ -62,6 +62,21 @@ libbpf: prog 'trace_outgoing': failed to load: -22
 `tracker.connectionKey` → тест-пакет conntrack не компилировался на Linux (на macOS
 скрыто build-тегом), из-за чего job `test` в `ci.yml` был красным. Исправлено:
 вызов заменён на свободную функцию `makeConnectionKey(...)`.
+
+## C-9. (ИСПРАВЛЕНО 2026-07-12) исходящие события и CLOSE
+
+`inet_sock_set_state` теперь коррелирует SYN_SENT (PID/comm) с ESTABLISHED
+(полный tuple) по `skaddr`. CLOSE обрабатывается тем же tracepoint и дедуплицируется
+через карту активных соединений. Контролируемая runtime-матрица на ядрах 5.15,
+6.1, 6.8 и 6.12 подтвердила для одного TCP-сеанса outgoing/incoming ESTABLISHED и
+outgoing/incoming CLOSE с одинаковыми адресами и портами.
+
+## C-10. (ИСПРАВЛЕНО 2026-07-12) standalone health и metrics
+
+`cmd/conntrack` публикует `/health`, `/ready` и `/metrics` на адресе из общей
+конфигурации. `/ready` возвращает 200 только после успешной загрузки и attach eBPF,
+а `/metrics` поддерживает общий bearer token. Linux smoke подтвердил readiness,
+graceful SIGTERM и обе drop-метрики (`ringbuf_full`, `event_channel_full`).
 
 ---
 

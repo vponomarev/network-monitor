@@ -6,8 +6,8 @@ package conntrack
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
-	"net"
 	"os"
 	"strings"
 	"sync"
@@ -49,13 +49,16 @@ type Tracker struct {
 
 	// Connection tracking
 	mu          sync.RWMutex
+	wg          sync.WaitGroup
 	connections map[string]*Connection
 
 	// Event channel
 	events chan *Connection
 
 	// Dropped events counter
-	droppedEvents uint64
+	droppedEvents       uint64
+	kernelDroppedEvents uint64
+	ready               atomic.Bool
 }
 
 // eBPF event structure (must match C struct)
@@ -167,20 +170,39 @@ func (t *Tracker) Run(ctx context.Context) error {
 		return fmt.Errorf("loading eBPF: %w", err)
 	}
 	defer t.close()
+	defer t.ready.Store(false)
 
-	// Start reading events
-	go t.readEvents(ctx)
-
-	// Start metrics update loop
-	go t.updateMetrics(ctx)
+	// Start background consumers and wait for them before closing eBPF maps.
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		t.readEvents(ctx)
+	}()
+	t.ready.Store(true)
+	if dropMap, ok := t.colls.Maps["event_drops"]; ok {
+		t.wg.Add(1)
+		go func() {
+			defer t.wg.Done()
+			t.observeKernelDrops(ctx, dropMap)
+		}()
+	} else {
+		t.logger.Warn("Kernel drop counter map is unavailable; rebuild conntrack eBPF")
+	}
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		t.updateMetrics(ctx)
+	}()
 
 	<-ctx.Done()
 	t.logger.Info("Stopping connection tracker")
+	t.wg.Wait()
 	return nil
 }
 
 // loadEBPF loads and attaches eBPF programs
-// Priority: 1) Explicit path via flag, 2) Embedded version, 3) Simulation
+// Priority: 1) Explicit path via flag, 2) Embedded version.
+// Production must fail closed when no real eBPF program is available.
 func (t *Tracker) loadEBPF() error {
 	// Priority 1: Explicit path via flag
 	if t.config.EBPFProgramPath != "" {
@@ -195,10 +217,7 @@ func (t *Tracker) loadEBPF() error {
 		return t.loadEmbeddedEBPF()
 	}
 
-	// Priority 3: Build without embed (simulation)
-	t.logger.Info("No eBPF program available, using simulated events")
-	go t.simulateEvents()
-	return nil
+	return fmt.Errorf("no eBPF program available: specify --ebpf-prog or use a build with embedded eBPF")
 }
 
 // loadEmbeddedEBPF loads eBPF from embedded resources
@@ -303,46 +322,25 @@ func getMapKeys2(m map[string]*ebpf.MapSpec) []string {
 }
 
 // attachPrograms attaches eBPF programs to kernel hooks
-// Uses tracepoint for outgoing (preferred) with kprobe fallback
+// Uses inet_sock_set_state and correlates SYN_SENT process metadata with the
+// complete ESTABLISHED tuple.
 func (t *Tracker) attachPrograms() error {
 	// Log available programs
 	t.logger.Info("Available eBPF programs",
 		zap.Strings("programs", getMapKeys(t.colls.Programs)),
 	)
 
-	// Attach outgoing connection tracker
-	// Try tracepoint first (kernels 5.14+), fallback to kprobe (older kernels)
-	if t.config.TrackOutgoing {
-		attached := false
-
-		// Try tracepoint/sock/inet_sock_set_state (preferred for 5.14+)
-		if prog, ok := t.colls.Programs["trace_outgoing"]; ok {
-			l, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
-			if err != nil {
-				t.logger.Debug("Tracepoint not available, trying kprobe", zap.Error(err))
-			} else {
-				t.links = append(t.links, l)
-				t.logger.Info("Attached tracepoint/sock/inet_sock_set_state for outgoing connections")
-				attached = true
-			}
+	if t.config.TrackOutgoing || t.config.TrackCloses {
+		prog, ok := t.colls.Programs["trace_outgoing"]
+		if !ok {
+			return fmt.Errorf("outgoing inet_sock_set_state program is missing")
 		}
-
-		// Fallback to kprobe/tcp_connect for older kernels
-		if !attached {
-			if prog, ok := t.colls.Programs["tcp_connect"]; ok {
-				l, err := link.Kprobe("tcp_connect", prog, nil)
-				if err != nil {
-					return fmt.Errorf("failed to attach kprobe/tcp_connect: %w", err)
-				}
-				t.links = append(t.links, l)
-				t.logger.Info("Attached kprobe/tcp_connect for outgoing connections (legacy mode)")
-				attached = true
-			}
+		outgoingLink, err := link.Tracepoint("sock", "inet_sock_set_state", prog, nil)
+		if err != nil {
+			return fmt.Errorf("linking tracepoint/sock/inet_sock_set_state: %w", err)
 		}
-
-		if !attached {
-			return fmt.Errorf("failed to attach outgoing connection tracker (no tracepoint or kprobe available)")
-		}
+		t.links = append(t.links, outgoingLink)
+		t.logger.Info("Attached inet_sock_set_state tracepoint for outgoing connections")
 	}
 
 	// Attach inet_csk_accept for incoming connections (kretprobe)
@@ -355,18 +353,6 @@ func (t *Tracker) attachPrograms() error {
 				t.links = append(t.links, l)
 				t.logger.Info("Attached kretprobe/inet_csk_accept for incoming connections")
 			}
-		}
-	}
-
-	// Attach tcp_close for connection closing (kprobe, not kretprobe)
-	if t.config.TrackCloses {
-		if prog, ok := t.colls.Programs["tcp_close"]; ok {
-			l, err := link.Kprobe("tcp_close", prog, nil)
-			if err != nil {
-				return fmt.Errorf("linking kprobe/tcp_close: %w", err)
-			}
-			t.links = append(t.links, l)
-			t.logger.Info("Attached kprobe/tcp_close for connection closing")
 		}
 	}
 
@@ -395,6 +381,10 @@ func (t *Tracker) readEvents(ctx context.Context) {
 		return
 	}
 	defer rd.Close()
+	go func() {
+		<-ctx.Done()
+		rd.Close()
+	}()
 
 	t.logger.Info("Ringbuf reader created, starting to read events")
 
@@ -408,7 +398,16 @@ func (t *Tracker) readEvents(ctx context.Context) {
 
 		record, err := rd.Read()
 		if err != nil {
-			t.logger.Debug("Reading ringbuf", zap.Error(err))
+			if errors.Is(err, ringbuf.ErrClosed) || ctx.Err() != nil {
+				t.logger.Info("Ringbuf reader stopped")
+				return
+			}
+			t.logger.Warn("Reading ringbuf; retrying", zap.Error(err))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
 			continue
 		}
 
@@ -449,16 +448,18 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 
 	// Convert to Connection
 	conn := &Connection{
-		Timestamp:   time.Unix(0, int64(event.TimestampNs)),
-		SourceIP:    IPFromBytes(event.SrcIP),
-		SourcePort:  event.SrcPort,
-		DestIP:      IPFromBytes(event.DstIP),
-		DestPort:    event.DstPort,
-		Protocol:    event.Protocol,
-		Direction:   Direction(event.Direction),
-		State:       ConnectionState(event.State),
-		PID:         event.PID,
-		ProcessName: enrichProcessName(string(event.Comm[:]), event.PID),
+		Timestamp:  time.Unix(0, int64(event.TimestampNs)),
+		SourceIP:   IPFromBytes(event.SrcIP),
+		SourcePort: event.SrcPort,
+		DestIP:     IPFromBytes(event.DstIP),
+		DestPort:   event.DstPort,
+		Protocol:   event.Protocol,
+		Direction:  Direction(event.Direction),
+		State:      ConnectionState(event.State),
+		PID:        event.PID,
+		// comm is captured in eBPF while the originating process context is
+		// available. Never block the ring-buffer consumer on /proc I/O.
+		ProcessName: sanitizeProcessName(string(event.Comm[:])),
 	}
 
 	// Generate connection ID
@@ -494,49 +495,6 @@ func sanitizeProcessName(name string) string {
 		return "unknown"
 	}
 	return name
-}
-
-// getProcessComm reads process name from /proc/{pid}/comm
-// Used to enrich comm field when eBPF kretprobe returns empty/invalid comm
-// Returns empty string if PID is 0 or /proc/{pid}/comm is not accessible
-func getProcessComm(pid uint32) string {
-	if pid == 0 {
-		return ""
-	}
-
-	commPath := fmt.Sprintf("/proc/%d/comm", pid)
-	data, err := os.ReadFile(commPath)
-	if err != nil {
-		// Process may have exited or permissions issue
-		return ""
-	}
-
-	// /proc/{pid}/comm contains just the process name + newline
-	name := strings.TrimSpace(string(data))
-	name = strings.TrimRight(name, "\x00")
-
-	if name == "" {
-		return ""
-	}
-	return name
-}
-
-// enrichProcessName attempts to get process name from /proc/{pid}/comm if eBPF comm is empty/invalid
-// Returns the original name if it's valid, otherwise tries to read from /proc
-func enrichProcessName(ebpfComm string, pid uint32) string {
-	// Check if eBPF comm is valid (non-empty after sanitization)
-	sanitized := sanitizeProcessName(ebpfComm)
-	if sanitized != "unknown" && sanitized != "" {
-		return sanitized
-	}
-
-	// eBPF comm was empty or invalid - try /proc/{pid}/comm lookup
-	procComm := getProcessComm(pid)
-	if procComm != "" {
-		return procComm
-	}
-
-	return "unknown"
 }
 
 // processConnection processes a connection event through state machine
@@ -617,67 +575,6 @@ func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
 	}
 }
 
-// simulateEvents generates sample events for development
-func (t *Tracker) simulateEvents() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	counter := 0
-	for {
-		counter++
-
-		// Simulate outgoing connection
-		outConn := &Connection{
-			ID:          fmt.Sprintf("out-%d", counter),
-			Timestamp:   time.Now(),
-			SourceIP:    net.ParseIP("192.168.1.100"),
-			SourcePort:  uint16(50000 + counter),
-			DestIP:      net.ParseIP("8.8.8.8"),
-			DestPort:    443,
-			Protocol:    6, // TCP
-			Direction:   DirectionOutgoing,
-			State:       StateSynSent,
-			PID:         1234,
-			ProcessName: "curl",
-			SynSentTime: time.Now(),
-		}
-
-		t.onConnectionEvent(outConn, EventNew)
-
-		// Simulate SYN+ACK after delay
-		time.Sleep(50 * time.Millisecond)
-		outConn.State = StateEstablished
-		outConn.Established = true
-		outConn.EstablishedTime = time.Now()
-		t.onConnectionEvent(outConn, EventEstablished)
-
-		// Simulate incoming connection
-		inConn := &Connection{
-			ID:          fmt.Sprintf("in-%d", counter),
-			Timestamp:   time.Now(),
-			SourceIP:    net.ParseIP("10.0.0.50"),
-			SourcePort:  uint16(40000 + counter),
-			DestIP:      net.ParseIP("192.168.1.100"),
-			DestPort:    80,
-			Protocol:    6, // TCP
-			Direction:   DirectionIncoming,
-			State:       StateSynReceived,
-			PID:         5678,
-			ProcessName: "nginx",
-			SynSentTime: time.Now(),
-		}
-
-		t.onConnectionEvent(inConn, EventNew)
-
-		// Simulate accept after delay
-		time.Sleep(30 * time.Millisecond)
-		inConn.State = StateEstablished
-		inConn.Accepted = true
-		inConn.EstablishedTime = time.Now()
-		t.onConnectionEvent(inConn, EventEstablished)
-	}
-}
-
 // GetConnections returns all tracked connections
 func (t *Tracker) GetConnections() []*Connection {
 	t.mu.RLock()
@@ -712,6 +609,45 @@ func (t *Tracker) GetDroppedEvents() uint64 {
 	return atomic.LoadUint64(&t.droppedEvents)
 }
 
+// GetKernelDroppedEvents returns events rejected by the kernel ring buffer.
+func (t *Tracker) GetKernelDroppedEvents() uint64 {
+	return atomic.LoadUint64(&t.kernelDroppedEvents)
+}
+
+// Ready reports whether eBPF programs are attached and background consumers
+// are running.
+func (t *Tracker) Ready() bool { return t.ready.Load() }
+
+func (t *Tracker) observeKernelDrops(ctx context.Context, dropMap *ebpf.Map) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	collect := func() {
+		key := uint32(0)
+		var perCPU []uint64
+		if err := dropMap.Lookup(&key, &perCPU); err != nil {
+			t.logger.Warn("Reading conntrack eBPF drop counter", zap.Error(err))
+			return
+		}
+		var total uint64
+		for _, count := range perCPU {
+			total += count
+		}
+		atomic.StoreUint64(&t.kernelDroppedEvents, total)
+	}
+
+	collect()
+	for {
+		select {
+		case <-ctx.Done():
+			collect()
+			return
+		case <-ticker.C:
+			collect()
+		}
+	}
+}
+
 // updateMetrics periodically updates connection state metrics
 func (t *Tracker) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
@@ -724,7 +660,8 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 		case <-ticker.C:
 			if t.metricsCollector != nil {
 				t.metricsCollector.UpdateStateMetrics(t.GetStats())
-				t.metricsCollector.UpdateDroppedMetrics(t.GetDroppedEvents())
+				t.metricsCollector.UpdateDroppedMetrics("event_channel_full", t.GetDroppedEvents())
+				t.metricsCollector.UpdateDroppedMetrics("ringbuf_full", t.GetKernelDroppedEvents())
 			}
 		}
 	}
@@ -750,6 +687,7 @@ func (t *Tracker) close() {
 	// Close eBPF collection
 	if t.colls != nil {
 		t.colls.Close()
+		t.colls = nil
 	}
 
 	// Close syslog writer

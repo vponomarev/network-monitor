@@ -68,17 +68,34 @@ production SLA. Известные ограничения этого конту�
   reset) без увеличения кардинальности по умолчанию.
 - [ ] Версионировать схему метрик и контракт dashboards/alerts.
 
-### Отдельный трек — conntrack
+### Текущий приоритет — productionization conntrack
 
-Возвращаться к нему только отдельной серией задач. Минимальный порядок:
+Conntrack выбран следующим этапом развития. Минимальный порядок:
 
-1. Исправить CO-RE relocation на новых ядрах (C-7).
-2. Убрать busy-loop и `bpf_printk` из hot path (C-2, C-1).
-3. Сделать drops наблюдаемыми и ограничить дорогой process enrichment (C-4, C-3).
+1. [x] Исправить CO-RE relocation на новых ядрах (C-7; verifier load пройден на
+   5.15, 6.1, 6.8 и 6.12).
+2. [x] Убрать busy-loop и `bpf_printk` из hot path (C-2, C-1; ожидает runtime-тест).
+3. [x] Сделать drops наблюдаемыми и убрать синхронный process enrichment из
+   consumer hot path (C-4, C-3).
 4. Добавить матрицу E2E ядер и только после неё сделать conntrack smoke-load
    блокирующим.
 5. После выполнения критериев выпустить conntrack как отдельный поддерживаемый
    продукт либо осознанно включить его в единый daemon.
+
+Текущий статус поставки:
+
+- [x] verifier/runtime-матрица 5.15, 6.1, 6.8, 6.12;
+- [x] blocking conntrack smoke-load на поддерживаемых ядрах в CI;
+- [x] канонические standalone config и systemd unit с проверкой embedded-копий;
+- [x] обратимый install/start/readiness/deinstall тест на Debian 13;
+- [x] conntrack amd64/arm64 binaries и bundles добавлены в release workflow;
+- [ ] прогнать обновлённые GitHub pipelines и выпустить первый release candidate.
+
+Runtime-матрица ESTABLISHED/CLOSE пройдена на ядрах 5.15, 6.1, 6.8 и 6.12:
+исходящее и входящее события имеют одинаковый полный tuple, сохраняют PID/comm и
+закрываются без дублей. Conntrack остаётся experimental до закрытия остальных
+production-критериев (packaging и release qualification). Standalone `/health`,
+`/ready` и `/metrics` реализованы; readiness зависит от успешного eBPF attach.
 
 До завершения этого трека ошибки conntrack не должны блокировать релизы netmon,
 но также не должны интерпретироваться как production-ready функциональность.

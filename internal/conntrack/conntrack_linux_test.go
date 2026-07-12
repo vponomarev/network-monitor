@@ -6,7 +6,6 @@ package conntrack
 import (
 	"context"
 	"net"
-	"os"
 	"testing"
 	"time"
 	"unsafe"
@@ -16,15 +15,21 @@ import (
 	"go.uber.org/zap"
 )
 
+func newTestTracker(t *testing.T, cfg Config) *Tracker {
+	t.Helper()
+	tracker, err := NewTracker(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(tracker.close)
+	return tracker
+}
+
 func TestNewTracker(t *testing.T) {
-	logger := zap.NewNop()
 	cfg := Config{
 		TrackIncoming: true,
 		TrackOutgoing: true,
 	}
 
-	tracker, err := NewTracker(cfg, logger)
-	require.NoError(t, err)
+	tracker := newTestTracker(t, cfg)
 	require.NotNil(t, tracker)
 
 	assert.Equal(t, cfg, tracker.config)
@@ -67,9 +72,8 @@ func TestTracker_connectionKey(t *testing.T) {
 }
 
 func TestTracker_GetConnections(t *testing.T) {
-	logger := zap.NewNop()
 	cfg := Config{}
-	tracker, _ := NewTracker(cfg, logger)
+	tracker := newTestTracker(t, cfg)
 
 	// Initially empty
 	conns := tracker.GetConnections()
@@ -88,9 +92,8 @@ func TestTracker_GetConnections(t *testing.T) {
 }
 
 func TestTracker_Events(t *testing.T) {
-	logger := zap.NewNop()
 	cfg := Config{}
-	tracker, _ := NewTracker(cfg, logger)
+	tracker := newTestTracker(t, cfg)
 
 	events := tracker.Events()
 	require.NotNil(t, events)
@@ -102,34 +105,21 @@ func TestTracker_Events(t *testing.T) {
 // now carries *Connection. See docs/prod-readiness/APPENDIX-conntrack-later.md
 // (C-8); rewriting conntrack tests belongs to the deferred conntrack track.
 
-func TestTracker_parseConnectionEvent(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := Config{}
-	tracker, _ := NewTracker(cfg, logger)
-
-	// Test with sample data
-	data := []byte{0x01, 0x02, 0x03, 0x04} // Placeholder
-	conn := tracker.parseConnectionEvent(data)
-
-	require.NotNil(t, conn)
-	assert.NotNil(t, conn.DestIP)
-	assert.Equal(t, uint8(6), conn.Protocol)
+func TestTracker_parseConnectionEventRejectsShortRecord(t *testing.T) {
+	tracker := newTestTracker(t, Config{})
+	assert.Nil(t, tracker.parseConnectionEvent([]byte{0x01, 0x02, 0x03, 0x04}))
 }
 
 func TestTracker_Run_ContextCancellation(t *testing.T) {
-	logger := zap.NewNop()
-	cfg := Config{
-		EBPFProgramPath: "", // Use simulation mode
-	}
+	cfg := Config{EBPFProgramPath: ""} // Use the embedded production program.
 
-	tracker, err := NewTracker(cfg, logger)
-	require.NoError(t, err)
+	tracker := newTestTracker(t, cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	// Run should exit on context cancellation
-	err = tracker.Run(ctx)
+	err := tracker.Run(ctx)
 	assert.NoError(t, err)
 }
 
@@ -151,40 +141,6 @@ func Test_sanitizeProcessName(t *testing.T) {
 			assert.Equal(t, tt.expected, sanitizeProcessName(tt.input))
 		})
 	}
-}
-
-func Test_getProcessComm(t *testing.T) {
-	// Test with current process PID (should always exist)
-	pid := uint32(os.Getpid())
-	comm := getProcessComm(pid)
-	assert.NotEmpty(t, comm, "Should get comm for current process")
-	assert.NotEqual(t, "unknown", comm)
-}
-
-func Test_getProcessComm_invalid(t *testing.T) {
-	// Test with PID 0 (should return empty)
-	comm := getProcessComm(0)
-	assert.Empty(t, comm)
-
-	// Test with non-existent PID (should return empty)
-	comm = getProcessComm(99999999)
-	assert.Empty(t, comm)
-}
-
-func Test_enrichProcessName(t *testing.T) {
-	// Valid eBPF comm should be returned as-is
-	name := enrichProcessName("sshd", 1234)
-	assert.Equal(t, "sshd", name)
-
-	// Empty eBPF comm should trigger /proc lookup
-	pid := uint32(os.Getpid())
-	name = enrichProcessName("\x00\x00\x00\x00\x00\x00\x00\x00", pid)
-	assert.NotEmpty(t, name)
-	assert.NotEqual(t, "unknown", name)
-
-	// Invalid PID with empty comm should return "unknown"
-	name = enrichProcessName("\x00\x00\x00\x00\x00\x00\x00\x00", 99999999)
-	assert.Equal(t, "unknown", name)
 }
 
 func Test_bpfConnectionEvent_StructAlignment(t *testing.T) {

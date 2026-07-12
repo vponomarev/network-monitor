@@ -8,6 +8,9 @@ on:
       - 'pkg/embedded/**'
       - 'internal/losscollector/**'
       - 'internal/conntrack/**'
+      - 'cmd/conntrack/**'
+      - 'configs/conntrack.example.yaml'
+      - 'packaging/systemd/conntrack.service'
       - '.github/workflows/ebpf-build.yml'
   pull_request:
     branches: [main, master]
@@ -16,6 +19,9 @@ on:
       - 'pkg/embedded/**'
       - 'internal/losscollector/**'
       - 'internal/conntrack/**'
+      - 'cmd/conntrack/**'
+      - 'configs/conntrack.example.yaml'
+      - 'packaging/systemd/conntrack.service'
       - '.github/workflows/ebpf-build.yml'
 
 env:
@@ -106,16 +112,25 @@ jobs:
           echo "tcploss.bpf.o loaded successfully on $(uname -r)."
           sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
 
-      - name: Smoke-load conntrack program (informational — deferred track)
-        continue-on-error: true
+      - name: Verify canonical conntrack assets are embedded
         run: |
-          # conntrack.bpf.o has a known CO-RE issue on newer kernels
-          # (trace_event_raw_inet_sock_set_state layout); tracked in
-          # docs/prod-readiness/APPENDIX-conntrack-later.md. Non-blocking here.
+          cmp configs/conntrack.example.yaml pkg/embedded/configs/conntrack.example.yaml
+          cmp packaging/systemd/conntrack.service pkg/embedded/systemd/conntrack.service
+
+      - name: Smoke-load conntrack program (blocking on supported kernels)
+        run: |
+          kernel_release="$(uname -r)"
+          kernel_major="${kernel_release%%.*}"
+          kernel_rest="${kernel_release#*.}"
+          kernel_minor="${kernel_rest%%.*}"
+          if (( kernel_major > 6 || (kernel_major == 6 && kernel_minor > 12) )); then
+            echo "::warning title=conntrack eBPF load::Skipping verifier/load on unsupported runner kernel ${kernel_release}; blocking coverage is provided by the 5.15/6.1/6.8/6.12 matrix."
+            exit 0
+          fi
+
           sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
-          sudo bpftool prog loadall bpf/conntrack.bpf.o /sys/fs/bpf/_ci \
-            && echo "conntrack.bpf.o loaded" \
-            || echo "::warning title=conntrack eBPF::conntrack.bpf.o failed to load on $(uname -r) (deferred track)"
+          sudo bpftool prog loadall bpf/conntrack.bpf.o /sys/fs/bpf/_ci
+          echo "conntrack.bpf.o loaded successfully on ${kernel_release}."
           sudo rm -rf /sys/fs/bpf/_ci 2>/dev/null || true
 
       - name: Verify Go loss-event struct matches freshly built object
