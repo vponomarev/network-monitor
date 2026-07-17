@@ -1,13 +1,13 @@
 # Network Monitor — статус и план развития
 
-*Актуализировано: 2026-07-17*
+*Актуализировано: 2026-07-18*
 
 ## Поддерживаемый scope
 
 | Компонент | Назначение | Статус |
 |---|---|---|
 | `netmon` / `tcploss` | Мониторинг TCP-ретрансмитов | Production-ready |
-| standalone `conntrack` | Трекинг жизненного цикла TCP-соединений | Production-qualified в v2.2.0 |
+| standalone `conntrack` | Трекинг жизненного цикла TCP-соединений | Production-qualified в v2.3.0 |
 | `pktloss` | Legacy trace_pipe-прототип | Experimental, не для production |
 
 Production-поставка поддерживает только Linux `amd64`. ARM-артефакты не
@@ -62,12 +62,19 @@ post-merge CI, Security Scan и Docker Publish прошли успешно.
 
 Alerts относятся к внешнему контуру мониторинга и не блокируют этот релиз.
 
-## Текущий план работ
+## Релиз v2.3.0 — завершён 2026-07-18
 
-Работы выполняются последовательно. Новый функциональный scope не добавляется,
-пока не закрыты эксплуатационные риски P0.
+Retention, жёсткие лимиты состояния, soak automation и безопасный
+upgrade/rollback выпущены в `v2.3.0`. Финальные Linux `amd64` binaries и bundles
+собраны на Debian 13 из merge-коммита `838089c`. Conntrack bundle прошёл полный
+lifecycle, а один бинарник — ядра 5.15, 6.1, 6.8 и 6.12. Опубликованные assets
+заменены квалифицированными host-built файлами и повторно сверены по SHA256.
+Release workflow, post-merge CI, eBPF verifier, Security Scan и Docker Publish
+прошли успешно.
 
-### P0.1 — retention и ограничение состояния (реализовано, ожидает релиза)
+## Закрытый P0 scope v2.3.0
+
+### P0.1 — retention и ограничение состояния
 
 - [x] TTL 24 часа для незакрытых соединений и записей после потерянного `CLOSE`;
 - [x] настраиваемые жёсткие лимиты kernel correlation maps и userspace state;
@@ -76,8 +83,7 @@ Alerts относятся к внешнему контуру мониторин�
 - [x] unit/race/verifier и E2E одним бинарником на ядрах 5.15, 6.1, 6.8 и 6.12.
 
 Defaults: `state_ttl: 24h`, `cleanup_interval: 1m`, не более 10240 tracked и
-16384 pending kernel entries. Реализация находится в рабочей ветке и ещё не
-выпущена как новая версия.
+16384 pending kernel entries.
 
 ### P0.2 — эксплуатационная квалификация (завершена)
 
@@ -89,7 +95,7 @@ Defaults: `state_ttl: 24h`, `cleanup_interval: 1m`, не более 10240 tracke
 - [x] детерминированные тесты вытеснения при заполнении userspace-лимита и
   TTL-очистки userspace/kernel state при длительном отсутствии `CLOSE`.
 
-### P0.3 — безопасный upgrade и rollback (реализовано, ожидает релиза)
+### P0.3 — безопасный upgrade и rollback
 
 - [x] сохранение существующей конфигурации и проверка её совместимости;
 - [x] атомарная установка и повторная установка поверх работающей версии;
@@ -122,6 +128,6 @@ Defaults: `state_ttl: 24h`, `cleanup_interval: 1m`, не более 10240 tracke
 ## Исторические планы
 
 Завершённые планы и отчёты перечислены в [`docs/README.md`](README.md). PR #3
-не вливается напрямую: его реализованные conntrack-задачи уже вошли в v2.2.0,
-а оставшийся IPv6 перенесён в P1. Подробное сопоставление сохранено в
+не вливается напрямую: его базовые conntrack-задачи вошли в v2.2.0, а
+эксплуатационный P0 scope — в v2.3.0. Оставшийся IPv6 перенесён в P1. Подробное сопоставление сохранено в
 [`PR_3_RECONCILIATION.md`](PR_3_RECONCILIATION.md).

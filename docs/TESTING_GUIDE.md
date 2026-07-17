@@ -67,7 +67,7 @@ On a systemd host:
 
 ```bash
 sudo tests/conntrack/e2e/qualify-bundle.sh \
-  ./conntrack-v2.2.0-linux-amd64.tar.gz
+  ./conntrack-v2.3.0-linux-amd64.tar.gz
 ```
 
 The script backs up and restores existing state while checking install, start,
