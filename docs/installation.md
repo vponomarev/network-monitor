@@ -27,7 +27,7 @@ sudo /usr/local/bin/conntrack deinstall
 
 ## Netmon bundle
 
-Replace `<version>` with a release tag such as `v2.2.0`:
+Replace `<version>` with a release tag such as `v2.3.0`:
 
 ```bash
 wget https://github.com/vponomarev/network-monitor/releases/download/<version>/netmon-<version>-linux-amd64.tar.gz

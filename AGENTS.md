@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`cmd/netmon` is the production TCP-loss entry point. `cmd/conntrack` is the production-qualified standalone TCP lifecycle tracker released in v2.2.0. Core Go packages live under `internal/` (collection, metrics, configuration, discovery, health, and topology). Shared event and embedded-resource packages are in `pkg/`. eBPF sources are under `bpf/`; generated `.o` files used by single-binary builds belong in `pkg/embedded/bpf/`.
+`cmd/netmon` is the production TCP-loss entry point. `cmd/conntrack` is the production-qualified standalone TCP lifecycle tracker released in v2.3.0. Core Go packages live under `internal/` (collection, metrics, configuration, discovery, health, and topology). Shared event and embedded-resource packages are in `pkg/`. eBPF sources are under `bpf/`; generated `.o` files used by single-binary builds belong in `pkg/embedded/bpf/`.
 
 Configuration examples are in `configs/`, deployment assets in `packaging/`, dashboards in `dashboards/`, and operational/design documentation in `docs/`. Unit tests are colocated as `*_test.go`; privileged and cross-component tests live in `tests/` and `tests/integration/`.
 

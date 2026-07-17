@@ -13,7 +13,7 @@ CO-RE eBPF collectors.
 | `conntrack` | TCP connection lifecycle and process correlation | Production-qualified standalone service |
 | `pktloss` | Legacy `trace_pipe` prototype | Experimental; do not use in production |
 
-The v2.2.0 release was qualified on Linux kernels 5.15, 6.1, 6.8, and 6.12.
+The v2.3.0 release was qualified on Linux kernels 5.15, 6.1, 6.8, and 6.12.
 Only Linux `amd64` artifacts are published. ARM is intentionally unsupported
 until an architecture-correct eBPF build can be tested on a real ARM host.
 

@@ -5,9 +5,10 @@ lifecycles. It records incoming and outgoing `ESTABLISHED` and `CLOSED` events,
 correlates outgoing connections with PID/comm when available, writes structured
 syslog messages, and exports Prometheus metrics.
 
-The v2.2.0 Linux `amd64` artifact is production-qualified on kernels 5.15, 6.1,
-6.8, and 6.12. IPv6, retention for orphaned state, and ARM are not yet
-supported. Alerts belong to the external monitoring stack.
+The v2.3.0 Linux `amd64` artifact is production-qualified on kernels 5.15, 6.1,
+6.8, and 6.12. Orphaned state is bounded by configurable retention and capacity
+limits. IPv6 and ARM are not yet supported. Alerts belong to the external
+monitoring stack.
 
 ## Runtime architecture
 
@@ -166,8 +167,8 @@ backpressure.
 
 ## Retention and limits
 
-The next release adds a 24-hour default TTL for orphaned userspace state and
+Version v2.3.0 adds a 24-hour default TTL for orphaned userspace state and
 both kernel correlation maps. Sweeps run every minute. Userspace capacity
 evicts the oldest snapshot; kernel insertion failures are observable. Operators
 can tune TTL, sweep cadence, and both map limits in the `connections` section.
-See [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md) for release status.
+See [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md) for current priorities.
