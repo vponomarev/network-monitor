@@ -1,4 +1,7 @@
-# Phase 2 Status - Discovery Module
+# Phase 2 Status - Discovery Module (Historical)
+
+> Completed milestone report. Current priorities are maintained in
+> [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 ## ✅ Completed
 

@@ -1,4 +1,7 @@
-# План: Single-Binary поставка Network Monitor (v3)
+# План: Single-Binary поставка Network Monitor (v3, архив)
+
+> Исторический implementation plan. Поставка single-binary уже реализована;
+> актуальный статус находится в [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 **Дата:** 3 мая 2026  
 **Цель:** Упаковка приложения в единый бинарный файл со встроенными ресурсами и командами install/deinstall

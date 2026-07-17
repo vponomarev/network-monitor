@@ -1,4 +1,7 @@
-# MVP Status Report
+# MVP Status Report (Historical)
+
+> Point-in-time report. It is not the current backlog; see
+> [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 ## ✅ Реализовано (Phase 1 - MVP Core)
 

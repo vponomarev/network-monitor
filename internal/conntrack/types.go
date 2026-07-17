@@ -11,6 +11,13 @@ const DefaultEBPFProgramPath = "/usr/share/conntrack/bpf/conntrack.bpf.o"
 // DefaultEventBufferSize is the default size of the event channel buffer
 const DefaultEventBufferSize = 10000
 
+const (
+	DefaultStateTTL              = 24 * time.Hour
+	DefaultCleanupInterval       = time.Minute
+	DefaultMaxTrackedConnections = 10240
+	DefaultMaxPendingConnections = 16384
+)
+
 // Config holds connection tracker configuration
 type Config struct {
 	// Path to eBPF program object file
@@ -36,6 +43,19 @@ type Config struct {
 
 	// Event channel buffer size (default: 10000)
 	EventBufferSize int
+
+	// StateTTL bounds orphaned kernel and userspace connection state.
+	StateTTL time.Duration
+
+	// CleanupInterval controls periodic retention sweeps.
+	CleanupInterval time.Duration
+
+	// MaxTrackedConnections bounds both the kernel correlation map and the
+	// userspace state machine.
+	MaxTrackedConnections int
+
+	// MaxPendingConnections bounds the kernel socket-to-process correlation map.
+	MaxPendingConnections int
 }
 
 // Direction represents connection direction

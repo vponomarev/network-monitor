@@ -79,10 +79,21 @@ struct {
 /* Events discarded because userspace did not drain the ring buffer in time. */
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-    __uint(max_entries, 1);
+    __uint(max_entries, 3);
     __type(key, __u32);
     __type(value, __u64);
 } event_drops SEC(".maps");
+
+#define DROP_RINGBUF_FULL 0
+#define DROP_CONNECTIONS_MAP_FULL 1
+#define DROP_PENDING_MAP_FULL 2
+
+static __always_inline void count_drop(__u32 reason)
+{
+    __u64 *drops = bpf_map_lookup_elem(&event_drops, &reason);
+    if (drops)
+        (*drops)++;
+}
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -114,10 +125,7 @@ static __always_inline void submit_event(struct connection_event *evt)
 {
     struct connection_event *event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
     if (!event) {
-        __u32 key = 0;
-        __u64 *drops = bpf_map_lookup_elem(&event_drops, &key);
-        if (drops)
-            (*drops)++;
+        count_drop(DROP_RINGBUF_FULL);
         return;
     }
     *event = *evt;
@@ -208,7 +216,8 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
         meta.timestamp_ns = bpf_ktime_get_ns();
         meta.pid_tgid = bpf_get_current_pid_tgid();
         bpf_get_current_comm(&meta.comm, sizeof(meta.comm));
-        bpf_map_update_elem(&pending_outgoing, &skaddr, &meta, BPF_ANY);
+        if (bpf_map_update_elem(&pending_outgoing, &skaddr, &meta, BPF_ANY) != 0)
+            count_drop(DROP_PENDING_MAP_FULL);
         return 0;
     }
     bool established = track_outgoing && oldstate == TCP_SYN_SENT && newstate == TCP_ESTABLISHED;
@@ -290,7 +299,8 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
         entry.state = CONN_STATE_ESTABLISHED;
         entry.tcp_flags = TCP_SYN | TCP_ACK;
         __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
-        bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
+        if (bpf_map_update_elem(&connections, &key, &entry, BPF_ANY) != 0)
+            count_drop(DROP_CONNECTIONS_MAP_FULL);
         bpf_map_delete_elem(&pending_outgoing, &skaddr);
     } else {
         struct connection_entry *entry = bpf_map_lookup_elem(&connections, &key);
@@ -396,7 +406,8 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
     entry.tcp_flags = TCP_SYN | TCP_ACK;
     __builtin_memcpy(entry.comm, evt.comm, TASK_COMM_LEN);
 
-    bpf_map_update_elem(&connections, &key, &entry, BPF_ANY);
+    if (bpf_map_update_elem(&connections, &key, &entry, BPF_ANY) != 0)
+        count_drop(DROP_CONNECTIONS_MAP_FULL);
 
     submit_event(&evt);
     return 0;

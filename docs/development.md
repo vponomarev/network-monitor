@@ -154,7 +154,7 @@ GitHub Actions runs all tests on Linux:
 
 - `.github/workflows/ci.yml` - Build and test on Ubuntu
 - `.github/workflows/ebpf-build.yml` - eBPF compilation
-- `.github/workflows/release.yml` - Multi-arch releases
+- `.github/workflows/release.yml` - qualified Linux amd64 releases
 
 ## Debugging
 

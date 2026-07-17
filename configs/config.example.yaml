@@ -107,6 +107,10 @@ connections:
   track_outgoing: true
   filter_ports: []
   event_buffer_size: 10000  # Buffer size for connection events (default: 10000)
+  state_ttl: 24h            # Expire orphaned kernel/userspace state
+  cleanup_interval: 1m      # Retention sweep cadence
+  max_tracked_connections: 10240
+  max_pending_connections: 16384
 
 # Optional monitoring modules (disabled by default)
 # Uncomment and configure to enable

@@ -1,135 +1,68 @@
 # Architecture
 
-This document describes the architecture of the Network Monitor system.
+Network Monitor ships two production-qualified Linux `amd64` applications and
+one experimental legacy binary.
 
-## Overview
+## Production data paths
 
-Network Monitor is a modular Linux network monitoring suite consisting of several components:
+```text
+tcp_retransmit_skb tracepoint
+        │
+        ▼
+ tcploss.bpf.o ── ring buffer ── netmon ── Prometheus / discovery API
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        CLI Applications                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │   netmon    │  │   pktloss   │  │  conntrack  │              │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘              │
-└─────────┼────────────────┼────────────────┼─────────────────────┘
-          │                │                │
-┌─────────┴────────────────┴────────────────┴─────────────────────┐
-│                      Internal Modules                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │ packetloss  │  │  conntrack  │  │   latency   │              │
-│  │ (trace_pipe)│  │   (eBPF)    │  │  (ICMP/UDP) │              │
-│  └─────────────┘  └─────────────┘  └─────────────┘              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │  bandwidth  │  │     dns     │  │   metrics   │              │
-│  │ (/proc/net) │  │  (resolver) │  │ (Prometheus)│              │
-│  └─────────────┘  └─────────────┘  └─────────────┘              │
-└─────────────────────────────────────────────────────────────────┘
-          │                │                │
-┌─────────┴────────────────┴────────────────┴─────────────────────┐
-│                        Linux Kernel                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │
-│  │  trace_pipe │  │    eBPF     │  │  /proc/net  │              │
-│  │   (ftrace)  │  │  (ringbuf)  │  │   (stats)   │              │
-│  └─────────────┘  └─────────────┘  └─────────────┘              │
-└─────────────────────────────────────────────────────────────────┘
+inet_sock_set_state + accept + close
+        │
+        ▼
+conntrack.bpf.o ─ ring buffer ─ conntrack ─ Prometheus + syslog
 ```
 
-## Components
+Both eBPF objects are embedded into their Go binaries. A file supplied through
+an explicit CLI override is intended for development and diagnosis. Production
+startup fails when eBPF cannot be loaded; it does not silently simulate events.
 
-### CLI Applications
+## Applications
 
-| Binary | Description |
-|--------|-------------|
-| `netmon` | Main daemon with all monitoring features |
-| `pktloss` | Standalone packet loss monitor |
-| `conntrack` | Standalone connection tracker |
+### `cmd/netmon`
 
-### Internal Modules
+The TCP-loss daemon loads `internal/losscollector`, enriches retransmit tuples
+with metadata, controls Prometheus cardinality, and optionally runs traceroute
+discovery. Its HTTP surface includes health, readiness, metrics, discovery,
+metadata status, and—when enabled in the combined configuration—legacy
+conntrack API handlers.
 
-#### Packet Loss (`internal/packetloss`)
-- Reads from `/sys/kernel/tracing/trace_pipe`
-- Parses kernel trace output for packet drop events
-- Calculates loss percentage over sliding window
-- Sends alerts when threshold exceeded
+### `cmd/conntrack`
 
-#### Connection Tracking (`internal/conntrack`)
-- Uses eBPF programs attached to kernel networking hooks
-- Tracks incoming/outgoing TCP/UDP connections
-- Reports via eBPF ring buffer
-- Includes process information (PID, comm)
+The standalone lifecycle service loads `internal/conntrack`, correlates IPv4
+TCP state changes, exports lifecycle/drop metrics, and writes syslog records.
+Its supported HTTP surface is `/health`, `/ready`, and `/metrics`. It is shipped
+as a separate systemd service in v2.2.0.
 
-#### Latency (`internal/latency`)
-- Sends ICMP ping or UDP probes to targets
-- Measures round-trip time (RTT)
-- Detects high latency conditions
+### `cmd/pktloss`
 
-#### Bandwidth (`internal/bandwidth`)
-- Reads `/proc/net/dev` for interface statistics
-- Calculates bytes/packets per second
-- Tracks RX/TX rates per interface
+This legacy `trace_pipe` prototype is experimental and is not included in
+production releases.
 
-#### DNS (`internal/dns`)
-- Monitors DNS resolution performance
-- Detects failures and slow responses
-- Tracks query latency to various resolvers
+## Package boundaries
 
-#### Metrics (`internal/metrics`)
-- Exports Prometheus metrics
-- HTTP server on configurable port
-- Pre-defined metrics for all modules
+| Path | Responsibility |
+|---|---|
+| `internal/losscollector` | eBPF TCP retransmit reader |
+| `internal/conntrack` | connection tracker, state machine, metrics, syslog |
+| `internal/metrics` | TCP-loss exporter and cardinality control |
+| `internal/metadata` | location, role, topology lookup and polling |
+| `internal/discovery` | traceroute and top-loss discovery API |
+| `internal/health` | liveness/readiness state |
+| `internal/config` | YAML configuration and validation |
+| `pkg/embedded` | embedded eBPF, config, and systemd resources |
+| `bpf/` | eBPF C sources and build inputs |
 
-## Data Flow
+## Operational boundaries
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Kernel     │────▶│   Module     │────▶│   Metrics    │
-│   (source)   │     │  (process)   │     │  (Prometheus)│
-└──────────────┘     └──────────────┘     └──────────────┘
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │    Events    │
-                     │  (alerting)  │
-                     └──────────────┘
-```
+- Supported release architecture: Linux `amd64` only.
+- Qualified kernels: 5.15, 6.1, 6.8, and 6.12 with BTF.
+- Conntrack is IPv4-only in the current production scope.
+- Alerts, long-term storage, and dashboards are external consumers.
+- Retention and hard limits for orphaned conntrack state are active P0 work.
 
-## eBPF Architecture
-
-The connection tracker uses eBPF programs:
-
-1. **kprobe/tcp_connect** - Triggers on outgoing TCP connections
-2. **kprobe/tcp_v4_accept** - Triggers on incoming TCP connections  
-3. **kprobe/tcp_close** - Triggers on connection close
-
-Events are sent to userspace via eBPF ring buffer for efficient processing.
-
-## Configuration
-
-Configuration is loaded from YAML file (default: `/etc/netmon/config.yaml`):
-
-```yaml
-monitoring:
-  packet_loss:
-    enabled: true
-    interfaces: [eth0]
-    threshold_percent: 1.0
-  connections:
-    enabled: true
-    track_incoming: true
-    track_outgoing: true
-metrics:
-  prometheus:
-    enabled: true
-    port: 9090
-logging:
-  level: info
-  format: json
-```
-
-## Security Considerations
-
-- eBPF programs require `CAP_BPF`, `CAP_NET_ADMIN` capabilities
-- trace_pipe access requires `CAP_SYS_ADMIN` or proper tracefs mount
-- Running as root is recommended for full functionality
-- Systemd service files include security hardening options
+See [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md) for current priorities.

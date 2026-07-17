@@ -265,9 +265,9 @@ Host: 192.168.5.214
 
 ## 📚 Дополнительные ресурсы
 
-- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Руководство по внесению изменений
-- [README.md](../../README.md) - Основная документация
-- [internal/conntrack/](../../internal/conntrack/) - Исходный код conntrack
+- [CONTRIBUTING.md](../CONTRIBUTING.md) - Руководство по внесению изменений
+- [README.md](../README.md) - Основная документация
+- [internal/conntrack/](../internal/conntrack/) - Исходный код conntrack
 
 ---
 

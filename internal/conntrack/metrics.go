@@ -17,6 +17,10 @@ type MetricsCollector struct {
 	bytesTransferred   *prometheus.CounterVec
 	bytesPerConnection *prometheus.HistogramVec
 	droppedEventsTotal *prometheus.GaugeVec
+	stateEntries       *prometheus.GaugeVec
+	stateCleanup       *prometheus.CounterVec
+	stateEvictions     *prometheus.CounterVec
+	stateOverflows     *prometheus.CounterVec
 }
 
 // NewMetricsCollector creates a new metrics collector
@@ -90,6 +94,34 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 		},
 		[]string{"reason"},
 	)
+	mc.stateEntries = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "conntrack_state_entries",
+			Help: "Current conntrack state entries by storage layer",
+		},
+		[]string{"layer"},
+	)
+	mc.stateCleanup = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "conntrack_state_cleanup_total",
+			Help: "Conntrack state entries removed by cleanup reason",
+		},
+		[]string{"reason"},
+	)
+	mc.stateEvictions = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "conntrack_state_evictions_total",
+			Help: "Conntrack state entries evicted to enforce a hard limit",
+		},
+		[]string{"layer"},
+	)
+	mc.stateOverflows = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "conntrack_state_overflow_total",
+			Help: "Conntrack state insertions that encountered a full bounded store",
+		},
+		[]string{"layer"},
+	)
 
 	// Register metrics
 	prometheus.MustRegister(mc.connectionsTotal)
@@ -99,10 +131,52 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 	prometheus.MustRegister(mc.bytesTransferred)
 	prometheus.MustRegister(mc.bytesPerConnection)
 	prometheus.MustRegister(mc.droppedEventsTotal)
+	prometheus.MustRegister(mc.stateEntries)
+	prometheus.MustRegister(mc.stateCleanup)
+	prometheus.MustRegister(mc.stateEvictions)
+	prometheus.MustRegister(mc.stateOverflows)
 	mc.droppedEventsTotal.WithLabelValues("event_channel_full").Set(0)
 	mc.droppedEventsTotal.WithLabelValues("ringbuf_full").Set(0)
+	mc.droppedEventsTotal.WithLabelValues("connections_map_full").Set(0)
+	mc.droppedEventsTotal.WithLabelValues("pending_map_full").Set(0)
+	for _, layer := range []string{"userspace", "kernel_connections", "kernel_pending"} {
+		mc.stateEntries.WithLabelValues(layer).Set(0)
+		mc.stateEvictions.WithLabelValues(layer).Add(0)
+		mc.stateOverflows.WithLabelValues(layer).Add(0)
+	}
+	for _, reason := range []string{
+		CleanupReasonClosed,
+		CleanupReasonTTL,
+		CleanupReasonSYNTimeout,
+		"ttl_kernel_connections",
+		"ttl_kernel_pending",
+	} {
+		mc.stateCleanup.WithLabelValues(reason).Add(0)
+	}
 
 	return mc
+}
+
+func (mc *MetricsCollector) UpdateStateEntries(layer string, count int) {
+	mc.stateEntries.WithLabelValues(layer).Set(float64(count))
+}
+
+func (mc *MetricsCollector) AddCleanup(reason string, count int) {
+	if count > 0 {
+		mc.stateCleanup.WithLabelValues(reason).Add(float64(count))
+	}
+}
+
+func (mc *MetricsCollector) AddEviction(layer string, count int) {
+	if count > 0 {
+		mc.stateEvictions.WithLabelValues(layer).Add(float64(count))
+	}
+}
+
+func (mc *MetricsCollector) AddOverflow(layer string, count uint64) {
+	if count > 0 {
+		mc.stateOverflows.WithLabelValues(layer).Add(float64(count))
+	}
 }
 
 // OnConnectionEvent handles connection events for metrics
@@ -159,4 +233,8 @@ func (mc *MetricsCollector) Stop() {
 	prometheus.Unregister(mc.bytesTransferred)
 	prometheus.Unregister(mc.bytesPerConnection)
 	prometheus.Unregister(mc.droppedEventsTotal)
+	prometheus.Unregister(mc.stateEntries)
+	prometheus.Unregister(mc.stateCleanup)
+	prometheus.Unregister(mc.stateEvictions)
+	prometheus.Unregister(mc.stateOverflows)
 }

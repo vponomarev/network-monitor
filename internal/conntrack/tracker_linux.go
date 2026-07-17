@@ -21,6 +21,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/vponomarev/network-monitor/pkg/embedded"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 // Connection event types
@@ -47,18 +48,18 @@ type Tracker struct {
 	// Metrics collector
 	metricsCollector *MetricsCollector
 
-	// Connection tracking
-	mu          sync.RWMutex
-	wg          sync.WaitGroup
-	connections map[string]*Connection
+	wg sync.WaitGroup
 
 	// Event channel
-	events chan *Connection
+	events        chan *Connection
+	eventsEnabled atomic.Bool
 
 	// Dropped events counter
-	droppedEvents       uint64
-	kernelDroppedEvents uint64
-	ready               atomic.Bool
+	droppedEvents             uint64
+	kernelDroppedEvents       uint64
+	kernelConnectionOverflows uint64
+	kernelPendingOverflows    uint64
+	ready                     atomic.Bool
 }
 
 // eBPF event structure (must match C struct)
@@ -109,6 +110,21 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("removing memlock: %w", err)
 	}
+	if cfg.StateTTL <= 0 {
+		cfg.StateTTL = DefaultStateTTL
+	}
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = DefaultCleanupInterval
+	}
+	if cfg.MaxTrackedConnections <= 0 {
+		cfg.MaxTrackedConnections = DefaultMaxTrackedConnections
+	}
+	if cfg.MaxPendingConnections <= 0 {
+		cfg.MaxPendingConnections = DefaultMaxPendingConnections
+	}
+	if uint64(cfg.MaxTrackedConnections) > uint64(^uint32(0)) || uint64(cfg.MaxPendingConnections) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("conntrack map limits exceed uint32 capacity")
+	}
 
 	// Set default buffer size if not specified
 	bufferSize := cfg.EventBufferSize
@@ -117,10 +133,9 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 	}
 
 	tracker := &Tracker{
-		config:      cfg,
-		logger:      logger.Named("conntrack"),
-		connections: make(map[string]*Connection),
-		events:      make(chan *Connection, bufferSize),
+		config: cfg,
+		logger: logger.Named("conntrack"),
+		events: make(chan *Connection, bufferSize),
 	}
 
 	// Log buffer size
@@ -131,7 +146,10 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 
 	// Create state machine
 	tracker.stateMachine = NewStateMachine(StateMachineConfig{
-		SYNTimeout: cfg.SYNTimeout,
+		SYNTimeout:      cfg.SYNTimeout,
+		RetentionTTL:    cfg.StateTTL,
+		CleanupInterval: cfg.CleanupInterval,
+		MaxConnections:  cfg.MaxTrackedConnections,
 		OnStateChange: func(conn *Connection, oldState, newState ConnectionState) {
 			tracker.logger.Debug("Connection state change",
 				zap.String("conn", conn.ID),
@@ -141,6 +159,13 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 		},
 		OnEvent: func(conn *Connection, event ConnectionEvent) {
 			tracker.onConnectionEvent(conn, event)
+		},
+		OnCleanup: func(reason string, count int) {
+			tracker.metricsCollector.AddCleanup(reason, count)
+			if reason == CleanupReasonCapacity {
+				tracker.metricsCollector.AddEviction("userspace", count)
+				tracker.metricsCollector.AddOverflow("userspace", uint64(count))
+			}
 		},
 	})
 
@@ -188,6 +213,11 @@ func (t *Tracker) Run(ctx context.Context) error {
 	} else {
 		t.logger.Warn("Kernel drop counter map is unavailable; rebuild conntrack eBPF")
 	}
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		t.cleanupKernelState(ctx)
+	}()
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
@@ -250,6 +280,12 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 	spec, err := ebpf.LoadCollectionSpec(path)
 	if err != nil {
 		return fmt.Errorf("loading collection spec from %s: %w", path, err)
+	}
+	if connections, ok := spec.Maps["connections"]; ok {
+		connections.MaxEntries = uint32(t.config.MaxTrackedConnections)
+	}
+	if pending, ok := spec.Maps["pending_outgoing"]; ok {
+		pending.MaxEntries = uint32(t.config.MaxPendingConnections)
 	}
 
 	// Log available programs and maps
@@ -448,7 +484,9 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 
 	// Convert to Connection
 	conn := &Connection{
-		Timestamp:  time.Unix(0, int64(event.TimestampNs)),
+		// bpf_ktime_get_ns is monotonic since boot, not a Unix timestamp.
+		// Use wall time at ingestion for logs and userspace retention.
+		Timestamp:  time.Now(),
 		SourceIP:   IPFromBytes(event.SrcIP),
 		SourcePort: event.SrcPort,
 		DestIP:     IPFromBytes(event.DstIP),
@@ -559,14 +597,16 @@ func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
 		}
 	}
 
-	// Store connection
-	t.mu.Lock()
-	t.connections[conn.ID] = conn
-	t.mu.Unlock()
+	// The standalone service has no event-channel consumer. Enable this optional
+	// subscriber queue only after a caller explicitly requests Events().
+	if !t.eventsEnabled.Load() {
+		return
+	}
 
 	// Send to event channel
+	eventConn := cloneConnection(conn)
 	select {
-	case t.events <- conn:
+	case t.events <- eventConn:
 	default:
 		// Increment dropped counter atomically
 		atomic.AddUint64(&t.droppedEvents, 1)
@@ -577,21 +617,12 @@ func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
 
 // GetConnections returns all tracked connections
 func (t *Tracker) GetConnections() []*Connection {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	conns := make([]*Connection, 0, len(t.connections))
-	for _, conn := range t.connections {
-		conns = append(conns, conn)
-	}
-	return conns
+	return t.stateMachine.GetAllConnections()
 }
 
 // GetConnectionCount returns the number of tracked connections
 func (t *Tracker) GetConnectionCount() int {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return len(t.connections)
+	return t.stateMachine.GetConnectionCount()
 }
 
 // GetStats returns connection statistics
@@ -601,6 +632,7 @@ func (t *Tracker) GetStats() Stats {
 
 // Events returns the event channel
 func (t *Tracker) Events() <-chan *Connection {
+	t.eventsEnabled.Store(true)
 	return t.events
 }
 
@@ -622,18 +654,31 @@ func (t *Tracker) observeKernelDrops(ctx context.Context, dropMap *ebpf.Map) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	collect := func() {
-		key := uint32(0)
+	collectOne := func(key uint32) uint64 {
 		var perCPU []uint64
 		if err := dropMap.Lookup(&key, &perCPU); err != nil {
-			t.logger.Warn("Reading conntrack eBPF drop counter", zap.Error(err))
-			return
+			return 0
 		}
 		var total uint64
 		for _, count := range perCPU {
 			total += count
 		}
-		atomic.StoreUint64(&t.kernelDroppedEvents, total)
+		return total
+	}
+	collect := func() {
+		atomic.StoreUint64(&t.kernelDroppedEvents, collectOne(0))
+		connections := collectOne(1)
+		previousConnections := atomic.SwapUint64(&t.kernelConnectionOverflows, connections)
+		if connections >= previousConnections {
+			t.metricsCollector.AddOverflow("kernel_connections", connections-previousConnections)
+		}
+		pending := collectOne(2)
+		previousPending := atomic.SwapUint64(&t.kernelPendingOverflows, pending)
+		if pending >= previousPending {
+			t.metricsCollector.AddOverflow("kernel_pending", pending-previousPending)
+		}
+		t.metricsCollector.UpdateDroppedMetrics("connections_map_full", connections)
+		t.metricsCollector.UpdateDroppedMetrics("pending_map_full", pending)
 	}
 
 	collect()
@@ -648,6 +693,87 @@ func (t *Tracker) observeKernelDrops(ctx context.Context, dropMap *ebpf.Map) {
 	}
 }
 
+func (t *Tracker) cleanupKernelState(ctx context.Context) {
+	ticker := time.NewTicker(t.config.CleanupInterval)
+	defer ticker.Stop()
+	for {
+		t.cleanupKernelStateOnce()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (t *Tracker) cleanupKernelStateOnce() {
+	if t.colls == nil {
+		return
+	}
+	now, err := monotonicNowNS()
+	if err != nil {
+		t.logger.Warn("Reading monotonic clock for conntrack cleanup", zap.Error(err))
+		return
+	}
+	for _, item := range []struct {
+		name  string
+		layer string
+	}{
+		{name: "connections", layer: "kernel_connections"},
+		{name: "pending_outgoing", layer: "kernel_pending"},
+	} {
+		m, ok := t.colls.Maps[item.name]
+		if !ok {
+			continue
+		}
+		remaining, deleted, err := cleanupTimestampedMap(m, now, t.config.StateTTL)
+		if err != nil {
+			t.logger.Warn("Cleaning conntrack kernel map", zap.String("map", item.name), zap.Error(err))
+			continue
+		}
+		t.metricsCollector.UpdateStateEntries(item.layer, remaining)
+		t.metricsCollector.AddCleanup("ttl_"+item.layer, deleted)
+	}
+}
+
+func monotonicNowNS() (uint64, error) {
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
+		return 0, err
+	}
+	return uint64(ts.Sec)*uint64(time.Second) + uint64(ts.Nsec), nil
+}
+
+func cleanupTimestampedMap(m *ebpf.Map, nowNS uint64, ttl time.Duration) (remaining, deleted int, err error) {
+	iter := m.Iterate()
+	var key []byte
+	var value []byte
+	var expired [][]byte
+	cutoff := uint64(ttl)
+	for iter.Next(&key, &value) {
+		remaining++
+		if len(value) < 8 {
+			return remaining, deleted, fmt.Errorf("map value too short: %d", len(value))
+		}
+		timestamp := binary.LittleEndian.Uint64(value[:8])
+		if timestamp > nowNS || nowNS-timestamp < cutoff {
+			continue
+		}
+		expired = append(expired, append([]byte(nil), key...))
+	}
+	if err := iter.Err(); err != nil {
+		return remaining, deleted, err
+	}
+	for _, expiredKey := range expired {
+		if err := m.Delete(expiredKey); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return remaining, deleted, err
+		}
+		remaining--
+		deleted++
+	}
+	return remaining, deleted, nil
+}
+
 // updateMetrics periodically updates connection state metrics
 func (t *Tracker) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
@@ -660,6 +786,7 @@ func (t *Tracker) updateMetrics(ctx context.Context) {
 		case <-ticker.C:
 			if t.metricsCollector != nil {
 				t.metricsCollector.UpdateStateMetrics(t.GetStats())
+				t.metricsCollector.UpdateStateEntries("userspace", t.GetConnectionCount())
 				t.metricsCollector.UpdateDroppedMetrics("event_channel_full", t.GetDroppedEvents())
 				t.metricsCollector.UpdateDroppedMetrics("ringbuf_full", t.GetKernelDroppedEvents())
 			}

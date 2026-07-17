@@ -2,615 +2,80 @@
 
 [![CI](https://github.com/vponomarev/network-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/vponomarev/network-monitor/actions/workflows/ci.yml)
 [![Release](https://github.com/vponomarev/network-monitor/actions/workflows/release.yml/badge.svg)](https://github.com/vponomarev/network-monitor/actions/workflows/release.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/vponomarev/network-monitor)](https://goreportcard.com/report/github.com/vponomarev/network-monitor)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Linux network monitoring suite** consisting of two applications:
+Network Monitor is a Linux `amd64` network-observability suite built around
+CO-RE eBPF collectors.
 
-| Application | Description | Technology |
-|-------------|-------------|------------|
-| **netmon** | TCP packet loss monitoring with path discovery | trace_pipe + traceroute |
-| **conntrack** | Connection tracking with eBPF | eBPF kprobes + tracepoints |
+| Application | Purpose | Delivery status |
+|---|---|---|
+| `netmon` | TCP retransmit/loss monitoring and path discovery | Production-ready |
+| `conntrack` | TCP connection lifecycle and process correlation | Production-qualified standalone service |
+| `pktloss` | Legacy `trace_pipe` prototype | Experimental; do not use in production |
 
-> **Note:** The `pktloss` binary (in `cmd/pktloss/`) is **EXPERIMENTAL** and NOT production-ready.
-> It uses heuristic trace_pipe scraping and does not produce meaningful loss metrics.
-> For production TCP loss monitoring, use the **netmon** binary instead.
+The v2.2.0 release was qualified on Linux kernels 5.15, 6.1, 6.8, and 6.12.
+Only Linux `amd64` artifacts are published. ARM is intentionally unsupported
+until an architecture-correct eBPF build can be tested on a real ARM host.
 
----
+## Quick start
 
-## 📋 Table of Contents
+Download a raw binary from the
+[latest release](https://github.com/vponomarev/network-monitor/releases/latest),
+or use the self-installing conntrack binary:
 
-- [Features](#-features)
-- [Quick Start](#-quick-start)
-- [Architecture](#-architecture)
-- [Installation](#-installation)
-- [Configuration](#-configuration)
-- [API Reference](#-api-reference)
-- [Metrics](#-metrics)
-- [Documentation](#-documentation)
-- [Development](#-development)
-
----
-
-## ✨ Features
-
-### Netmon (TCP Loss Monitoring)
-
-- **TCP Retransmit Tracking** — Real-time monitoring via `/sys/kernel/tracing/trace_pipe`
-- **Path Discovery** — Automatic network path discovery with traceroute (ICMP/UDP/TCP)
-- **Location/Role Mapping** — Best-match IP to location/role lookup
-- **Prometheus Metrics** — Export with rich labels (location, role, network)
-- **HTTP API** — RESTful API for path discovery and loss analysis
-- **Grafana Dashboard** — Ready-to-use dashboard included
-- **SIGHUP Reload** — Reload configuration without restart
-
-### Conntrack (Connection Tracking)
-
-- **TCP Handshake Tracking** — Monitor SYN → SYN+ACK → ESTABLISHED
-- **Incoming/Outgoing** — Separate tracking by direction
-- **Process Identification** — Track which process owns each connection
-- **Syslog Logging** — Structured messages in RFC 5424 format
-- **Prometheus Metrics** — Connection states, events, bytes, duration
-- **HTTP API** — View active connections and statistics
-
-### Bandwidth (Network Interface Monitoring)
-
-- **Interface Statistics** — RX/TX bytes, packets, errors, dropped
-- **Throughput Calculation** — Bytes per second rates
-- **Configurable Interval** — Customizable collection frequency
-- **Multi-Interface** — Monitor multiple interfaces simultaneously
-
-### Latency (RTT Monitoring)
-
-- **UDP Latency Checks** — Measure RTT to targets via UDP
-- **High Latency Alerts** — Detect performance degradation
-- **Timeout Detection** — Track unreachable targets
-- **Configurable Targets** — Monitor multiple endpoints
-
-### DNS (DNS Resolution Monitoring)
-
-- **DNS Query Testing** — Test resolution performance
-- **Slow Query Alerts** — Detect DNS issues
-- **Failure Detection** — Track resolution failures
-- **System Resolver** — Uses system DNS configuration
-
----
-
-## 🚀 Quick Start
-
-### ⚡ Fast Installation
-
-**Netmon:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/vponomarev/network-monitor/main/scripts/install-netmon.sh | sudo bash
-```
-
-**Conntrack:**
 ```bash
 wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack-linux-amd64
 chmod +x conntrack-linux-amd64
 sudo ./conntrack-linux-amd64 install
 sudo systemctl enable --now conntrack
+curl --fail http://127.0.0.1:9876/ready
+curl --fail http://127.0.0.1:9876/metrics
 ```
 
-### Prerequisites
+The installer creates `/etc/conntrack/config.yaml` once and preserves
+an existing configuration. Conntrack exposes `/health`, `/ready`, and
+`/metrics`; the metrics endpoint supports bearer authentication through
+`global.auth_token`.
 
-- Linux kernel 4.9+ (for eBPF support)
-- Root access (for trace_pipe and eBPF)
-- Docker (optional, for containerized deployment)
+## Build and test
 
-### Tested Kernels
-
-| Kernel Version | Distribution | Status | Notes |
-|----------------|--------------|--------|-------|
-| **6.12.85** | Debian 13 (trixie) | ✅ Tested | fentry/fexit |
-| **6.8.12** | Debian 12 / Proxmox 8.4 | ✅ Tested | fentry/fexit |
-| **6.5.x** | Ubuntu 22.04 HWE | ✅ Supported | fentry/fexit |
-| **6.2.x** | Ubuntu 22.04 HWE | ✅ Supported | fentry/fexit |
-| **5.15.x** | Ubuntu 22.04 GA | ✅ Supported | fentry/fexit |
-
-**Requirements:**
-- BTF enabled: `/sys/kernel/btf/vmlinux` (present in Debian 12+, Ubuntu 22.04+)
-- For kernels 6.8+: Uses fentry/fexit with automatic fallback to kprobe
-
-### Option 1: Binary Installation (Recommended)
-
-See [INSTALL.md](INSTALL.md) for detailed instructions.
-
-### Option 2: Docker Compose
+Go 1.21+ is required. Building eBPF objects additionally requires Linux,
+Clang/LLVM, BTF, and libbpf headers.
 
 ```bash
-# Clone repository
-git clone https://github.com/vponomarev/network-monitor.git
-cd network-monitor
-
-# Copy example configs
-cp configs/*.yaml .
-
-# Start services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f netmon
-```
-
-### Option 2: Binary Installation
-
-```bash
-# Download latest release
-wget https://github.com/vponomarev/network-monitor/releases/latest/download/netmon-linux-amd64
-chmod +x netmon-linux-amd64
-sudo mv netmon-linux-amd64 /usr/local/bin/netmon
-
-# Mount tracefs
-sudo mount -t tracefs none /sys/kernel/tracing
-
-# Run with config
-sudo netmon --config config.yaml
-```
-
-### Option 3: Build from Source
-
-```bash
-# Clone and build
-git clone https://github.com/vponomarev/network-monitor.git
-cd network-monitor
-make build
-
-# Run
-sudo ./bin/netmon
-```
-
-### Verify Installation
-
-```bash
-# Check health
-curl http://localhost:9876/health
-
-# Get metrics
-curl http://localhost:9876/metrics
-
-# Get top lossy pairs (netmon API)
-curl http://localhost:9876/api/v1/loss/top?limit=5
-
-# Get connections (conntrack API)
-curl http://localhost:9876/api/v1/conntrack/connections?limit=10
-```
-
----
-
-## 🏗 Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Network Monitor Suite                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────────────┐         ┌─────────────────────┐       │
-│  │      NETMON         │         │    CONNTRACK        │       │
-│  │                     │         │                     │       │
-│  │  ┌───────────────┐  │         │  ┌───────────────┐  │       │
-│  │  │ trace_pipe    │  │         │  │ eBPF kprobes  │  │       │
-│  │  │ collector     │  │         │  │ tcp_connect   │  │       │
-│  │  └───────────────┘  │         │  │ tcp_v4_rcv    │  │       │
-│  │                     │         │  │ tcp_close     │  │       │
-│  │  ┌───────────────┐  │         │  └───────────────┘  │       │
-│  │  │ Discovery     │  │         │                     │       │
-│  │  │ Traceroute    │  │         │  ┌───────────────┐  │       │
-│  │  │ (ICMP/UDP/TCP)│  │         │  │ State Machine │  │       │
-│  │  └───────────────┘  │         │  │ (TCP FSM)     │  │       │
-│  │                     │         │  └───────────────┘  │       │
-│  │  ┌───────────────┐  │         │                     │       │
-│  │  │ Metadata      │  │         │  ┌───────────────┐  │       │
-│  │  │ Location/Role │  │         │  │ Syslog Writer │  │       │
-│  │  └───────────────┘  │         │  └───────────────┘  │       │
-│  │                     │         │                     │       │
-│  └──────────┬──────────┘         └──────────┬──────────┘       │
-│             │                                │                  │
-│             └────────────┬───────────────────┘                  │
-│                          │                                      │
-│              ┌───────────▼────────────┐                        │
-│              │   Prometheus Metrics   │                        │
-│              │   HTTP API (9876)      │                        │
-│              └────────────────────────┘                        │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 📦 Installation
-
-### System Requirements
-
-| Component | Requirement |
-|-----------|-------------|
-| OS | Linux (kernel 4.9+) |
-| Memory | 128MB minimum, 512MB recommended |
-| CPU | 0.25 cores minimum, 1 core recommended |
-| Disk | 50MB for binary, variable for logs |
-
-### Capabilities Required
-
-#### Netmon
-- `CAP_SYS_ADMIN` — For trace_pipe access
-- `CAP_NET_RAW` — For traceroute (ICMP/UDP/TCP)
-
-#### Conntrack
-- `CAP_BPF` — For eBPF programs
-- `CAP_PERFMON` — For eBPF perf events
-- `CAP_NET_RAW` — For raw socket access
-- `CAP_SYS_ADMIN` — For various kernel operations
-
-### Installation Methods
-
-See [Installation Guide](docs/installation.md) for detailed instructions.
-
----
-
-## ⚙️ Configuration
-
-### Main Configuration (config.yaml)
-
-```yaml
-global:
-  ttl_hours: 3
-  metrics_port: 9876
-  trace_pipe_path: /sys/kernel/tracing/trace_pipe
-
-metadata:
-  locations:
-    path: locations.yaml
-  roles:
-    path: roles.yaml
-
-discovery:
-  traceroute:
-    enabled: true
-    top_n: 10
-    mode: both  # both | top_loss | on_demand | periodic
-    interval: 5m
-    protocol: icmp  # icmp | udp | tcp
-    max_hops: 30
-    timeout: 3s
-
-connections:
-  enabled: true
-  track_incoming: true
-  track_outgoing: true
-  filter_ports: []
-
-# Optional monitoring modules
-bandwidth:
-  enabled: false
-  interfaces:
-    - eth0
-  interval: 10s
-
-latency:
-  enabled: false
-  targets:
-    - 8.8.8.8
-    - 1.1.1.1
-  interval: 30s
-  timeout: 500ms
-
-dns:
-  enabled: false
-  interval: 1m
-
-logging:
-  level: info
-  format: json
-```
-
-### Locations (locations.yaml)
-
-```yaml
-locations:
-  - network: 10.179.64.0/22
-    location: IX-M5-SM13
-  - network: 10.181.208.0/22
-    location: IX-M3-SM10
-```
-
-### Roles (roles.yaml)
-
-```yaml
-roles:
-  - network: 10.179.64.32/32
-    role: s3-dwh05
-  - network: 10.179.65.31/32
-    role: dwh-lb
-```
-
-### HTTP Update Source (Optional)
-
-Metadata files (locations, roles, topology) can be automatically updated from an HTTP endpoint:
-
-```yaml
-metadata:
-  locations:
-    path: /etc/netmon/locations.yaml
-    update_source:
-      url: https://config.example.com/locations.yaml
-      poll_interval: 20m  # Check every 20 minutes (default)
-      timeout: 10s        # HTTP request timeout
-      
-  roles:
-    path: /etc/netmon/roles.yaml
-    update_source:
-      url: https://config.example.com/roles.yaml
-      poll_interval: 20m
-      
-  topology:
-    path: /etc/netmon/topology.yaml
-    update_source:
-      url: https://config.example.com/topology.yaml
-      poll_interval: 60m  # Topology changes rarely
-```
-
-**Behavior:**
-1. **Startup**: Local file is required (fail if missing)
-2. **First poll**: 30 seconds after startup
-3. **Subsequent polls**: Every `poll_interval` (default: 20m)
-4. **Validation**: Type-specific validation before writing
-5. **Auto-reload**: Memory updated automatically after successful file update
-6. **Atomic writes**: File updated atomically (write + rename)
-
-**Metrics:**
-```prometheus
-# Update statistics per source
-metadata_update_total{source="locations"}
-metadata_update_errors_total{source="locations"}
-metadata_last_update_timestamp_seconds{source="locations"}
-metadata_last_hash{source="locations"}
-```
-
-See [Configuration Guide](docs/configuration.md) for all options.
-
----
-
-## 🔌 API Reference
-
-### Netmon Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/metrics` | GET | Prometheus metrics |
-| `/health` | GET | Health check |
-| `/ready` | GET | Readiness check |
-| `/api/v1/loss/top` | GET | Top lossy IP pairs |
-| `/api/v1/discover` | POST | Discover path for IP pair |
-| `/api/v1/discover/top` | GET | Top paths with details |
-
-### Conntrack Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/conntrack/connections` | GET | List active connections |
-| `/api/v1/conntrack/stats` | GET | Connection statistics |
-
-### Metadata Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/metadata/status` | GET | Status of metadata sources (locations, roles, topology) |
-
-**Example response:**
-```json
-{
-  "sources": {
-    "locations": {
-      "file_path": "/etc/netmon/locations.yaml",
-      "http_url": "https://config.example.com/locations.yaml",
-      "last_check": "2026-05-23T12:00:00Z",
-      "last_hash": "a1b2c3d4",
-      "update_success": true,
-      "entries_count": 15,
-      "enabled": true
-    },
-    "roles": {
-      "file_path": "/etc/netmon/roles.yaml",
-      "entries_count": 20,
-      "enabled": false
-    },
-    "topology": {
-      "file_path": "/etc/netmon/topology.yaml",
-      "entries_count": 5,
-      "enabled": false
-    }
-  }
-}
-```
-
-See [Discovery API Reference](docs/DISCOVERY_API.md) for details.
-
----
-
-## 📊 Metrics
-
-### Netmon Metrics
-
-```prometheus
-# TCP retransmits by connection pair
-netmon_tcp_loss_total{
-    src_ip="10.179.64.32",
-    dst_ip="10.181.208.50",
-    src_location="IX-M5-SM13",
-    dst_location="IX-M3-SM10",
-    src_role="s3-dwh05",
-    dst_role="dwh-lb"
-}
-
-# Discovery metrics
-netmon_discovery_paths_total
-netmon_discovery_last_run_seconds
-netmon_path_hops{src_ip="...", dst_ip="..."}
-netmon_path_rtt_seconds{src_ip="...", dst_ip="..."}
-netmon_path_bottleneck_loss_percent{src_ip="...", dst_ip="..."}
-```
-
-### Conntrack Metrics
-
-```prometheus
-# Connection states
-conntrack_connections{state="established", direction="outgoing"}
-
-# Events
-conntrack_events_total{event="NEW", direction="outgoing"}
-conntrack_events_total{event="ESTABLISHED", direction="outgoing"}
-conntrack_events_total{event="CLOSED", direction="outgoing"}
-
-# Handshake duration
-conntrack_handshake_duration_seconds{direction="outgoing"}
-
-# Connection duration
-conntrack_connection_duration_seconds{direction="outgoing"}
-
-# Bytes transferred
-conntrack_bytes_total{direction="outgoing", type="sent"}
-conntrack_bytes_total{direction="outgoing", type="received"}
-conntrack_bytes_per_connection{direction="outgoing"}
-```
-
-### Bandwidth Metrics
-
-```prometheus
-# Interface throughput
-netmon_bandwidth_bytes_per_sec{
-    interface="eth0",
-    direction="rx"  # or "tx"
-}
-
-# Interface errors
-netmon_bandwidth_errors_total{
-    interface="eth0",
-    type="rx_errors"  # or "tx_errors", "rx_dropped", "tx_dropped"
-}
-```
-
-### Latency Metrics
-
-```prometheus
-# RTT histogram
-netmon_latency_seconds_bucket{target="8.8.8.8",le="0.01"}
-netmon_latency_seconds_sum{target="8.8.8.8"}
-netmon_latency_seconds_count{target="8.8.8.8"}
-
-# Timeout counter
-netmon_latency_timeouts_total{target="8.8.8.8"}
-```
-
-### DNS Metrics
-
-```prometheus
-# DNS query results
-netmon_dns_queries_total{
-    domain="google.com",
-    status="success"  # or "failure"
-}
-
-# DNS latency
-netmon_dns_latency_seconds{domain="google.com"}
-```
-
----
-
-## 📚 Documentation
-
-### Production Deployment
-
-| Document | Description |
-|----------|-------------|
-| **[PRODUCTION_en.md](docs/PRODUCTION_en.md)** | 🏭 Production deployment guide (eBPF, systemd, capabilities, metrics, alerts) |
-| **[PRODUCTION_ru.md](docs/PRODUCTION_ru.md)** | 🏭 Руководство по развёртыванию в продакшене (eBPF, systemd, capabilities, метрики, алерты) |
-
-### General Documentation
-
-| Document | Description |
-|----------|-------------|
-| **[QUICKSTART.md](QUICKSTART.md)** | 🚀 Быстрый старт — установка и запуск |
-| **[INSTALL.md](INSTALL.md)** | 📦 Полное руководство по установке |
-| [Status & Plan](docs/STATUS_AND_PLAN.md) | Current development status |
-| [Discovery API](docs/DISCOVERY_API.md) | API reference for path discovery |
-| [Conntrack Guide](docs/CONNTRACK.md) | Connection tracking documentation |
-| [Configuration](docs/configuration.md) | Full configuration reference |
-| [Deployment](docs/DOCKER_DEPLOYMENT.md) | Docker deployment guide |
-| [Architecture](docs/architecture.md) | System architecture details |
-
----
-
-## 🛠 Development
-
-### Build
-
-```bash
-# Build all
-make build
-
-# Build specific binary
+go mod download
 make build-netmon
 make build-conntrack
-
-# Build eBPF programs
-make -C bpf all
-```
-
-### Test
-
-```bash
-# Run all tests
 make test
-
-# Run with coverage
-make test-coverage
-
-# Run integration tests (requires root)
-sudo go test -v ./tests/integration/...
+make vet
 ```
 
-### Lint
+Privileged conntrack qualification must run as root on Linux:
 
 ```bash
-make lint
+sudo tests/conntrack/e2e/run-host.sh ./conntrack-linux-amd64
 ```
 
-### Project Structure
+From Windows, `tests/conntrack/e2e/run-matrix.ps1` runs the same binary across
+the maintained kernel matrix. See the E2E
+[instructions](tests/conntrack/e2e/README.md) for bundle qualification.
 
-```
-network-monitor/
-├── cmd/
-│   ├── netmon/           # Netmon application
-│   └── conntrack/        # Conntrack application
-├── internal/
-│   ├── collector/        # trace_pipe collector
-│   ├── conntrack/        # Connection tracking
-│   ├── discovery/        # Path discovery & traceroute
-│   ├── metadata/         # Location/Role matching
-│   ├── metrics/          # Prometheus exporter
-│   ├── config/           # Configuration
-│   ├── topology/         # Network topology
-│   ├── packetloss/       # Packet loss monitor
-│   ├── bandwidth/        # Bandwidth monitor
-│   ├── latency/          # Latency monitor
-│   └── dns/              # DNS monitor
-├── bpf/                  # eBPF programs
-├── configs/              # Example configurations
-├── dashboards/           # Grafana dashboards
-├── docs/                 # Documentation
-├── tests/                # Integration tests
-└── pkg/                  # Shared packages
-```
+## Documentation
 
----
+Start with the [documentation index](docs/README.md). The authoritative project
+status and prioritized backlog are in
+[STATUS_AND_PLAN.md](docs/STATUS_AND_PLAN.md). Historical implementation plans
+are retained for traceability but do not define current work.
 
-## 📄 License
+Useful references:
 
-MIT License — see [LICENSE](LICENSE) for details.
+- [Production guide (Russian)](docs/PRODUCTION_ru.md)
+- [Production guide (English)](docs/PRODUCTION_en.md)
+- [Conntrack module](docs/CONNTRACK.md)
+- [Configuration](docs/configuration.md)
+- [Testing](docs/TESTING_GUIDE.md)
+- [Release process](docs/RELEASE_PROCESS.md)
 
----
+## License
 
-## 🤝 Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+[MIT](LICENSE)

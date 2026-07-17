@@ -1,226 +1,101 @@
 # Configuration Reference
 
-This document describes all configuration options for Network Monitor.
+Configuration is YAML. Relative metadata paths are resolved from the directory
+containing the main config file. `netmon` uses `config.yaml` by default or the
+path supplied by `--config`/`NETMON_CONFIG`; installed conntrack uses
+`/etc/conntrack/config.yaml`.
 
-## Configuration File
-
-The configuration file is YAML format, typically located at `/etc/netmon/config.yaml`.
-
-## Top-Level Sections
+## Production settings
 
 ```yaml
-monitoring:    # Monitoring module settings
-metrics:       # Metrics export settings
-logging:       # Logging configuration
-```
+global:
+  ttl_hours: 3
+  metrics_addr: 127.0.0.1
+  metrics_port: 9876
+  auth_token: ""
+  loss_source: ebpf
+  trace_pipe_path: /sys/kernel/tracing/trace_pipe
 
-## Monitoring Section
+metadata:
+  locations:
+    path: locations.yaml
+  roles:
+    path: roles.yaml
+  topology:
+    path: topology.yaml
 
-### Packet Loss (`monitoring.packet_loss`)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable packet loss monitoring |
-| `interfaces` | []string | `["eth0"]` | Network interfaces to monitor |
-| `threshold_percent` | float | `1.0` | Alert threshold (%) |
-| `window_size` | int | `100` | Sliding window size for calculations |
-| `alert_interval` | duration | `1m` | Minimum time between alerts |
-
-Example:
-```yaml
-monitoring:
-  packet_loss:
+discovery:
+  traceroute:
     enabled: true
-    interfaces:
-      - eth0
-      - eth1
-    threshold_percent: 0.5
-    window_size: 200
-    alert_interval: 30s
-```
-
-### Connections (`monitoring.connections`)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable connection tracking |
-| `track_incoming` | bool | `true` | Track incoming connections |
-| `track_outgoing` | bool | `true` | Track outgoing connections |
-| `filter_ports` | []int | `[]` | Ports to filter (empty = all) |
-
-Example:
-```yaml
-monitoring:
-  connections:
-    enabled: true
-    track_incoming: true
-    track_outgoing: true
-    filter_ports:
-      - 22
-      - 80
-      - 443
-```
-
-### Latency (`monitoring.latency`)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable latency monitoring |
-| `targets` | []string | `["8.8.8.8", "1.1.1.1"]` | Targets to ping |
-| `interval` | duration | `10s` | Measurement interval |
-| `timeout` | duration | `5s` | Ping timeout |
-
-Example:
-```yaml
-monitoring:
-  latency:
-    enabled: true
-    targets:
-      - 8.8.8.8
-      - 1.1.1.1
-      - 208.67.222.222
-    interval: 5s
+    top_n: 10
+    mode: both
+    interval: 5m
+    protocol: icmp
+    dst_port: 33434
+    src_port: 0
+    tcp_flags: S
+    max_hops: 30
     timeout: 3s
-```
+    probes_per_hop: 3
 
-### Bandwidth (`monitoring.bandwidth`)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable bandwidth monitoring |
-| `interfaces` | []string | `["eth0"]` | Interfaces to monitor |
-| `interval` | duration | `5s` | Collection interval |
-
-Example:
-```yaml
-monitoring:
-  bandwidth:
-    enabled: true
-    interfaces:
-      - eth0
-      - eth1
-      - docker0
-    interval: 1s
-```
-
-### DNS (`monitoring.dns`)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable DNS monitoring |
-| `interfaces` | []string | `["eth0"]` | Interfaces to use |
-| `port` | int | `53` | DNS port |
-| `interval` | duration | `10s` | Query interval |
-
-Example:
-```yaml
-monitoring:
-  dns:
-    enabled: true
-    interfaces:
-      - eth0
-    port: 53
-    interval: 30s
-```
-
-## Metrics Section
-
-### Prometheus (`metrics.prometheus`)
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | bool | `true` | Enable Prometheus metrics |
-| `port` | int | `9090` | HTTP port for metrics |
-| `path` | string | `/metrics` | Metrics endpoint path |
-
-Example:
-```yaml
-metrics:
-  prometheus:
-    enabled: true
-    port: 9090
-    path: /metrics
-```
-
-## Logging Section
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `level` | string | `info` | Log level (debug, info, warn, error) |
-| `format` | string | `json` | Log format (json, console) |
-| `output` | string | `` | Log file path (empty = stdout) |
-
-Example:
-```yaml
-logging:
-  level: debug
-  format: json
-  output: /var/log/netmon/netmon.log
-```
-
-## Environment Variables
-
-Configuration can be overridden with environment variables:
-
-```bash
-# Config file path
-export NETMON_CONFIG=/etc/netmon/config.yaml
-
-# Log level
-export NETMON_LOG_LEVEL=debug
-
-# Prometheus port
-export NETMON_METRICS_PROMETHEUS_PORT=9091
-```
-
-## Full Example
-
-```yaml
-monitoring:
-  packet_loss:
-    enabled: true
-    interfaces:
-      - eth0
-      - eth1
-    threshold_percent: 1.0
-    window_size: 100
-    alert_interval: 1m
-
-  connections:
-    enabled: true
-    track_incoming: true
-    track_outgoing: true
-    filter_ports: []
-
-  latency:
-    enabled: true
-    targets:
-      - 8.8.8.8
-      - 1.1.1.1
-    interval: 10s
-    timeout: 5s
-
-  bandwidth:
-    enabled: true
-    interfaces:
-      - eth0
-    interval: 5s
-
-  dns:
-    enabled: true
-    interfaces:
-      - eth0
-    port: 53
-    interval: 30s
+topology:
+  enabled: false
+  path: topology.yaml
 
 metrics:
-  prometheus:
-    enabled: true
-    port: 9090
-    path: /metrics
+  name: netmon_tcp_loss_total
+  default_labels: [src_ip, dst_ip, src_location, dst_location, src_role, dst_role]
+  optional_labels: [src_network, dst_network, path_id]
+  cardinality:
+    level: role
+    max_series: 10000
+
+connections:
+  enabled: true
+  track_incoming: true
+  track_outgoing: true
+  filter_ports: []
+  event_buffer_size: 10000
+  state_ttl: 24h
+  cleanup_interval: 1m
+  max_tracked_connections: 10240
+  max_pending_connections: 16384
 
 logging:
   level: info
   format: json
-  output: /var/log/netmon/netmon.log
+  output_path: ""
 ```
+
+`loss_source: ebpf` is the production default. `tracepipe` is a legacy debug
+fallback. `/health` and `/ready` are always public; `/metrics` and `/api/*`
+require `Authorization: Bearer <token>` when `global.auth_token` is non-empty.
+`NETMON_AUTH_TOKEN` supplies the token only when it is absent from YAML.
+
+## Metadata polling
+
+Each metadata file may have an optional remote update source:
+
+```yaml
+metadata:
+  roles:
+    path: roles.yaml
+    update_source:
+      url: https://config.example.com/roles.yaml
+      poll_interval: 20m
+      timeout: 10s
+```
+
+The local file remains the startup source. Successful remote updates are
+validated and written atomically.
+
+## Cardinality
+
+`metrics.cardinality.level` accepts `role` (production default), `network`, or
+`ip`. `max_series` is a hard active-series cap; zero means unlimited and is not
+recommended. Dropped series increment `netmon_loss_series_dropped_total`.
+
+Optional `bandwidth`, `latency`, `dns`, and `packet_loss` sections exist in the
+schema but are outside the current conntrack P0 scope. Start from
+[`../configs/config.example.yaml`](../configs/config.example.yaml) or
+[`../configs/conntrack.example.yaml`](../configs/conntrack.example.yaml).

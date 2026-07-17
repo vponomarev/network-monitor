@@ -88,12 +88,31 @@ type StateMachineConfig struct {
 	// CleanupDelay is the delay before removing closed connections (default: 5m)
 	CleanupDelay time.Duration
 
+	// RetentionTTL bounds state when a CLOSE event is lost.
+	RetentionTTL time.Duration
+
+	// CleanupInterval controls retention sweeps.
+	CleanupInterval time.Duration
+
+	// MaxConnections is a hard userspace state limit.
+	MaxConnections int
+
 	// OnStateChange is called when connection state changes
 	OnStateChange func(*Connection, ConnectionState, ConnectionState)
 
 	// OnEvent is called when connection event occurs
 	OnEvent func(*Connection, ConnectionEvent)
+
+	// OnCleanup reports state removed by retention or capacity enforcement.
+	OnCleanup func(reason string, count int)
 }
+
+const (
+	CleanupReasonClosed     = "closed"
+	CleanupReasonTTL        = "ttl"
+	CleanupReasonSYNTimeout = "syn_timeout"
+	CleanupReasonCapacity   = "capacity"
+)
 
 // StateMachine manages TCP connection state transitions
 type StateMachine struct {
@@ -106,7 +125,10 @@ type StateMachine struct {
 	synTimeout time.Duration
 
 	// Delay before removing closed connections
-	cleanupDelay time.Duration
+	cleanupDelay    time.Duration
+	retentionTTL    time.Duration
+	cleanupInterval time.Duration
+	maxConnections  int
 
 	// Context for shutdown
 	ctx    context.Context
@@ -118,6 +140,7 @@ type StateMachine struct {
 	// Callbacks
 	onStateChange func(*Connection, ConnectionState, ConnectionState)
 	onEvent       func(*Connection, ConnectionEvent)
+	onCleanup     func(reason string, count int)
 }
 
 // NewStateMachine creates a new connection state machine
@@ -128,22 +151,37 @@ func NewStateMachine(cfg StateMachineConfig) *StateMachine {
 	if cfg.CleanupDelay == 0 {
 		cfg.CleanupDelay = 5 * time.Minute
 	}
+	if cfg.RetentionTTL <= 0 {
+		cfg.RetentionTTL = DefaultStateTTL
+	}
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = DefaultCleanupInterval
+	}
+	if cfg.MaxConnections <= 0 {
+		cfg.MaxConnections = DefaultMaxTrackedConnections
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sm := &StateMachine{
-		connections:   make(map[string]*Connection),
-		synTimeout:    cfg.SYNTimeout,
-		cleanupDelay:  cfg.CleanupDelay,
-		onStateChange: cfg.OnStateChange,
-		onEvent:       cfg.OnEvent,
-		ctx:           ctx,
-		cancel:        cancel,
+		connections:     make(map[string]*Connection),
+		synTimeout:      cfg.SYNTimeout,
+		cleanupDelay:    cfg.CleanupDelay,
+		retentionTTL:    cfg.RetentionTTL,
+		cleanupInterval: cfg.CleanupInterval,
+		maxConnections:  cfg.MaxConnections,
+		onStateChange:   cfg.OnStateChange,
+		onEvent:         cfg.OnEvent,
+		onCleanup:       cfg.OnCleanup,
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 
 	// Start timeout checker
 	sm.wg.Add(1)
 	go sm.checkTimeouts()
+	sm.wg.Add(1)
+	go sm.cleanupLoop()
 
 	return sm
 }
@@ -165,6 +203,9 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 		sm.emitEvent(conn, EventNew)
 
 	case EventEstablished:
+		if exists && conn.State == StateEstablished {
+			return
+		}
 		if !exists {
 			// SYN+ACK without seeing SYN - create new connection
 			conn = sm.createConnection(evt)
@@ -177,12 +218,12 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 
 	case EventClosed:
 		if exists {
+			if conn.State == StateClosed {
+				return
+			}
 			conn.ClosedTime = time.Now()
 			sm.transitionState(conn, StateClosed)
 			sm.emitEvent(conn, EventClosed)
-			// Remove closed connection after a delay
-			sm.wg.Add(1)
-			go sm.scheduleCleanup(key)
 		}
 
 	case EventFailed:
@@ -203,6 +244,9 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 
 // createConnection creates a new connection from event
 func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) *Connection {
+	if len(sm.connections) >= sm.maxConnections {
+		sm.evictOldest()
+	}
 	now := time.Now()
 	conn := &Connection{
 		ID:          sm.makeKey(evt),
@@ -222,6 +266,25 @@ func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) *Connection {
 
 	sm.connections[conn.ID] = conn
 	return conn
+}
+
+func (sm *StateMachine) evictOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for key, conn := range sm.connections {
+		updated := conn.LastUpdated
+		if updated.IsZero() {
+			updated = conn.Timestamp
+		}
+		if oldestKey == "" || updated.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = updated
+		}
+	}
+	if oldestKey != "" {
+		delete(sm.connections, oldestKey)
+		sm.notifyCleanup(CleanupReasonCapacity, 1)
+	}
 }
 
 // transitionState transitions connection to new state
@@ -256,6 +319,7 @@ func (sm *StateMachine) checkTimeouts() {
 		case <-ticker.C:
 			sm.mu.Lock()
 			now := time.Now()
+			removed := 0
 
 			for key, conn := range sm.connections {
 				if conn.State == StateSynSent {
@@ -265,27 +329,58 @@ func (sm *StateMachine) checkTimeouts() {
 						conn.ClosedTime = now
 						sm.emitEvent(conn, EventFailed)
 						delete(sm.connections, key)
+						removed++
 					}
 				}
 			}
 			sm.mu.Unlock()
+			sm.notifyCleanup(CleanupReasonSYNTimeout, removed)
 		}
 	}
 }
 
-// scheduleCleanup schedules removal of closed connection
-func (sm *StateMachine) scheduleCleanup(key string) {
+func (sm *StateMachine) cleanupLoop() {
 	defer sm.wg.Done()
-
-	select {
-	case <-sm.ctx.Done():
-		return
-	case <-time.After(sm.cleanupDelay):
+	ticker := time.NewTicker(sm.cleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sm.ctx.Done():
+			return
+		case now := <-ticker.C:
+			sm.cleanup(now)
+		}
 	}
+}
 
+func (sm *StateMachine) cleanup(now time.Time) {
+	counts := map[string]int{}
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	delete(sm.connections, key)
+	for key, conn := range sm.connections {
+		if conn.State == StateClosed && !conn.ClosedTime.IsZero() && now.Sub(conn.ClosedTime) >= sm.cleanupDelay {
+			delete(sm.connections, key)
+			counts[CleanupReasonClosed]++
+			continue
+		}
+		updated := conn.LastUpdated
+		if updated.IsZero() {
+			updated = conn.Timestamp
+		}
+		if !updated.IsZero() && now.Sub(updated) >= sm.retentionTTL {
+			delete(sm.connections, key)
+			counts[CleanupReasonTTL]++
+		}
+	}
+	sm.mu.Unlock()
+	for reason, count := range counts {
+		sm.notifyCleanup(reason, count)
+	}
+}
+
+func (sm *StateMachine) notifyCleanup(reason string, count int) {
+	if count > 0 && sm.onCleanup != nil {
+		sm.onCleanup(reason, count)
+	}
 }
 
 // Stop gracefully stops the state machine and all background goroutines
@@ -309,7 +404,10 @@ func (sm *StateMachine) GetConnection(key string) (*Connection, bool) {
 	defer sm.mu.RUnlock()
 
 	conn, exists := sm.connections[key]
-	return conn, exists
+	if !exists {
+		return nil, false
+	}
+	return cloneConnection(conn), true
 }
 
 // GetAllConnections returns all active connections
@@ -319,9 +417,19 @@ func (sm *StateMachine) GetAllConnections() []*Connection {
 
 	conns := make([]*Connection, 0, len(sm.connections))
 	for _, conn := range sm.connections {
-		conns = append(conns, conn)
+		conns = append(conns, cloneConnection(conn))
 	}
 	return conns
+}
+
+func cloneConnection(conn *Connection) *Connection {
+	if conn == nil {
+		return nil
+	}
+	copyConn := *conn
+	copyConn.SourceIP = append(net.IP(nil), conn.SourceIP...)
+	copyConn.DestIP = append(net.IP(nil), conn.DestIP...)
+	return &copyConn
 }
 
 // GetConnectionCount returns number of tracked connections

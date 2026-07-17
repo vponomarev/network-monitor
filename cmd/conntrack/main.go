@@ -62,6 +62,7 @@ func main() {
 	// Команды
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(deinstallCmd)
+	rootCmd.AddCommand(rollbackCmd)
 	rootCmd.AddCommand(showConfigCmd)
 
 	// Syslog flags
@@ -155,11 +156,16 @@ func run(cmd *cobra.Command, args []string) error {
 	trackerCfg := conntrack.Config{
 		// An empty path tells Tracker to use the embedded production object.
 		// A non-empty path is an explicit operator override.
-		EBPFProgramPath: ebpfProgram,
-		TrackIncoming:   trackIncoming && cfg.Connections.TrackIncoming,
-		TrackOutgoing:   trackOutgoing && cfg.Connections.TrackOutgoing,
-		TrackCloses:     trackCloses,
-		FilterPorts:     cfg.Connections.FilterPorts,
+		EBPFProgramPath:       ebpfProgram,
+		TrackIncoming:         trackIncoming && cfg.Connections.TrackIncoming,
+		TrackOutgoing:         trackOutgoing && cfg.Connections.TrackOutgoing,
+		TrackCloses:           trackCloses,
+		FilterPorts:           cfg.Connections.FilterPorts,
+		EventBufferSize:       cfg.Connections.EventBufferSize,
+		StateTTL:              cfg.Connections.StateTTLDuration(),
+		CleanupInterval:       cfg.Connections.CleanupIntervalDuration(),
+		MaxTrackedConnections: cfg.Connections.MaxTrackedConnections,
+		MaxPendingConnections: cfg.Connections.MaxPendingConnections,
 		Syslog: conntrack.SyslogConfig{
 			Network:         syslogNetwork,
 			Address:         syslogAddress,

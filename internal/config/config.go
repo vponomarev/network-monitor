@@ -169,11 +169,31 @@ type DNSConfig struct {
 
 // ConnectionsConfig holds connection tracking configuration (for other modules)
 type ConnectionsConfig struct {
-	Enabled         bool  `yaml:"enabled"`
-	TrackIncoming   bool  `yaml:"track_incoming"`
-	TrackOutgoing   bool  `yaml:"track_outgoing"`
-	FilterPorts     []int `yaml:"filter_ports"`
-	EventBufferSize int   `yaml:"event_buffer_size"` // Default: 10000
+	Enabled               bool   `yaml:"enabled"`
+	TrackIncoming         bool   `yaml:"track_incoming"`
+	TrackOutgoing         bool   `yaml:"track_outgoing"`
+	FilterPorts           []int  `yaml:"filter_ports"`
+	EventBufferSize       int    `yaml:"event_buffer_size"`
+	StateTTL              string `yaml:"state_ttl"`
+	CleanupInterval       string `yaml:"cleanup_interval"`
+	MaxTrackedConnections int    `yaml:"max_tracked_connections"`
+	MaxPendingConnections int    `yaml:"max_pending_connections"`
+}
+
+func (c ConnectionsConfig) StateTTLDuration() time.Duration {
+	d, err := time.ParseDuration(c.StateTTL)
+	if err != nil || d <= 0 {
+		return 24 * time.Hour
+	}
+	return d
+}
+
+func (c ConnectionsConfig) CleanupIntervalDuration() time.Duration {
+	d, err := time.ParseDuration(c.CleanupInterval)
+	if err != nil || d <= 0 {
+		return time.Minute
+	}
+	return d
 }
 
 // DefaultConfig returns a configuration with default values
@@ -239,9 +259,14 @@ func DefaultConfig() *Config {
 			OutputPath: "", // Default to stdout/stderr
 		},
 		Connections: ConnectionsConfig{
-			Enabled:       true,
-			TrackIncoming: true,
-			TrackOutgoing: true,
+			Enabled:               true,
+			TrackIncoming:         true,
+			TrackOutgoing:         true,
+			EventBufferSize:       10000,
+			StateTTL:              "24h",
+			CleanupInterval:       "1m",
+			MaxTrackedConnections: 10240,
+			MaxPendingConnections: 16384,
 		},
 	}
 }
@@ -331,6 +356,35 @@ func (c *Config) Validate() error {
 	}
 	if c.Metrics.Cardinality.MaxSeries < 0 {
 		return fmt.Errorf("invalid metrics.cardinality.max_series: must be >= 0 (0 = unlimited)")
+	}
+
+	if c.Connections.Enabled {
+		stateTTL, err := time.ParseDuration(c.Connections.StateTTL)
+		if err != nil {
+			return fmt.Errorf("invalid connections.state_ttl: %w", err)
+		}
+		cleanupInterval, err := time.ParseDuration(c.Connections.CleanupInterval)
+		if err != nil {
+			return fmt.Errorf("invalid connections.cleanup_interval: %w", err)
+		}
+		if stateTTL <= 0 {
+			return fmt.Errorf("invalid connections.state_ttl: must be positive")
+		}
+		if cleanupInterval <= 0 {
+			return fmt.Errorf("invalid connections.cleanup_interval: must be positive")
+		}
+		if c.Connections.EventBufferSize <= 0 {
+			return fmt.Errorf("invalid connections.event_buffer_size: must be positive")
+		}
+		if c.Connections.MaxTrackedConnections <= 0 {
+			return fmt.Errorf("invalid connections.max_tracked_connections: must be positive")
+		}
+		if c.Connections.MaxPendingConnections <= 0 {
+			return fmt.Errorf("invalid connections.max_pending_connections: must be positive")
+		}
+		if c.Connections.MaxTrackedConnections > 1_000_000 || c.Connections.MaxPendingConnections > 1_000_000 {
+			return fmt.Errorf("invalid connections map limit: must not exceed 1000000")
+		}
 	}
 
 	if c.Global.TracePipePath == "" {

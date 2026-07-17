@@ -1,239 +1,82 @@
 # Installation Guide
 
-This guide covers installing Network Monitor on Linux systems.
+Production releases contain only Linux `amd64` binaries and bundles for
+`netmon` and `conntrack`. Use a host with BTF at
+`/sys/kernel/btf/vmlinux`; the maintained kernel matrix is 5.15, 6.1, 6.8, and
+6.12.
 
-## Prerequisites
+## Conntrack
 
-### System Requirements
-
-- Linux kernel 5.8+ (for full eBPF support)
-- Go 1.21+ (for building from source)
-- Root/sudo access
-
-### Build Dependencies
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-    golang-go \
-    clang \
-    llvm \
-    libbpf-dev \
-    linux-headers-$(uname -r) \
-    make \
-    git
-```
-
-**RHEL/CentOS/Fedora:**
-```bash
-sudo yum install -y \
-    golang \
-    clang \
-    llvm \
-    libbpf-devel \
-    kernel-devel \
-    make \
-    git
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S go clang llvm libbpf linux-headers make git
-```
-
-## Installation Methods
-
-### Method 1: Pre-built Binaries (Recommended)
-
-Download pre-built binaries from the [releases page](https://github.com/vponomarev/network-monitor/releases):
+The raw conntrack binary is self-installing:
 
 ```bash
-# Download latest release
-wget https://github.com/vponomarev/network-monitor/releases/latest/download/netmon-linux-amd64
-wget https://github.com/vponomarev/network-monitor/releases/latest/download/pktloss-linux-amd64
 wget https://github.com/vponomarev/network-monitor/releases/latest/download/conntrack-linux-amd64
-
-# Make executable
-chmod +x netmon-linux-amd64 pktloss-linux-amd64 conntrack-linux-amd64
-
-# Install to system
-sudo mv netmon-linux-amd64 /usr/local/bin/netmon
-sudo mv pktloss-linux-amd64 /usr/local/bin/pktloss
-sudo mv conntrack-linux-amd64 /usr/local/bin/conntrack
+chmod +x conntrack-linux-amd64
+sudo ./conntrack-linux-amd64 install
+sudo systemctl enable --now conntrack
+curl --fail http://127.0.0.1:9876/ready
 ```
 
-### Method 2: Build from Source
+The command installs `/usr/local/bin/conntrack`, creates
+`/etc/conntrack/config.yaml` only when it does not already exist, installs the
+systemd unit, and reloads systemd. Remove managed files while preserving config:
 
 ```bash
-# Clone repository
+sudo /usr/local/bin/conntrack deinstall
+```
+
+## Netmon bundle
+
+Replace `<version>` with a release tag such as `v2.2.0`:
+
+```bash
+wget https://github.com/vponomarev/network-monitor/releases/download/<version>/netmon-<version>-linux-amd64.tar.gz
+tar -xzf netmon-<version>-linux-amd64.tar.gz
+cd netmon-<version>-linux-amd64
+sudo install -m 0755 netmon /usr/local/bin/netmon
+sudo mkdir -p /etc/netmon
+sudo cp configs/*.yaml /etc/netmon/
+sudo cp netmon.service /etc/systemd/system/netmon.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now netmon
+curl --fail http://127.0.0.1:9876/ready
+```
+
+Review the example configuration before production use, especially bind
+address, bearer token, metadata paths, and metric cardinality.
+
+## Verify artifacts
+
+```bash
+wget https://github.com/vponomarev/network-monitor/releases/download/<version>/checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+```
+
+## Build from source
+
+Go 1.21+, Clang/LLVM, libbpf headers, make, and Git are required:
+
+```bash
 git clone https://github.com/vponomarev/network-monitor.git
 cd network-monitor
-
-# Download dependencies
-make deps
-
-# Build eBPF programs (requires clang)
-make build-ebpf
-
-# Build all binaries
+go mod download
+make ebpf-build
 make build
-
-# Install to /usr/local/bin
-sudo make install
 ```
 
-### Method 3: Docker
-
-```bash
-# Build image
-docker build -t network-monitor:latest .
-
-# Run container (requires privileged mode for eBPF)
-docker run --privileged --rm \
-    -v /sys/kernel/tracing:/sys/kernel/tracing \
-    -v /proc:/proc \
-    network-monitor:latest
-```
-
-## Post-Installation
-
-### Configure tracefs (for packet loss monitoring)
-
-```bash
-# Mount tracefs if not already mounted
-sudo mount -t tracefs tracefs /sys/kernel/tracing
-
-# Make permanent
-echo "tracefs /sys/kernel/tracing tracefs defaults 0 0" | sudo tee -a /etc/fstab
-```
-
-### Configure eBPF (for connection tracking)
-
-```bash
-# Ensure BPF filesystem is mounted
-sudo mount -t bpf bpf /sys/fs/bpf
-
-# Make permanent
-echo "bpf /sys/fs/bpf bpf defaults 0 0" | sudo tee -a /etc/fstab
-```
-
-### Create Configuration
-
-```bash
-# Create config directory
-sudo mkdir -p /etc/netmon
-
-# Copy example config
-sudo cp configs/netmon.yaml.example /etc/netmon/config.yaml
-
-# Edit configuration
-sudo nano /etc/netmon/config.yaml
-```
-
-### Install Systemd Services (Optional)
-
-```bash
-# Copy service files
-sudo cp configs/systemd/*.service /etc/systemd/system/
-
-# Reload systemd
-sudo systemctl daemon-reload
-
-# Enable and start services
-sudo systemctl enable netmon.service
-sudo systemctl start netmon.service
-
-# Check status
-sudo systemctl status netmon.service
-```
-
-## Verification
-
-### Check binaries are installed
-
-```bash
-netmon --version
-pktloss --version
-conntrack --version
-```
-
-### Test packet loss monitor
-
-```bash
-# Run briefly (requires root)
-sudo timeout 5 pktloss --interface lo
-```
-
-### Test metrics endpoint
-
-```bash
-# Start netmon in background
-sudo netmon &
-
-# Check metrics
-curl http://localhost:9090/metrics
-
-# Stop netmon
-sudo pkill netmon
-```
+`make build-conntrack` rebuilds the eBPF object before compiling the binary.
+Runtime qualification must still be performed on Linux as root; a successful
+cross-compilation is not sufficient.
 
 ## Troubleshooting
 
-### "permission denied" errors
-
-Ensure you're running with appropriate privileges:
-```bash
-sudo netmon
-```
-
-### "trace_pipe not found" errors
-
-Mount tracefs:
-```bash
-sudo mount -t tracefs tracefs /sys/kernel/tracing
-```
-
-### eBPF program load failures
-
-Check kernel version (5.8+ recommended):
 ```bash
 uname -r
+test -r /sys/kernel/btf/vmlinux
+sudo journalctl -u netmon -n 100 --no-pager
+sudo journalctl -u conntrack -n 100 --no-pager
+sudo bpftool prog show
 ```
 
-Verify BPF filesystem:
-```bash
-mount | grep bpf
-```
-
-### Missing kernel headers
-
-Install kernel headers for your running kernel:
-```bash
-# Ubuntu/Debian
-sudo apt-get install linux-headers-$(uname -r)
-
-# RHEL/CentOS
-sudo yum install kernel-devel-$(uname -r)
-```
-
-## Uninstallation
-
-```bash
-# Stop services
-sudo systemctl stop netmon.service pktloss.service conntrack.service
-sudo systemctl disable netmon.service pktloss.service conntrack.service
-
-# Remove binaries
-sudo rm /usr/local/bin/netmon /usr/local/bin/pktloss /usr/local/bin/conntrack
-
-# Remove config
-sudo rm -rf /etc/netmon
-
-# Remove systemd services
-sudo rm /etc/systemd/system/netmon.service
-sudo rm /etc/systemd/system/pktloss.service
-sudo rm /etc/systemd/system/conntrack.service
-
-sudo systemctl daemon-reload
-```
+Do not install `pktloss` for production. ARM artifacts are intentionally not
+published.
