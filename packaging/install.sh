@@ -58,7 +58,8 @@ detect_arch() {
             echo "amd64"
             ;;
         aarch64|arm64)
-            echo "arm64"
+            log_error "ARM64 packages are not published or runtime-qualified"
+            exit 1
             ;;
         *)
             log_error "Unsupported architecture: $arch"

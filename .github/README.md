@@ -20,18 +20,16 @@ Automated CI/CD pipelines for Network Monitor.
 **Triggers:** Git tag push (v*)
 
 **Jobs:**
-- 🏗️ Build binaries for all platforms
-- 🐳 Build and push Docker images (multi-arch)
+- 🏗️ Build qualified Linux `amd64` binaries and bundles
 - 📦 Create GitHub release with changelog
 - 🔐 Generate and upload checksums
-- 📊 Create Docker manifest
 
 ### 3. Docker Publish (`docker-publish.yml`)
 
 **Triggers:** Push to main
 
 **Jobs:**
-- 🐳 Build and push dev Docker images
+- 🐳 Build and push Linux `amd64` dev Docker images
 - 🏷️ Tag with SHA and branch name
 
 ## Quick Start
@@ -77,6 +75,6 @@ docker pull ghcr.io/vponomarev/network-monitor:latest
 
 ## Documentation
 
-- [Release Process](docs/RELEASE_PROCESS.md)
-- [CI/CD Guide](docs/CICD_GUIDE.md)
-- [Contributing](CONTRIBUTING.md)
+- [Release Process](../docs/RELEASE_PROCESS.md)
+- [CI/CD Guide](../docs/CICD_GUIDE.md)
+- [Contributing](../CONTRIBUTING.md)

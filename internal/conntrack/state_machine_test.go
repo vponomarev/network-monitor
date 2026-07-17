@@ -283,6 +283,105 @@ func TestStateMachine_GetAllConnections(t *testing.T) {
 	}
 }
 
+func TestStateMachine_RetentionRemovesOrphanedConnection(t *testing.T) {
+	var cleaned int32
+	sm := NewStateMachine(StateMachineConfig{
+		RetentionTTL:    time.Minute,
+		CleanupInterval: time.Hour,
+		OnCleanup: func(reason string, count int) {
+			if reason == CleanupReasonTTL {
+				atomic.AddInt32(&cleaned, int32(count))
+			}
+		},
+	})
+	defer sm.Stop()
+
+	evt := &ConnectionEventRaw{
+		SourceIP: net.ParseIP("192.0.2.1"), SourcePort: 12345,
+		DestIP: net.ParseIP("198.51.100.1"), DestPort: 443,
+		Protocol: 6, Direction: DirectionOutgoing, EventType: EventEstablished,
+	}
+	sm.ProcessEvent(evt)
+	sm.mu.Lock()
+	for _, conn := range sm.connections {
+		conn.LastUpdated = time.Now().Add(-2 * time.Minute)
+	}
+	sm.mu.Unlock()
+	sm.cleanup(time.Now())
+
+	if got := sm.GetConnectionCount(); got != 0 {
+		t.Fatalf("GetConnectionCount() = %d, want 0", got)
+	}
+	if got := atomic.LoadInt32(&cleaned); got != 1 {
+		t.Fatalf("TTL cleanup count = %d, want 1", got)
+	}
+}
+
+func TestStateMachine_DeduplicatesLifecycleEvents(t *testing.T) {
+	var established int32
+	var closed int32
+	sm := NewStateMachine(StateMachineConfig{
+		CleanupInterval: time.Hour,
+		OnEvent: func(_ *Connection, event ConnectionEvent) {
+			switch event {
+			case EventEstablished:
+				atomic.AddInt32(&established, 1)
+			case EventClosed:
+				atomic.AddInt32(&closed, 1)
+			}
+		},
+	})
+	defer sm.Stop()
+
+	evt := &ConnectionEventRaw{
+		SourceIP: net.ParseIP("192.0.2.1"), SourcePort: 12345,
+		DestIP: net.ParseIP("198.51.100.1"), DestPort: 443,
+		Protocol: 6, Direction: DirectionOutgoing, EventType: EventEstablished,
+	}
+	sm.ProcessEvent(evt)
+	sm.ProcessEvent(evt)
+	evt.EventType = EventClosed
+	sm.ProcessEvent(evt)
+	sm.ProcessEvent(evt)
+
+	if got := atomic.LoadInt32(&established); got != 1 {
+		t.Fatalf("established events = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&closed); got != 1 {
+		t.Fatalf("closed events = %d, want 1", got)
+	}
+}
+
+func TestStateMachine_CapacityEvictsOldest(t *testing.T) {
+	var evicted int32
+	sm := NewStateMachine(StateMachineConfig{
+		MaxConnections:  2,
+		CleanupInterval: time.Hour,
+		OnCleanup: func(reason string, count int) {
+			if reason == CleanupReasonCapacity {
+				atomic.AddInt32(&evicted, int32(count))
+			}
+		},
+	})
+	defer sm.Stop()
+
+	for i := 0; i < 3; i++ {
+		sm.ProcessEvent(&ConnectionEventRaw{
+			SourceIP: net.ParseIP("192.0.2.1"), SourcePort: uint16(1000 + i),
+			DestIP: net.ParseIP("198.51.100.1"), DestPort: 443,
+			Protocol: 6, Direction: DirectionOutgoing, EventType: EventEstablished,
+		})
+		time.Sleep(time.Millisecond)
+	}
+
+	if got := sm.GetConnectionCount(); got != 2 {
+		t.Fatalf("GetConnectionCount() = %d, want 2", got)
+	}
+	if got := atomic.LoadInt32(&evicted); got != 1 {
+		t.Fatalf("capacity eviction count = %d, want 1", got)
+	}
+}
+
 func TestMakeConnectionKey(t *testing.T) {
 	srcIP := net.ParseIP("192.168.1.100")
 	dstIP := net.ParseIP("8.8.8.8")

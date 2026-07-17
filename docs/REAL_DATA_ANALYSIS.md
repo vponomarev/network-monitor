@@ -1,4 +1,7 @@
-# Real Data Analysis Report
+# Real Data Analysis Report (Historical)
+
+> Point-in-time analysis; it does not define current production behavior or
+> priorities. See [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 ## Data Collection
 

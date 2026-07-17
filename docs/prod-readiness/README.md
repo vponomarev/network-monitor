@@ -1,4 +1,7 @@
-# Production-Readiness Plan — netmon (TCP loss + role labeling)
+# Production-Readiness Plan — netmon (архив)
+
+> Исторический набор задач Phase 1. Все задачи закрыты; актуальный статус и
+> дальнейшие приоритеты находятся в [`../STATUS_AND_PLAN.md`](../STATUS_AND_PLAN.md).
 
 > **Цель проекта на этот план:** довести приложение **netmon** до production-ready
 > состояния для сбора метрик **потерь TCP-пакетов** (ретрансмиты) с разметкой

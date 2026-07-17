@@ -9,6 +9,10 @@ connections:
   track_incoming: true
   track_outgoing: true
   event_buffer_size: 10000
+  state_ttl: 24h
+  cleanup_interval: 1m
+  max_tracked_connections: 10240
+  max_pending_connections: 16384
 
 logging:
   level: info

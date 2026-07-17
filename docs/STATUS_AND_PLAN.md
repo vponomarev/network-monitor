@@ -1,13 +1,13 @@
 # Network Monitor — статус и план развития
 
-*Актуализировано: 2026-07-13*
+*Актуализировано: 2026-07-17*
 
 ## Поддерживаемый scope
 
 | Компонент | Назначение | Статус |
 |---|---|---|
 | `netmon` / `tcploss` | Мониторинг TCP-ретрансмитов | Production-ready |
-| standalone `conntrack` | Трекинг жизненного цикла TCP-соединений | Release candidate |
+| standalone `conntrack` | Трекинг жизненного цикла TCP-соединений | Production-qualified в v2.2.0 |
 | `pktloss` | Legacy trace_pipe-прототип | Experimental, не для production |
 
 Production-поставка поддерживает только Linux `amd64`. ARM-артефакты не
@@ -62,21 +62,46 @@ post-merge CI, Security Scan и Docker Publish прошли успешно.
 
 Alerts относятся к внешнему контуру мониторинга и не блокируют этот релиз.
 
-## Roadmap после первого production-релиза conntrack
+## Текущий план работ
 
-### Повышенный приоритет
+Работы выполняются последовательно. Новый функциональный scope не добавляется,
+пока не закрыты эксплуатационные риски P0.
 
-- retention/TTL и жёсткие лимиты для незакрытых соединений, потерянных `CLOSE`,
-  kernel correlation maps и userspace state; отдельные метрики очистки;
-- безопасный upgrade и rollback: сохранение config, проверка совместимости,
-  повторная установка и восстановление после неуспешного обновления;
-- продолжительный soak/load-профиль с пределами CPU, RSS и допустимой долей drops.
+### P0.1 — retention и ограничение состояния (реализовано, ожидает релиза)
 
-### Плановое развитие
+- [x] TTL 24 часа для незакрытых соединений и записей после потерянного `CLOSE`;
+- [x] настраиваемые жёсткие лимиты kernel correlation maps и userspace state;
+- [x] периодическая очистка без goroutine на каждое закрытое соединение;
+- [x] метрики текущего размера, cleanup, eviction и overflow;
+- [x] unit/race/verifier и E2E одним бинарником на ядрах 5.15, 6.1, 6.8 и 6.12.
+
+Defaults: `state_ttl: 24h`, `cleanup_interval: 1m`, не более 10240 tracked и
+16384 pending kernel entries. Реализация находится в рабочей ветке и ещё не
+выпущена как новая версия.
+
+### P0.2 — эксплуатационная квалификация (завершена)
+
+- [x] автоматизированный soak-профиль с пределами CPU, RSS, drops и размера состояния;
+- [x] короткая проверка профиля на ядре 6.12: 20 секунд, RSS 52720 KiB,
+  CPU 9.7%, 21 state entry, без новых drops;
+- [x] 30-минутный прогон на ядре 6.12: RSS 55576 KiB, CPU 10.6%,
+  максимум 433 aggregate state entries, без новых drops;
+- [x] детерминированные тесты вытеснения при заполнении userspace-лимита и
+  TTL-очистки userspace/kernel state при длительном отсутствии `CLOSE`.
+
+### P0.3 — безопасный upgrade и rollback (реализовано, ожидает релиза)
+
+- [x] сохранение существующей конфигурации и проверка её совместимости;
+- [x] атомарная установка и повторная установка поверх работающей версии;
+- [x] автоматическое восстановление сервиса после неуспешного обновления;
+- [x] явная команда `conntrack rollback` с проверяемым rollback snapshot;
+- [x] изолированный E2E для upgrade, reinstall, explicit и automatic rollback.
+
+## Последующее развитие
+
+### P1
 
 - расширенные lifecycle/API/concurrency/error-path тесты conntrack;
-- исправление environment-dependent `TestTracerouteFactory_Create`: при наличии
-  системного traceroute тест ошибочно ожидает failure и разыменовывает `nil`;
 - усиление systemd sandbox и переход с `CAP_SYS_ADMIN` на минимальные capability
   там, где это совместимо с поддерживаемыми ядрами;
 - IPv6 для conntrack и TCP-loss;
@@ -85,5 +110,18 @@ Alerts относятся к внешнему контуру мониторин�
 - обновление GitHub Actions, использующих устаревающий Node.js 20;
 - версионирование схемы метрик, dashboards и внешних alert rules.
 
-Нагрузочные испытания, расширенные тесты, sandbox hardening, upgrade/rollback,
-IPv6, ARM64 и orchestration сознательно отложены и не входят в текущий scope.
+### P2
+
+- объединение `netmon` и `conntrack` в единый управляемый daemon;
+- дополнительные модули bandwidth, latency, DNS и topology;
+- контейнерная orchestration после стабилизации standalone lifecycle.
+
+Расширенные тесты, sandbox hardening, IPv6, ARM64 и orchestration сознательно
+отложены. Alerts относятся к внешнему контуру мониторинга и остаются вне scope.
+
+## Исторические планы
+
+Завершённые планы и отчёты перечислены в [`docs/README.md`](README.md). PR #3
+не вливается напрямую: его реализованные conntrack-задачи уже вошли в v2.2.0,
+а оставшийся IPv6 перенесён в P1. Подробное сопоставление сохранено в
+[`PR_3_RECONCILIATION.md`](PR_3_RECONCILIATION.md).

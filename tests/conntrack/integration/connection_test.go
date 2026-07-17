@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,7 +146,10 @@ func TestConntrack_IncomingConnections(t *testing.T) {
 	close(done)
 
 	count := tracker.GetConnectionCount()
-	t.Logf("Tracked %d connections, accepted %d", count, acceptedCount)
+	mu.Lock()
+	accepted := acceptedCount
+	mu.Unlock()
+	t.Logf("Tracked %d connections, accepted %d", count, accepted)
 
 	cancel()
 	<-errChan
@@ -392,7 +396,7 @@ func TestConntrack_EventChannel(t *testing.T) {
 		errChan <- tracker.Run(ctx)
 	}()
 
-	eventCount := 0
+	var eventCount atomic.Int64
 	eventDone := make(chan bool)
 
 	go func() {
@@ -400,7 +404,7 @@ func TestConntrack_EventChannel(t *testing.T) {
 		for {
 			select {
 			case <-events:
-				eventCount++
+				eventCount.Add(1)
 			case <-eventDone:
 				return
 			case <-ctx.Done():
@@ -435,7 +439,7 @@ func TestConntrack_EventChannel(t *testing.T) {
 	<-time.After(1 * time.Second)
 	close(eventDone)
 
-	t.Logf("Received %d events", eventCount)
+	t.Logf("Received %d events", eventCount.Load())
 
 	cancel()
 	<-errChan

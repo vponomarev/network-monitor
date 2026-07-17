@@ -1,244 +1,71 @@
-# API Reference
+# HTTP and Metrics Reference
 
-This document describes the public API and metrics exposed by Network Monitor.
+The HTTP surface depends on the selected application. Both services use the
+address from `global.metrics_addr` and `global.metrics_port`.
 
-## Prometheus Metrics
+## Common endpoints
 
-### Packet Loss Metrics
+| Method | Endpoint | Authentication | Description |
+|---|---|---|---|
+| GET | `/health` | Never | Process liveness |
+| GET | `/ready` | Never | Collector readiness; 503 before eBPF startup |
+| GET | `/metrics` | Optional bearer | Prometheus exposition |
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `netmon_packet_loss_total` | Counter | `interface` | Total packet loss events |
-| `netmon_packet_loss_percent` | Gauge | `interface` | Current loss percentage |
+## Netmon API
 
-Example:
-```
-netmon_packet_loss_total{interface="eth0"} 15
-netmon_packet_loss_percent{interface="eth0"} 0.5
-```
+When the corresponding modules are enabled, `netmon` also exposes:
 
-### Connection Metrics
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/api/v1/discover` | Discover a path for `src_ip` and `dst_ip` |
+| GET | `/api/v1/discover/top` | Discover current top-loss pairs |
+| GET | `/api/v1/loss/top?limit=N` | Return top observed loss pairs |
+| GET | `/api/v1/metadata/status` | Metadata source and polling status |
+| GET | `/api/v1/conntrack/connections` | Combined-mode active connections |
+| GET | `/api/v1/conntrack/stats` | Combined-mode connection statistics |
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `netmon_connections_total` | Counter | `direction`, `protocol` | Total connections |
-| `netmon_active_connections` | Gauge | - | Current active connections |
+Example discovery request:
 
-Example:
-```
-netmon_connections_total{direction="outgoing",protocol="tcp"} 1250
-netmon_active_connections 42
-```
-
-### Latency Metrics
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `netmon_latency_seconds` | Histogram | `target` | RTT distribution |
-
-Example:
-```
-netmon_latency_seconds_bucket{target="8.8.8.8",le="0.01"} 100
-netmon_latency_seconds_bucket{target="8.8.8.8",le="0.05"} 150
-netmon_latency_seconds_sum{target="8.8.8.8"} 2.5
-netmon_latency_seconds_count{target="8.8.8.8"} 200
+```bash
+curl --fail -X POST -H 'Content-Type: application/json' \
+  -d '{"src_ip":"192.0.2.10","dst_ip":"198.51.100.20"}' \
+  http://127.0.0.1:9876/api/v1/discover
 ```
 
-### Bandwidth Metrics
+Connection list filters are `limit`, `state`, and `direction`.
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `netmon_bandwidth_bytes` | Gauge | `interface`, `direction` | Bytes per second |
+## Standalone conntrack
 
-Example:
-```
-netmon_bandwidth_bytes{interface="eth0",direction="rx"} 1048576
-netmon_bandwidth_bytes{interface="eth0",direction="tx"} 524288
-```
+The v2.2.0 standalone service intentionally exposes only `/health`, `/ready`,
+and `/metrics`. The `/api/v1/conntrack/*` handlers above belong to netmon's
+combined-mode wiring and are not a standalone delivery contract.
 
-### DNS Metrics
+## Authentication
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `netmon_dns_queries_total` | Counter | `status` | Total DNS queries |
-| `netmon_dns_latency_seconds` | Histogram | `server` | DNS latency |
+When `global.auth_token` or `NETMON_AUTH_TOKEN` is set, send:
 
-Example:
-```
-netmon_dns_queries_total{status="success"} 500
-netmon_dns_queries_total{status="failure"} 5
-netmon_dns_latency_seconds_sum{server="8.8.8.8"} 0.025
+```text
+Authorization: Bearer <token>
 ```
 
-## Event Types
+Netmon protects `/metrics` and `/api/*`. Standalone conntrack protects
+`/metrics`; health probes remain unauthenticated.
 
-Events are sent via Go channels and can be consumed by external systems.
+## Principal metrics
 
-### Packet Loss Event
+Netmon exports `netmon_tcp_loss_total`, collector health/drop counters,
+cardinality gauges/counters, and metadata polling metrics. Standalone conntrack
+exports:
 
-```go
-type PacketLossEvent struct {
-    Type:      "packet_loss"
-    Source:    "packetloss"
-    Data: map[string]interface{}{
-        "interface":    "eth0",
-        "loss_percent": 2.5,
-        "threshold":    1.0,
-    }
-}
-```
+- `conntrack_connections{state,direction}`;
+- `conntrack_events_total{event,direction}`;
+- `conntrack_handshake_duration_seconds{direction}`;
+- `conntrack_connection_duration_seconds{direction}`;
+- `conntrack_bytes_total{direction,type}`;
+- `conntrack_bytes_per_connection{direction}`;
+- `conntrack_dropped_events_total{reason}`.
+- `conntrack_state_entries{layer}` and retention cleanup/eviction/overflow
+  counters.
 
-### Connection Event
-
-```go
-type ConnectionEvent struct {
-    Type:      "new_connection" | "close_connection"
-    Source:    "conntrack"
-    Data: map[string]interface{}{
-        "source_ip":    "192.168.1.100",
-        "source_port":  54321,
-        "dest_ip":      "8.8.8.8",
-        "dest_port":    443,
-        "protocol":     6,
-        "direction":    "outgoing",
-        "pid":          1234,
-        "process_name": "curl",
-    }
-}
-```
-
-### Latency Event
-
-```go
-type LatencyEvent struct {
-    Type:      "high_latency" | "timeout"
-    Source:    "latency"
-    Data: map[string]interface{}{
-        "target": "8.8.8.8",
-        "rtt_ms": 500,
-    }
-}
-```
-
-### DNS Event
-
-```go
-type DNSEvent struct {
-    Type:      "dns_failure" | "dns_slow"
-    Source:    "dns"
-    Data: map[string]interface{}{
-        "domain":     "example.com",
-        "error":      "NXDOMAIN",
-        "latency_ms": 600,
-    }
-}
-```
-
-## Go API
-
-### Creating a Monitor
-
-```go
-import (
-    "github.com/vponomarev/network-monitor/internal/packetloss"
-    "github.com/vponomarev/network-monitor/internal/config"
-    "go.uber.org/zap"
-)
-
-logger, _ := zap.NewProduction()
-cfg := config.PacketLossConfig{
-    Interfaces: []string{"eth0"},
-    ThresholdPercent: 1.0,
-}
-
-monitor := packetloss.NewMonitor(cfg, logger)
-```
-
-### Running the Monitor
-
-```go
-ctx := context.Background()
-err := monitor.Run(ctx)
-```
-
-### Getting Statistics
-
-```go
-total, lost, percent := monitor.GetStats("eth0")
-```
-
-### Receiving Events
-
-```go
-for event := range monitor.Events() {
-    fmt.Printf("Event: %s - %v\n", event.Type, event.Data)
-}
-```
-
-## HTTP Endpoints
-
-### Metrics Endpoint
-
-```
-GET /metrics
-```
-
-Returns Prometheus-formatted metrics.
-
-### Health Endpoint
-
-```
-GET /health
-```
-
-Returns `200 OK` if service is healthy.
-
-Response:
-```
-OK
-```
-
-## Configuration API
-
-### Load Configuration
-
-```go
-import "github.com/vponomarev/network-monitor/internal/config"
-
-cfg, err := config.Load("/etc/netmon/config.yaml")
-if err != nil {
-    // Handle error
-}
-```
-
-### Default Configuration
-
-```go
-cfg := config.DefaultConfig()
-```
-
-## Error Handling
-
-All API functions return errors that should be handled:
-
-```go
-if err := monitor.Run(ctx); err != nil {
-    if errors.Is(err, context.Canceled) {
-        // Graceful shutdown
-    } else {
-        // Actual error
-        log.Fatal(err)
-    }
-}
-```
-
-## Rate Limiting
-
-Events are rate-limited per module:
-
-| Module | Rate Limit |
-|--------|------------|
-| packetloss | 1 alert per `alert_interval` |
-| conntrack | No limit (ring buffer backpressure) |
-| latency | 1 alert per measurement |
-| dns | 1 alert per query |
+Metric names are a compatibility surface. Changes require a documented schema
+version and dashboard migration.

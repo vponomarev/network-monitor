@@ -1,4 +1,7 @@
-# Test Coverage Report
+# Test Coverage Report (Historical)
+
+> Point-in-time coverage report. Use the current test commands and CI results;
+> see [`TESTING_GUIDE.md`](TESTING_GUIDE.md).
 
 ## Summary
 

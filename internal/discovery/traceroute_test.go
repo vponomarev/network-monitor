@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -29,13 +30,22 @@ func TestTracerouteFactory_Create(t *testing.T) {
 
 	require.NotNil(t, factory)
 
-	// On macOS, this should return an error
-	_, err := factory.Create("icmp")
-	assert.Error(t, err)
+	tracer, err := factory.Create("icmp")
+	if runtime.GOOS == "linux" {
+		require.NoError(t, err)
+		assert.NotNil(t, tracer)
+		return
+	}
+
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not supported")
 }
 
 func TestTraceroutePool_NonLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("test verifies the non-Linux implementation")
+	}
+
 	logger := zap.NewNop()
 	config := DefaultTracerouteConfig()
 	factory := NewTracerouteFactory(config, logger)
@@ -45,11 +55,11 @@ func TestTraceroutePool_NonLinux(t *testing.T) {
 
 	ctx := context.Background()
 	_, err := pool.Trace(ctx, "8.8.8.8")
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not supported")
 
 	_, err = pool.TraceBatch(ctx, []string{"8.8.8.8", "1.1.1.1"})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not supported")
 }
 
@@ -155,6 +165,10 @@ func TestTracerouteConfig_Custom(t *testing.T) {
 }
 
 func TestTracerouteFactory_Protocols(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("test verifies the non-Linux implementation")
+	}
+
 	logger := zap.NewNop()
 	config := DefaultTracerouteConfig()
 	factory := NewTracerouteFactory(config, logger)
@@ -164,7 +178,7 @@ func TestTracerouteFactory_Protocols(t *testing.T) {
 
 	for _, proto := range protocols {
 		_, err := factory.Create(proto)
-		assert.Error(t, err, "Protocol: %s", proto)
+		require.Error(t, err, "Protocol: %s", proto)
 	}
 }
 

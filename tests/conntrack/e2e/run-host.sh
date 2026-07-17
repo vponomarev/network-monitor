@@ -66,6 +66,10 @@ connections:
   track_incoming: true
   track_outgoing: true
   event_buffer_size: 10000
+  state_ttl: 24h
+  cleanup_interval: 1m
+  max_tracked_connections: 10240
+  max_pending_connections: 16384
 logging:
   level: debug
   format: json
@@ -145,6 +149,10 @@ METRICS=$(curl -fsS "http://127.0.0.1:$METRICS_PORT/metrics")
 printf '%s\n' "$METRICS" | grep -q 'conntrack_events_total{direction="outgoing",event="ESTABLISHED"}'
 printf '%s\n' "$METRICS" | grep -q 'conntrack_dropped_events_total{reason="ringbuf_full"}'
 printf '%s\n' "$METRICS" | grep -q 'conntrack_dropped_events_total{reason="event_channel_full"}'
+printf '%s\n' "$METRICS" | grep -q 'conntrack_state_entries{layer="userspace"}'
+printf '%s\n' "$METRICS" | grep -q 'conntrack_state_cleanup_total{reason="ttl"}'
+printf '%s\n' "$METRICS" | grep -q 'conntrack_state_evictions_total{layer="userspace"}'
+printf '%s\n' "$METRICS" | grep -q 'conntrack_state_overflow_total{layer="kernel_connections"}'
 
 kill -TERM "$CONNTRACK_PID"
 wait "$CONNTRACK_PID"

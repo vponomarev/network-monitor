@@ -1,4 +1,7 @@
-# Phase 3: Topology Support - COMPLETE ✅
+# Phase 3: Topology Support - COMPLETE (Historical)
+
+> Completed milestone report. Current priorities are maintained in
+> [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 ## Overview
 

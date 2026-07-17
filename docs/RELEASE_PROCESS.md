@@ -25,7 +25,12 @@ Before tagging a conntrack release candidate:
    sudo tests/conntrack/e2e/qualify-bundle.sh \
      ./conntrack-<version>-linux-amd64.tar.gz
    ```
-4. Confirm CI, Security Scan, eBPF Build & Verify, and Docker Publish are green.
+4. On an active host running the previous release, qualify upgrade and rollback:
+
+   ```bash
+   sudo tests/conntrack/e2e/qualify-upgrade.sh ./conntrack-linux-amd64
+   ```
+5. Confirm CI, Security Scan, eBPF Build & Verify, and Docker Publish are green.
 
 ## Creating a release
 

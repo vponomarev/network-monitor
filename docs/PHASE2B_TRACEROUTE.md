@@ -1,4 +1,7 @@
-# Phase 2b: Linux Traceroute Implementation - COMPLETE ✅
+# Phase 2b: Linux Traceroute Implementation - COMPLETE (Historical)
+
+> Completed milestone report. Current priorities are maintained in
+> [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 ## Overview
 

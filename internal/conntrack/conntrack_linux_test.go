@@ -5,11 +5,13 @@ package conntrack
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
 	"testing"
 	"time"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -32,8 +34,13 @@ func TestNewTracker(t *testing.T) {
 	tracker := newTestTracker(t, cfg)
 	require.NotNil(t, tracker)
 
-	assert.Equal(t, cfg, tracker.config)
-	assert.NotNil(t, tracker.connections)
+	assert.True(t, tracker.config.TrackIncoming)
+	assert.True(t, tracker.config.TrackOutgoing)
+	assert.Equal(t, DefaultStateTTL, tracker.config.StateTTL)
+	assert.Equal(t, DefaultCleanupInterval, tracker.config.CleanupInterval)
+	assert.Equal(t, DefaultMaxTrackedConnections, tracker.config.MaxTrackedConnections)
+	assert.Equal(t, DefaultMaxPendingConnections, tracker.config.MaxPendingConnections)
+	assert.NotNil(t, tracker.stateMachine)
 	assert.NotNil(t, tracker.events)
 }
 
@@ -80,11 +87,16 @@ func TestTracker_GetConnections(t *testing.T) {
 	assert.Empty(t, conns)
 	assert.Equal(t, 0, tracker.GetConnectionCount())
 
-	// Add connections manually
-	tracker.mu.Lock()
-	tracker.connections["key1"] = &Connection{SourceIP: net.ParseIP("1.1.1.1")}
-	tracker.connections["key2"] = &Connection{SourceIP: net.ParseIP("2.2.2.2")}
-	tracker.mu.Unlock()
+	tracker.stateMachine.ProcessEvent(&ConnectionEventRaw{
+		SourceIP: net.ParseIP("1.1.1.1"), SourcePort: 1001,
+		DestIP: net.ParseIP("2.2.2.2"), DestPort: 443,
+		Protocol: 6, Direction: DirectionOutgoing, EventType: EventEstablished,
+	})
+	tracker.stateMachine.ProcessEvent(&ConnectionEventRaw{
+		SourceIP: net.ParseIP("1.1.1.2"), SourcePort: 1002,
+		DestIP: net.ParseIP("2.2.2.2"), DestPort: 443,
+		Protocol: 6, Direction: DirectionOutgoing, EventType: EventEstablished,
+	})
 
 	conns = tracker.GetConnections()
 	assert.Len(t, conns, 2)
@@ -97,6 +109,17 @@ func TestTracker_Events(t *testing.T) {
 
 	events := tracker.Events()
 	require.NotNil(t, events)
+	assert.True(t, tracker.eventsEnabled.Load())
+}
+
+func TestTracker_DoesNotQueueEventsWithoutSubscriber(t *testing.T) {
+	tracker := newTestTracker(t, Config{})
+	tracker.onConnectionEvent(&Connection{
+		ID: "test", SourceIP: net.ParseIP("192.0.2.1"), DestIP: net.ParseIP("198.51.100.1"),
+		Protocol: 6, Direction: DirectionOutgoing, State: StateEstablished,
+	}, EventEstablished)
+	assert.Len(t, tracker.events, 0)
+	assert.Equal(t, uint64(0), tracker.GetDroppedEvents())
 }
 
 // NOTE: TestTracker_sendEvent and TestTracker_simulateEvents were removed in
@@ -169,4 +192,35 @@ func Test_validateBpfConnectionEvent(t *testing.T) {
 	// This should pass if struct is correctly defined
 	err := validateBpfConnectionEvent()
 	assert.NoError(t, err)
+}
+
+func TestCleanupTimestampedMap(t *testing.T) {
+	m, err := ebpf.NewMap(&ebpf.MapSpec{
+		Name:       "retention_test",
+		Type:       ebpf.Hash,
+		KeySize:    8,
+		ValueSize:  16,
+		MaxEntries: 4,
+	})
+	if err != nil {
+		t.Skipf("creating eBPF map requires kernel privileges: %v", err)
+	}
+	defer m.Close()
+
+	now := uint64(10 * time.Hour)
+	oldValue := make([]byte, 16)
+	freshValue := make([]byte, 16)
+	binary.LittleEndian.PutUint64(oldValue, now-uint64(2*time.Hour))
+	binary.LittleEndian.PutUint64(freshValue, now-uint64(30*time.Minute))
+	require.NoError(t, m.Put(uint64(1), oldValue))
+	require.NoError(t, m.Put(uint64(2), freshValue))
+
+	remaining, deleted, err := cleanupTimestampedMap(m, now, time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+	assert.Equal(t, 1, remaining)
+
+	var value [16]byte
+	assert.ErrorIs(t, m.Lookup(uint64(1), &value), ebpf.ErrKeyNotExist)
+	require.NoError(t, m.Lookup(uint64(2), &value))
 }

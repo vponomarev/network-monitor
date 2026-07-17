@@ -1,4 +1,7 @@
-# Phase 2c: Integration Complete ✅
+# Phase 2c: Integration Complete (Historical)
+
+> Completed milestone report. Current priorities are maintained in
+> [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
 
 ## Overview
 

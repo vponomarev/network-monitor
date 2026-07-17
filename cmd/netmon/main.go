@@ -357,12 +357,16 @@ func main() {
 	var connTracker *conntrack.Tracker
 	if cfg.Connections.Enabled {
 		connCfg := conntrack.Config{
-			TrackIncoming:   cfg.Connections.TrackIncoming,
-			TrackOutgoing:   cfg.Connections.TrackOutgoing,
-			TrackCloses:     true,
-			FilterPorts:     cfg.Connections.FilterPorts,
-			SYNTimeout:      30 * time.Second,
-			EventBufferSize: cfg.Connections.EventBufferSize,
+			TrackIncoming:         cfg.Connections.TrackIncoming,
+			TrackOutgoing:         cfg.Connections.TrackOutgoing,
+			TrackCloses:           true,
+			FilterPorts:           cfg.Connections.FilterPorts,
+			SYNTimeout:            30 * time.Second,
+			EventBufferSize:       cfg.Connections.EventBufferSize,
+			StateTTL:              cfg.Connections.StateTTLDuration(),
+			CleanupInterval:       cfg.Connections.CleanupIntervalDuration(),
+			MaxTrackedConnections: cfg.Connections.MaxTrackedConnections,
+			MaxPendingConnections: cfg.Connections.MaxPendingConnections,
 		}
 
 		var err error

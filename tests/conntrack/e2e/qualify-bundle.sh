@@ -40,6 +40,9 @@ backup_file() {
 backup_file /usr/local/bin/conntrack binary
 backup_file /etc/conntrack/config.yaml config
 backup_file /etc/systemd/system/conntrack.service unit
+if [ -d /var/lib/conntrack/rollback ]; then
+    cp -a /var/lib/conntrack/rollback "$BACKUP/rollback"
+fi
 
 restore_host() {
     status=$?
@@ -48,6 +51,7 @@ restore_host() {
     systemctl disable conntrack.service >/dev/null 2>&1 || true
     rm -f /usr/local/bin/conntrack /etc/systemd/system/conntrack.service
     rm -f /etc/conntrack/config.yaml
+    rm -rf /var/lib/conntrack/rollback
 
     [ ! -f "$BACKUP/binary.present" ] || cp -a "$BACKUP/binary" /usr/local/bin/conntrack
     if [ -f "$BACKUP/config.present" ]; then
@@ -55,6 +59,10 @@ restore_host() {
         cp -a "$BACKUP/config" /etc/conntrack/config.yaml
     fi
     [ ! -f "$BACKUP/unit.present" ] || cp -a "$BACKUP/unit" /etc/systemd/system/conntrack.service
+    if [ -d "$BACKUP/rollback" ]; then
+        mkdir -p /var/lib/conntrack
+        cp -a "$BACKUP/rollback" /var/lib/conntrack/rollback
+    fi
     systemctl daemon-reload >/dev/null 2>&1 || true
     case "$WAS_ENABLED" in
         enabled|enabled-runtime) systemctl enable conntrack.service >/dev/null 2>&1 || true ;;

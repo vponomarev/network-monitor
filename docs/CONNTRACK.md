@@ -1,295 +1,173 @@
-# Connection Tracking (Conntrack) Module
+# Conntrack Production Guide
 
-Модуль отслеживания TCP-соединений на основе eBPF для мониторинга входящих и исходящих соединений с логированием в syslog и экспортом метрик Prometheus.
+`conntrack` is the standalone eBPF service for observing IPv4 TCP connection
+lifecycles. It records incoming and outgoing `ESTABLISHED` and `CLOSED` events,
+correlates outgoing connections with PID/comm when available, writes structured
+syslog messages, and exports Prometheus metrics.
 
-## Возможности
+The v2.2.0 Linux `amd64` artifact is production-qualified on kernels 5.15, 6.1,
+6.8, and 6.12. IPv6, retention for orphaned state, and ARM are not yet
+supported. Alerts belong to the external monitoring stack.
 
-- **Отслеживание TCP handshake** - мониторинг трехэтапного рукопожатия (SYN → SYN+ACK → ESTABLISHED)
-- **Входящие и исходящие соединения** - раздельный трекинг по направлению
-- **Логирование в syslog** - структурированные сообщения в формате RFC 5424
-- **Prometheus метрики** - экспорт статистики соединений
-- **HTTP API** - REST API для просмотра активных соединений
-- **eBPF на основе kernel probes** - минимальные накладные расходы
+## Runtime architecture
 
-## Архитектура
+The embedded `conntrack.bpf.o` attaches to `sock/inet_sock_set_state`,
+`inet_csk_accept`, and `tcp_close`. Events pass through a bounded ring buffer to
+the Go tracker, state machine, Prometheus collector, and syslog writer. Failure
+to load or read the production eBPF source is fatal; the service does not fall
+back to simulated data.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Connection Tracker                       │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │   eBPF      │  │   State      │  │    Syslog         │  │
-│  │   Probes    │─▶│   Machine    │─▶│    Writer         │  │
-│  │  (kprobes)  │  │  (TCP FSM)   │  │                   │  │
-│  └─────────────┘  └──────────────┘  └───────────────────┘  │
-│                          │                                  │
-│                          ▼                                  │
-│                   ┌──────────────┐  ┌───────────────────┐  │
-│                   │   Metrics    │  │    HTTP API       │  │
-│                   │   Collector  │  │    /api/v1/       │  │
-│                   │              │  │    conntrack/     │  │
-│                   └──────────────┘  └───────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
+Conntrack currently runs as a separate binary and systemd unit. It exposes only
+the following HTTP endpoints:
 
-## Компоненты
+| Endpoint | Meaning |
+|---|---|
+| `/health` | Process liveness; returns 200 while HTTP is serving |
+| `/ready` | Returns 200 only after eBPF attachment and event reader startup |
+| `/metrics` | Prometheus metrics; bearer-protected when `auth_token` is set |
 
-### 1. State Machine
+The older `/api/v1/conntrack/*` handlers are not part of the standalone
+production service.
 
-Конечный автомат TCP-соединений управляет жизненным циклом соединения:
+## Installation
 
-```
-NEW → SYN_SENT → ESTABLISHED → CLOSED
-              │
-              └──(timeout)──→ FAILED
-```
-
-**Состояния:**
-- `NEW` - новое соединение обнаружено
-- `SYN_SENT` - SYN отправлен, ожидание SYN+ACK
-- `SYN_RECEIVED` - SYN получен, ожидание accept
-- `ESTABLISHED` - соединение установлено
-- `CLOSING` - соединение закрывается (FIN sent)
-- `CLOSED` - соединение закрыто
-
-**События:**
-- `EventNew` - новое соединение
-- `EventEstablished` - соединение установлено
-- `EventClosed` - соединение закрыто
-- `EventFailed` - таймаут SYN (нет SYN+ACK)
-- `EventRejected` - входящее соединение отклонено
-
-### 2. Syslog Writer
-
-Экспорт событий в syslog в структурированном формате:
-
-```
-CONN_OUT_ESTABLISHED src=192.168.1.100:54321 dst=8.8.8.8:443 proto=TCP dir=outgoing state=ESTABLISHED pid=1234 comm="curl" handshake_ms=50 host=server1 ts=2024-01-15T10:00:00Z
-```
-
-**Формат сообщений:**
-- `CONN_OUT_NEW` - новое исходящее соединение
-- `CONN_OUT_ESTABLISHED` - исходящее соединение установлено
-- `CONN_IN_ACCEPTED` - входящее соединение принято
-- `CONN_IN_REJECTED` - входящее соединение отклонено
-- `CONN_OUT_FAILED` - исходящее соединение не удалось
-- `CONN_CLOSED` - соединение закрыто
-
-### 3. Prometheus Metrics
-
-**Метрики:**
-
-```prometheus
-# Количество соединений по состоянию и направлению
-conntrack_connections{state="established", direction=""} 150
-conntrack_connections{state="pending_outgoing", direction="outgoing"} 5
-conntrack_connections{state="pending_incoming", direction="incoming"} 3
-
-# События соединений (счетчик)
-conntrack_events_total{event="NEW", direction="outgoing"} 1000
-conntrack_events_total{event="ESTABLISHED", direction="outgoing"} 950
-conntrack_events_total{event="FAILED", direction="outgoing"} 50
-conntrack_events_total{event="CLOSED", direction="outgoing"} 900
-
-# Длительность TCP handshake (гистограмма)
-conntrack_handshake_duration_seconds{direction="outgoing"}
-
-# Длительность соединения (гистограмма)
-conntrack_connection_duration_seconds{direction="outgoing"}
-```
-
-### 4. HTTP API
-
-**Получить список соединений:**
+Use the raw binary or the conntrack release bundle from GitHub Releases:
 
 ```bash
-GET /api/v1/conntrack/connections?limit=100&state=ESTABLISHED&direction=outgoing
+chmod +x conntrack-linux-amd64
+sudo ./conntrack-linux-amd64 install
+sudo systemctl enable --now conntrack
+sudo systemctl status conntrack
 ```
 
-**Параметры:**
-- `limit` - максимальное количество записей (по умолчанию 100)
-- `state` - фильтр по состоянию (NEW, SYN_SENT, ESTABLISHED, CLOSED)
-- `direction` - фильтр по направлению (incoming, outgoing)
+Installation writes:
 
-**Пример ответа:**
+- `/usr/local/bin/conntrack`;
+- `/etc/conntrack/config.yaml` (only when absent);
+- `/etc/systemd/system/conntrack.service`.
 
-```json
-[
-  {
-    "id": "192.168.1.100:54321:8.8.8.8:443:6",
-    "src_ip": "192.168.1.100",
-    "src_port": 54321,
-    "dst_ip": "8.8.8.8",
-    "dst_port": 443,
-    "protocol": "TCP",
-    "direction": "outgoing",
-    "state": "ESTABLISHED",
-    "pid": 1234,
-    "process_name": "curl",
-    "timestamp": "2024-01-15T10:00:00Z",
-    "last_updated": "2024-01-15T10:00:01Z",
-    "established": true,
-    "duration": "1m30s",
-    "handshake_time": "50ms"
-  }
-]
-```
-
-**Получить статистику:**
+`deinstall` removes the managed binary and unit but intentionally preserves the
+operator configuration:
 
 ```bash
-GET /api/v1/conntrack/stats
+sudo /usr/local/bin/conntrack deinstall
 ```
 
-**Пример ответа:**
+Installing over an active service validates the existing config, snapshots the
+previous binary/unit under `/var/lib/conntrack/rollback`, atomically replaces
+managed files, restarts the service, and waits for readiness. A failed update is
+rolled back automatically. Restore the last successful upgrade manually with:
 
-```json
-{
-  "total_outgoing": 150,
-  "total_incoming": 50,
-  "pending_outgoing": 5,
-  "pending_incoming": 3,
-  "established": 142,
-  "total": 200
-}
+```bash
+sudo /usr/local/bin/conntrack rollback
 ```
 
-## Конфигурация
+## Configuration
 
-Добавьте в `config.yaml`:
+Minimal standalone configuration:
 
 ```yaml
+global:
+  metrics_addr: 127.0.0.1
+  metrics_port: 9876
+  # auth_token: "change-me"
+
 connections:
   enabled: true
   track_incoming: true
   track_outgoing: true
-  filter_ports: []  # пустой = все порты
+  event_buffer_size: 10000
+  state_ttl: 24h
+  cleanup_interval: 1m
+  max_tracked_connections: 10240
+  max_pending_connections: 16384
+
+logging:
+  level: info
+  format: json
 ```
 
-## Запуск
+The CLI also accepts `--track-incoming`, `--track-outgoing`, `--track-closes`,
+`--syn-timeout`, and syslog flags. `--ebpf-prog` is an explicit development or
+operator override; production normally uses the embedded object.
 
-### Из исходного кода
+Print the embedded example with:
 
 ```bash
-# Сборка
-make build
-
-# Запуск (требуется root для eBPF)
-sudo ./bin/netmon --config config.yaml
+conntrack show-config
 ```
 
-### Через conntrack CLI
+## Metrics and logs
+
+Key metrics are:
+
+- `conntrack_connections{state,direction}`;
+- `conntrack_events_total{event,direction}`;
+- `conntrack_handshake_duration_seconds{direction}`;
+- `conntrack_connection_duration_seconds{direction}`;
+- `conntrack_bytes_total{direction,type}`;
+- `conntrack_bytes_per_connection{direction}`;
+- `conntrack_dropped_events_total{reason}`.
+- `conntrack_state_entries{layer}`;
+- `conntrack_state_cleanup_total{reason}`;
+- `conntrack_state_evictions_total{layer}`;
+- `conntrack_state_overflow_total{layer}`.
+
+Inspect health, metrics, and structured events:
 
 ```bash
-# Запуск только conntrack
-sudo ./bin/conntrack \
-  --track-incoming \
-  --track-outgoing \
-  --syslog-tag conntrack \
-  --syslog-facility LOCAL0
+curl --fail http://127.0.0.1:9876/health
+curl --fail http://127.0.0.1:9876/ready
+curl --fail http://127.0.0.1:9876/metrics | grep '^conntrack_'
+sudo journalctl -u conntrack -f
 ```
 
-## Проверка работы
-
-### 1. Проверка логов syslog
+When authentication is enabled:
 
 ```bash
-# Логи conntrack
-sudo journalctl -t conntrack -f
-
-# Или для LOCAL0
-sudo journalctl -f SYSLOG_FACILITY=16  # LOCAL0 = 16
+curl --fail -H 'Authorization: Bearer change-me' \
+  http://127.0.0.1:9876/metrics
 ```
 
-### 2. Проверка метрик
+Syslog lifecycle messages use names such as `CONN_OUT_ESTABLISHED`,
+`CONN_IN_ACCEPTED`, and `CONN_CLOSED`, followed by tuple, direction, state,
+PID/comm, timing, host, and timestamp fields when available.
+
+## Requirements and qualification
+
+- Linux `amd64` with BTF at `/sys/kernel/btf/vmlinux`;
+- root for the supported systemd deployment;
+- local syslog service, or reachable TCP/UDP syslog configured by flags;
+- kernel from the maintained 5.15/6.1/6.8/6.12 qualification matrix.
+
+Run the release-candidate E2E as root:
 
 ```bash
-curl http://localhost:9876/metrics | grep conntrack
+sudo tests/conntrack/e2e/run-host.sh ./conntrack-linux-amd64
 ```
 
-### 3. Проверка API
-
-```bash
-# Статистика
-curl http://localhost:9876/api/v1/conntrack/stats
-
-# Список соединений
-curl http://localhost:9876/api/v1/conntrack/connections?limit=10
-```
-
-## eBPF Probes
-
-Модуль использует следующие kernel probes:
-
-| Probe | Тип | Назначение |
-|-------|-----|------------|
-| `tcp_connect` | kprobe | Исходящие соединения (SYN sent) |
-| `tcp_v4_rcv` | kprobe | Входящие пакеты (SYN detection) |
-| `tcp_v4_accept` | kprobe | Accept входящего соединения |
-| `tcp_close` | kprobe | Закрытие соединения |
-| `inet_sock_set_state` | tracepoint | Изменения состояния сокета |
-
-## Требования
-
-- Linux kernel 4.9+ (с поддержкой eBPF)
-- Смонтированный tracefs: `mount -t tracefs none /sys/kernel/tracing`
-- Root доступ или CAP_BPF, CAP_PERFMON capabilities
-- Syslog daemon (rsyslog, syslog-ng)
+See [`../tests/conntrack/e2e/README.md`](../tests/conntrack/e2e/README.md) for the
+four-host matrix and complete bundle lifecycle test.
 
 ## Troubleshooting
 
-### eBPF программы не загружаются
-
 ```bash
-# Проверка версии ядра
 uname -r
-
-# Проверка поддержки eBPF
-zgrep CONFIG_BPF /proc/config.gz
-
-# Проверка монтирования tracefs
-mount | grep tracefs
+test -r /sys/kernel/btf/vmlinux
+sudo journalctl -u conntrack -n 100 --no-pager
+sudo bpftool prog show
+curl -v http://127.0.0.1:9876/ready
 ```
 
-### Нет событий в syslog
+A 503 from `/ready` means the tracker has not completed eBPF startup. A service
+exit is preferable to silently reporting synthetic or incomplete production
+data. Check `conntrack_dropped_events_total` for ring-buffer or userspace
+backpressure.
 
-```bash
-# Проверка работы syslog
-sudo systemctl status rsyslog
+## Retention and limits
 
-# Проверка логов
-sudo journalctl -u rsyslog -f
-
-# Тестовое сообщение
-logger -t conntrack-test "Test message"
-```
-
-### Метрики не экспортируются
-
-```bash
-# Проверка доступности метрик
-curl http://localhost:9876/metrics | grep conntrack
-
-# Проверка логов приложения
-sudo journalctl -u netmon -f
-```
-
-## Структура модуля
-
-```
-internal/conntrack/
-├── types.go              # Типы данных (Connection, Direction, State)
-├── state_machine.go      # Конечный автомат TCP
-├── state_machine_test.go # Тесты state machine
-├── syslog.go             # Syslog writer
-├── syslog_test.go        # Тесты syslog writer
-├── tracker_linux.go      # Основной tracker (Linux)
-├── tracker_other.go      # Заглушка для не-Linux
-├── metrics.go            # Prometheus метрики
-├── api.go                # HTTP API handler
-└── api_test.go           # Тесты API
-```
-
-## Лицензия
-
-MIT License
+The next release adds a 24-hour default TTL for orphaned userspace state and
+both kernel correlation maps. Sweeps run every minute. Userspace capacity
+evicts the oldest snapshot; kernel insertion failures are observable. Operators
+can tune TTL, sweep cadence, and both map limits in the `connections` section.
+See [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md) for release status.
