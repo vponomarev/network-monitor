@@ -97,6 +97,32 @@ metadata:
 The local file remains the startup source. Successful remote updates are
 validated and written atomically.
 
+## Role and location mappings
+
+Both metadata files accept a legacy single `network` or a grouped `networks`
+list. These fields are mutually exclusive. Grouped entries are expanded before
+longest-prefix matching, so more-specific entries still win.
+
+```yaml
+# roles.yaml: roles are commonly assigned per host
+roles:
+  - role: load-balancer
+    networks: [10.10.10.10/32, 10.10.10.11/32]
+
+# locations.yaml: locations commonly contain larger subnets
+locations:
+  - location: datacenter-a
+    vrf: production
+    networks:
+      - 10.20.0.0/20
+      - 10.30.0.0/23
+```
+
+Every value must use CIDR notation. Exact duplicate assignments are collapsed;
+the same canonical CIDR assigned to different roles or location attributes is
+rejected. `GET /api/v1/metadata/status` reports the number of expanded unique
+networks, not the number of YAML groups.
+
 ## Cardinality
 
 `metrics.cardinality.level` accepts `role` (production default), `network`, or

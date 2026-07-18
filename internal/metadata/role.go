@@ -24,8 +24,9 @@ type netWithRole struct {
 }
 
 type RoleEntry struct {
-	Network string `yaml:"network"`
-	Role    string `yaml:"role"`
+	Network  string   `yaml:"network,omitempty"`
+	Networks []string `yaml:"networks,omitempty"`
+	Role     string   `yaml:"role"`
 }
 
 type RolesFile struct {
@@ -66,17 +67,9 @@ func (m *RoleMatcher) Load(path string) error {
 		return fmt.Errorf("parsing YAML: %w", err)
 	}
 
-	networks := make([]netWithRole, 0, len(file.Roles))
-	for _, entry := range file.Roles {
-		_, network, err := net.ParseCIDR(entry.Network)
-		if err != nil {
-			return fmt.Errorf("parsing network %s: %w", entry.Network, err)
-		}
-
-		networks = append(networks, netWithRole{
-			network: network,
-			role:    entry.Role,
-		})
+	networks, err := parseRoleEntries(file.Roles)
+	if err != nil {
+		return err
 	}
 
 	// Sort by prefix length (most specific first) - like Python version

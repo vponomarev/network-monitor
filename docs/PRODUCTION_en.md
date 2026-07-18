@@ -183,13 +183,16 @@ netmon uses **longest prefix match** for IP → role/location lookup. More speci
 ```yaml
 # roles.yaml
 roles:
-  - network: 10.179.64.0/22    # General datacenter range
-    role: datacenter
-  - network: 10.179.64.32/32   # Specific host wins for this IP
+  - role: datacenter
+    networks: [10.179.64.0/22, 10.180.0.0/20]
+  - network: 10.179.64.32/32   # Legacy single entry is also supported
     role: s3-dwh05
 ```
 
-For IP `10.179.64.32`, the role will be `s3-dwh05` (not `datacenter`).
+Both `roles.yaml` and `locations.yaml` accept either `network` or `networks`.
+The fields are mutually exclusive, and every value must use CIDR notation.
+Grouped entries use the same longest-prefix matching as single entries.
+For IP `10.179.64.32`, the more-specific `s3-dwh05` role wins.
 
 **See example configs:**
 - [`configs/roles.example.yaml`](../configs/roles.example.yaml)

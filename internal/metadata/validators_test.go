@@ -35,7 +35,7 @@ func TestLocationsValidator(t *testing.T) {
 			name:    "missing network",
 			data:    []byte("locations:\n  - location: dc1"),
 			wantErr: true,
-			errMsg:  "network is required",
+			errMsg:  "network or networks is required",
 		},
 		{
 			name:    "missing location",
@@ -64,6 +64,13 @@ func TestLocationsValidator(t *testing.T) {
   - network: 192.168.0.0/16
     location: dc2
     vrf: mgmt`),
+			wantErr: false,
+		},
+		{
+			name: "valid grouped locations",
+			data: []byte(`locations:
+  - networks: [10.10.0.0/20, 10.20.0.0/23]
+    location: dc1`),
 			wantErr: false,
 		},
 		{
@@ -120,7 +127,7 @@ func TestRolesValidator(t *testing.T) {
 			name:    "missing network",
 			data:    []byte("roles:\n  - role: web-server"),
 			wantErr: true,
-			errMsg:  "network is required",
+			errMsg:  "network or networks is required",
 		},
 		{
 			name:    "missing role",
@@ -148,6 +155,15 @@ func TestRolesValidator(t *testing.T) {
     role: web-server
   - network: 192.168.0.0/16
     role: db-server`),
+			wantErr: false,
+		},
+		{
+			name: "valid grouped roles",
+			data: []byte(`roles:
+  - networks:
+      - 10.0.0.10/32
+      - 10.0.0.11/32
+    role: load-balancer`),
 			wantErr: false,
 		},
 		{

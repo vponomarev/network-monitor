@@ -1,72 +1,36 @@
 # Roles Configuration Example
-# Maps IP ranges to logical roles
+# Maps IP ranges to logical roles.
+#
+# Use `network` for one CIDR or `networks` for multiple CIDRs with the same
+# role. The fields are mutually exclusive. Host-specific roles normally use
+# /32 (IPv4) or /128 (IPv6).
 
 roles:
-  # Application servers
-  - network: 192.168.20.10/32
-    role: app-server
+  # Application hosts grouped under one role
+  - role: app-server
+    networks:
+      - 192.168.20.10/32
+      - 192.168.20.11/32
+      - 192.168.20.12/32
+      - 192.168.20.13/32
+      - 192.168.20.14/32
 
-  - network: 192.168.20.11/32
-    role: app-server
+  # Inline YAML lists are also supported
+  - role: load-balancer
+    networks: [192.168.200.1/32, 192.168.200.2/32, 192.168.200.3/32]
 
-  - network: 192.168.20.12/32
-    role: app-server
+  # Another host-oriented role
+  - role: storage-server
+    networks:
+      - 192.168.40.10/32
+      - 192.168.40.11/32
+      - 192.168.40.12/32
 
-  - network: 192.168.20.13/32
-    role: app-server
-
-  - network: 192.168.20.14/32
-    role: app-server
-
-  - network: 192.168.20.15/32
-    role: app-server
-
-  - network: 192.168.20.16/32
-    role: app-server
-
-  - network: 192.168.20.17/32
-    role: app-server
-
-  - network: 192.168.20.18/32
-    role: app-server
-
-  - network: 192.168.20.19/32
-    role: app-server
-
-  # Load balancers
-  - network: 192.168.200.1/32
-    role: load-balancer
-
-  - network: 192.168.200.2/32
-    role: load-balancer
-
-  - network: 192.168.200.3/32
-    role: load-balancer
-
-  - network: 192.168.200.4/32
-    role: load-balancer
-
-  - network: 192.168.200.5/32
-    role: load-balancer
-
-  - network: 192.168.200.6/32
-    role: load-balancer
-
-  # Storage servers (broader range)
-  - network: 192.168.10.0/24
-    role: storage-server
-
-  - network: 192.168.40.0/24
-    role: storage-server
-
-  - network: 192.168.50.0/24
-    role: storage-server
-
-  - network: 192.168.60.0/24
-    role: storage-server
+  # Legacy single-network entries remain supported
+  - network: 192.168.60.10/32
+    role: backup-server
 
 # HTTP Update Source (Optional):
-# To enable automatic updates from HTTP endpoint, add to config.yaml:
 # metadata:
 #   roles:
 #     path: /etc/netmon/roles.yaml
@@ -74,10 +38,3 @@ roles:
 #       url: https://config.example.com/roles.yaml
 #       poll_interval: 20m
 #       timeout: 10s
-#
-# Behavior:
-# - Local file required for startup
-# - First HTTP poll: 30 seconds after startup
-# - Subsequent polls: every poll_interval (default: 20m)
-# - Validation: checks network CIDR, role field
-# - Auto-reload: memory updated after successful update
