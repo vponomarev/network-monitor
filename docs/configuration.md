@@ -96,6 +96,6 @@ validated and written atomically.
 recommended. Dropped series increment `netmon_loss_series_dropped_total`.
 
 Optional `bandwidth`, `latency`, `dns`, and `packet_loss` sections exist in the
-schema but are outside the current conntrack P0 scope. Start from
+schema but are outside the current production scope. Start from
 [`../configs/config.example.yaml`](../configs/config.example.yaml) or
 [`../configs/conntrack.example.yaml`](../configs/conntrack.example.yaml).
