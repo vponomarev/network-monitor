@@ -112,15 +112,16 @@ standalone `conntrack`. Новые collectors и объединение серв
 
 ### P0 — инфраструктура релиза и управляемость
 
-#### P0.1 — обновление GitHub Actions
+#### P0.1 — обновление GitHub Actions — выполнено 2026-07-18
 
-- перейти с actions, использующих deprecated Node.js 20, на актуальные major;
-- обновить CodeQL Action с v3 на v4;
-- сохранить blocking eBPF build, verifier smoke-load, race, security и release
-  checks без `continue-on-error` для production gates.
+- first-party actions переведены на актуальные major с Node.js 24;
+- CodeQL Action обновлён с v3 до v4, hosted toolchain — до Go 1.26;
+- lint и `govulncheck` стали blocking gates, а CI Summary учитывает все jobs;
+- eBPF build, verifier smoke-load, race, security и release checks сохранены;
+- gosec SARIF публикует реальный legacy baseline вместо пустого отчёта.
 
-**Готово, когда:** PR и tag workflows проходят без deprecation warnings, а
-состав обязательных checks не ослаблен.
+Проверено в PR #14: CI, eBPF, CodeQL, govulncheck и gosec проходят без
+предупреждений о deprecated Node.js runtime.
 
 #### P0.2 — стабильный observability contract
 
@@ -191,15 +192,14 @@ standalone `conntrack`. Новые collectors и объединение серв
 
 ## Порядок ближайших работ
 
-1. P0.1 — убрать предупреждения и технический долг GitHub Actions/CodeQL.
-2. P0.2 — зафиксировать публичный observability contract.
-3. P0.3 — подготовить и проверить production rollout runbook.
-4. После закрытия P0 отдельно согласовать, что берём первым: reliability P1 или
+1. P0.2 — зафиксировать публичный observability contract.
+2. P0.3 — подготовить и проверить production rollout runbook.
+3. После закрытия P0 отдельно согласовать, что берём первым: reliability P1 или
    IPv6 P2.1. По умолчанию приоритет остаётся у P1.
 
 ## Исторические планы
 
 Завершённые планы и отчёты перечислены в [`docs/README.md`](README.md). PR #3
 не вливается напрямую: его базовые conntrack-задачи вошли в v2.2.0, а
-эксплуатационный P0 scope — в v2.3.0. Оставшийся IPv6 перенесён в P1. Подробное сопоставление сохранено в
+эксплуатационный P0 scope — в v2.3.0. Оставшийся IPv6 перенесён в P2.1. Подробное сопоставление сохранено в
 [`PR_3_RECONCILIATION.md`](PR_3_RECONCILIATION.md).
