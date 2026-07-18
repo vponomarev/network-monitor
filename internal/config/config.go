@@ -119,7 +119,7 @@ type MetricsConfig struct {
 // LabelNames returns the configured Prometheus label allowlist. Default and
 // optional labels are kept as separate YAML fields for compatibility, but both
 // lists contain labels the operator explicitly wants to export.
-func (m MetricsConfig) LabelNames() []string {
+func (m *MetricsConfig) LabelNames() []string {
 	labels := make([]string, 0, len(m.DefaultLabels)+len(m.OptionalLabels))
 	labels = append(labels, m.DefaultLabels...)
 	labels = append(labels, m.OptionalLabels...)
