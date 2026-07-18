@@ -36,6 +36,9 @@ type CardinalityConfig struct {
 	Level string
 	// MaxSeries caps the number of distinct active series. 0 means unlimited.
 	MaxSeries int
+	// LabelNames is the exact configured label allowlist. A nil value preserves
+	// the legacy level-based label set for programmatic callers.
+	LabelNames []string
 }
 
 // defaultedLevel returns a valid level, falling back to LevelRole.
@@ -60,8 +63,9 @@ type Exporter struct {
 	ttl             time.Duration
 
 	// Cardinality controls label granularity and the series cap.
-	level     string
-	maxSeries int
+	level      string
+	maxSeries  int
+	labelNames []string
 
 	// Cardinality observability.
 	activeSeries  prometheus.Gauge
@@ -119,13 +123,14 @@ func NewExporterWithConfig(
 	card CardinalityConfig,
 ) *Exporter {
 	level := card.defaultedLevel()
+	labelNames := labelNamesForLevel(level, card.LabelNames)
 
 	counter := prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: metricName,
 			Help: "Total number of TCP retransmissions by connection pair",
 		},
-		labelNamesForLevel(level),
+		labelNames,
 	)
 
 	activeSeries := prometheus.NewGauge(prometheus.GaugeOpts{
@@ -141,7 +146,8 @@ func NewExporterWithConfig(
 
 	logger.Named("exporter").Info("Loss exporter cardinality configured",
 		zap.String("level", level),
-		zap.Int("max_series", card.MaxSeries))
+		zap.Int("max_series", card.MaxSeries),
+		zap.Strings("labels", labelNames))
 
 	return &Exporter{
 		metricName:      metricName,
@@ -152,14 +158,34 @@ func NewExporterWithConfig(
 		ttl:             3 * time.Hour, // Default TTL
 		level:           level,
 		maxSeries:       card.MaxSeries,
+		labelNames:      labelNames,
 		activeSeries:    activeSeries,
 		seriesDropped:   seriesDropped,
 		series:          make(map[string]*seriesData),
 	}
 }
 
-// labelNamesForLevel returns the Prometheus label names for a cardinality level.
-func labelNamesForLevel(level string) []string {
+// labelNamesForLevel applies the cardinality level as an upper bound to the
+// configured label allowlist. A nil allowlist preserves the legacy label set
+// for programmatic callers that predate configurable labels.
+func labelNamesForLevel(level string, configured []string) []string {
+	if configured != nil {
+		allowed := allowedLabelsForLevel(level)
+		seen := make(map[string]struct{}, len(configured))
+		labels := make([]string, 0, len(configured))
+		for _, label := range configured {
+			if !allowed[label] {
+				continue
+			}
+			if _, ok := seen[label]; ok {
+				continue
+			}
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+		return labels
+	}
+
 	switch level {
 	case LevelNetwork:
 		return []string{
@@ -185,39 +211,55 @@ func labelNamesForLevel(level string) []string {
 	}
 }
 
-// labelsFor computes the label values for a src/dst pair in the order matching
-// labelNamesForLevel(e.level).
-func (e *Exporter) labelsFor(src, dst string) []string {
-	srcLocation := e.locationMatcher.GetLocation(src)
-	dstLocation := e.locationMatcher.GetLocation(dst)
-	srcRole := e.roleMatcher.GetRole(src)
-	dstRole := e.roleMatcher.GetRole(dst)
-	srcVrf := e.locationMatcher.GetVrf(src)
-	dstVrf := e.locationMatcher.GetVrf(dst)
+func allowedLabelsForLevel(level string) map[string]bool {
+	allowed := map[string]bool{
+		"src_location": true,
+		"dst_location": true,
+		"src_role":     true,
+		"dst_role":     true,
+		"src_vrf":      true,
+		"dst_vrf":      true,
+	}
+	if level == LevelNetwork || level == LevelIP {
+		allowed["src_network"] = true
+		allowed["dst_network"] = true
+	}
+	if level == LevelIP {
+		allowed["src_ip"] = true
+		allowed["dst_ip"] = true
+	}
+	return allowed
+}
 
-	switch e.level {
-	case LevelNetwork:
-		return []string{
-			getNetwork(src), getNetwork(dst),
-			srcLocation, dstLocation,
-			srcRole, dstRole,
-			srcVrf, dstVrf,
-		}
-	case LevelRole:
-		return []string{
-			srcLocation, dstLocation,
-			srcRole, dstRole,
-			srcVrf, dstVrf,
-		}
-	default: // LevelIP
-		return []string{
-			src, dst,
-			srcLocation, dstLocation,
-			srcRole, dstRole,
-			getNetwork(src), getNetwork(dst),
-			srcVrf, dstVrf,
+// labelsFor computes only the configured label values in the order matching
+// e.labelNames.
+func (e *Exporter) labelsFor(src, dst string) []string {
+	values := make([]string, 0, len(e.labelNames))
+	for _, label := range e.labelNames {
+		switch label {
+		case "src_ip":
+			values = append(values, src)
+		case "dst_ip":
+			values = append(values, dst)
+		case "src_location":
+			values = append(values, e.locationMatcher.GetLocation(src))
+		case "dst_location":
+			values = append(values, e.locationMatcher.GetLocation(dst))
+		case "src_role":
+			values = append(values, e.roleMatcher.GetRole(src))
+		case "dst_role":
+			values = append(values, e.roleMatcher.GetRole(dst))
+		case "src_network":
+			values = append(values, getNetwork(src))
+		case "dst_network":
+			values = append(values, getNetwork(dst))
+		case "src_vrf":
+			values = append(values, e.locationMatcher.GetVrf(src))
+		case "dst_vrf":
+			values = append(values, e.locationMatcher.GetVrf(dst))
 		}
 	}
+	return values
 }
 
 // seriesKeyOf builds the internal map key identifying a series.

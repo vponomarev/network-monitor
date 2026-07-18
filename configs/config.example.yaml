@@ -81,10 +81,12 @@ metrics:
     - dst_location
     - src_role
     - dst_role
+    - src_vrf
+    - dst_vrf
+  # Optional labels are opt-in: omitted labels are not exported.
   optional_labels:
     - src_network
     - dst_network
-    - path_id
   # Cardinality control for netmon_tcp_loss_total (protects Prometheus from OOM).
   cardinality:
     # level:

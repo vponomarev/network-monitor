@@ -116,6 +116,16 @@ type MetricsConfig struct {
 	Cardinality    CardinalityConfig `yaml:"cardinality"`
 }
 
+// LabelNames returns the configured Prometheus label allowlist. Default and
+// optional labels are kept as separate YAML fields for compatibility, but both
+// lists contain labels the operator explicitly wants to export.
+func (m *MetricsConfig) LabelNames() []string {
+	labels := make([]string, 0, len(m.DefaultLabels)+len(m.OptionalLabels))
+	labels = append(labels, m.DefaultLabels...)
+	labels = append(labels, m.OptionalLabels...)
+	return labels
+}
+
 // CardinalityConfig controls the label granularity and the hard cap on the
 // number of active loss series exported to Prometheus.
 type CardinalityConfig struct {
@@ -242,12 +252,10 @@ func DefaultConfig() *Config {
 				"dst_location",
 				"src_role",
 				"dst_role",
+				"src_vrf",
+				"dst_vrf",
 			},
-			OptionalLabels: []string{
-				"src_network",
-				"dst_network",
-				"path_id",
-			},
+			OptionalLabels: []string{},
 			Cardinality: CardinalityConfig{
 				Level:     "role",
 				MaxSeries: 10000,

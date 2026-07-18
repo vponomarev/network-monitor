@@ -152,13 +152,18 @@ discovery:
 
 **Default `level: role` does NOT include `src_ip`/`dst_ip` in metric labels.**
 
-This is intentional to prevent cardinality explosion in large networks. The label set depends on `cardinality.level`:
+This is intentional to prevent cardinality explosion in large networks. The effective label set comes from `default_labels` plus `optional_labels`, while `cardinality.level` limits the maximum permitted detail:
 
-| Level | Labels on `netmon_tcp_loss_total` |
+| Level | Permitted labels on `netmon_tcp_loss_total` |
 |-------|-----------------------------------|
 | `role` (default) | `src_location, dst_location, src_role, dst_role, src_vrf, dst_vrf` (no IP, no network) |
 | `network` | `src_network, dst_network, src_location, dst_location, src_role, dst_role, src_vrf, dst_vrf` (/24, no IP) |
 | `ip` | `src_ip, dst_ip, src_location, dst_location, src_role, dst_role, src_network, dst_network, src_vrf, dst_vrf` (unbounded) |
+
+Only labels explicitly listed in `default_labels` or `optional_labels` and
+permitted by the selected level are exported. For example, with `level: ip`,
+removing `src_network` and `dst_network` from `optional_labels` removes them
+from Prometheus output without affecting `src_ip` and `dst_ip`.
 
 **To get per-IP metrics (use with caution):**
 ```yaml

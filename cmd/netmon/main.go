@@ -151,8 +151,9 @@ func main() {
 		cfg.Metrics.Name, locationMatcher, roleMatcher, logger,
 		prometheus.DefaultRegisterer,
 		metrics.CardinalityConfig{
-			Level:     cfg.Metrics.Cardinality.Level,
-			MaxSeries: cfg.Metrics.Cardinality.MaxSeries,
+			Level:      cfg.Metrics.Cardinality.Level,
+			MaxSeries:  cfg.Metrics.Cardinality.MaxSeries,
+			LabelNames: cfg.Metrics.LabelNames(),
 		},
 	)
 	exporter.SetTopology(networkTopology)
