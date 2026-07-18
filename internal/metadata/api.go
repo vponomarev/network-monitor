@@ -12,6 +12,14 @@ type MetadataStatusAPI struct {
 	mu       sync.RWMutex
 	pollers  map[string]*HTTPPoller
 	counters map[string]CounterProvider
+	sources  map[string]SourceConfig
+}
+
+// SourceConfig describes the configured local file and optional HTTP updater.
+type SourceConfig struct {
+	FilePath string
+	HTTPURL  string
+	Enabled  bool
 }
 
 // CounterProvider interface for getting counts from matchers
@@ -26,14 +34,14 @@ type StatusResponse struct {
 
 // SourceStatus represents status of a single metadata source
 type SourceStatus struct {
-	FilePath      string    `json:"file_path"`
-	HTTPURL       string    `json:"http_url,omitempty"`
-	LastCheck     time.Time `json:"last_check,omitempty"`
-	LastHash      string    `json:"last_hash,omitempty"`
-	LastUpdate    time.Time `json:"last_update,omitempty"`
-	UpdateSuccess bool      `json:"update_success"`
-	EntriesCount  int       `json:"entries_count"`
-	Enabled       bool      `json:"enabled"`
+	FilePath      string     `json:"file_path"`
+	HTTPURL       string     `json:"http_url,omitempty"`
+	LastCheck     *time.Time `json:"last_check,omitempty"`
+	LastHash      string     `json:"last_hash,omitempty"`
+	LastUpdate    *time.Time `json:"last_update,omitempty"`
+	UpdateSuccess bool       `json:"update_success"`
+	EntriesCount  int        `json:"entries_count"`
+	Enabled       bool       `json:"enabled"`
 }
 
 // NewMetadataStatusAPI creates a new metadata status API
@@ -41,7 +49,24 @@ func NewMetadataStatusAPI() *MetadataStatusAPI {
 	return &MetadataStatusAPI{
 		pollers:  make(map[string]*HTTPPoller),
 		counters: make(map[string]CounterProvider),
+		sources:  make(map[string]SourceConfig),
 	}
+}
+
+// RegisterSource registers configured source details independently of a poller.
+func (api *MetadataStatusAPI) RegisterSource(name string, source SourceConfig) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	api.sources[name] = source
+}
+
+// SetFilePath updates the active local file after a successful config reload.
+func (api *MetadataStatusAPI) SetFilePath(name, filePath string) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	source := api.sources[name]
+	source.FilePath = filePath
+	api.sources[name] = source
 }
 
 // RegisterPoller registers a poller for status reporting
@@ -81,18 +106,24 @@ func (api *MetadataStatusAPI) handleStatus(w http.ResponseWriter, r *http.Reques
 	// Build status for each source
 	sources := []string{"locations", "roles", "topology"}
 	for _, source := range sources {
+		configured := api.sources[source]
 		status := SourceStatus{
-			Enabled: false,
+			FilePath: configured.FilePath,
+			HTTPURL:  configured.HTTPURL,
+			Enabled:  configured.Enabled,
 		}
 
 		// Get poller status if registered
 		if poller, ok := api.pollers[source]; ok {
 			status.Enabled = true
 			lastCheck, hash, success := poller.GetStatus()
-			status.LastCheck = lastCheck
+			if !lastCheck.IsZero() {
+				status.LastCheck = &lastCheck
+				status.LastUpdate = &lastCheck
+			}
 			status.LastHash = hash
-			status.LastUpdate = lastCheck
 			status.UpdateSuccess = success
+			// A running poller is the authoritative active source.
 			status.HTTPURL = poller.config.URL
 			status.FilePath = poller.config.FilePath
 		}

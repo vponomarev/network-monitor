@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/vponomarev/network-monitor/internal/losscollector"
 	"github.com/vponomarev/network-monitor/internal/metadata"
 	"github.com/vponomarev/network-monitor/internal/metrics"
+	"github.com/vponomarev/network-monitor/internal/reload"
 	"github.com/vponomarev/network-monitor/internal/topology"
 	"go.uber.org/zap"
 )
@@ -168,6 +170,7 @@ func main() {
 	metadataAPI.RegisterCounter("roles", roleMatcher)
 	// Topology uses DeviceCount() instead of Count(), wrap it
 	metadataAPI.RegisterCounter("topology", &topologyCounter{topology: networkTopology})
+	registerMetadataSources(metadataAPI, cfg)
 
 	// Start HTTP pollers for metadata updates (if configured)
 	// Each poller runs independently and updates its file periodically
@@ -244,12 +247,53 @@ func main() {
 			zap.Duration("interval", cfg.Metadata.Topology.UpdateSource.PollIntervalDuration()))
 	}
 
+	reloadManager := reload.NewManager(func() error {
+		logger.Info("Reloading configuration")
+
+		newCfg, err := config.Load(*configPath)
+		if err != nil {
+			return fmt.Errorf("loading configuration: %w", err)
+		}
+		var reloadErrors []error
+		if err := locationMatcher.Reload(newCfg.Metadata.Locations.Path); err != nil {
+			logger.Warn("Failed to reload locations", zap.Error(err))
+			reloadErrors = append(reloadErrors, fmt.Errorf("reloading locations: %w", err))
+		} else {
+			metadataAPI.SetFilePath("locations", newCfg.Metadata.Locations.Path)
+			logger.Info("Locations reloaded")
+		}
+
+		if err := roleMatcher.Reload(newCfg.Metadata.Roles.Path); err != nil {
+			logger.Warn("Failed to reload roles", zap.Error(err))
+			reloadErrors = append(reloadErrors, fmt.Errorf("reloading roles: %w", err))
+		} else {
+			metadataAPI.SetFilePath("roles", newCfg.Metadata.Roles.Path)
+			logger.Info("Roles reloaded")
+		}
+
+		if newCfg.Topology.Enabled {
+			if err := networkTopology.Reload(newCfg.Topology.Path); err != nil {
+				logger.Warn("Failed to reload topology", zap.Error(err))
+				reloadErrors = append(reloadErrors, fmt.Errorf("reloading topology: %w", err))
+			} else {
+				metadataAPI.SetFilePath("topology", newCfg.Topology.Path)
+				logger.Info("Topology reloaded", zap.Int("devices", networkTopology.DeviceCount()))
+			}
+		}
+
+		exporter.SetMatchers(locationMatcher, roleMatcher)
+		exporter.SetTopology(networkTopology)
+
+		if err := errors.Join(reloadErrors...); err != nil {
+			return err
+		}
+		logger.Info("Configuration reloaded successfully")
+		return nil
+	})
+
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-
-	// Create reload channel for SIGHUP
-	reloadChan := make(chan struct{}, 1)
 
 	// Signal handler goroutine - runs for the entire lifetime
 	go func() {
@@ -257,11 +301,11 @@ func main() {
 			switch sig {
 			case syscall.SIGHUP:
 				logger.Info("SIGHUP received, reloading configuration")
-				select {
-				case reloadChan <- struct{}{}:
-				default:
-					// Reload already pending
-				}
+				go func() {
+					if err := reloadManager.Reload(); err != nil {
+						logger.Error("Failed to reload configuration", zap.Error(err))
+					}
+				}()
 				// Continue listening for more signals
 			default:
 				logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
@@ -467,17 +511,21 @@ func main() {
 	// Discovery API endpoints (protected if auth token is set)
 	if discoveryService != nil {
 		discoveryMux := discoveryService.HTTPHandler()
-		mux.Handle("/api/v1/discover", requireAuth(discoveryMux))
-		mux.Handle("/api/v1/loss/top", requireAuth(discoveryMux))
+		discovery.RegisterHTTPHandlers(mux, requireAuth(discoveryMux))
 
 		logger.Info("Discovery API enabled",
-			zap.String("endpoints", "/api/v1/discover, /api/v1/loss/top"))
+			zap.String("endpoints", "/api/v1/discover, /api/v1/discover/top, /api/v1/loss/top"))
 	}
 
 	// Metadata status API endpoint (protected if auth token is set)
 	mux.Handle("/api/v1/metadata/", requireAuth(metadataAPI.HTTPHandler()))
 	logger.Info("Metadata API enabled",
 		zap.String("endpoint", "/api/v1/metadata/status"))
+
+	// Configuration reload endpoint (protected if auth token is set)
+	mux.Handle("/api/v1/config/", requireAuth(reloadManager.HTTPHandler()))
+	logger.Info("Configuration API enabled",
+		zap.String("endpoint", "POST /api/v1/config/reload"))
 
 	// Connection tracking API endpoints (protected if auth token is set)
 	if connTracker != nil {
@@ -515,54 +563,6 @@ func main() {
 		zap.Bool("bandwidth", cfg.Bandwidth.Enabled),
 		zap.Bool("latency", cfg.Latency.Enabled),
 		zap.Bool("dns", cfg.DNS.Enabled))
-
-	// Configuration reload loop
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-reloadChan:
-				logger.Info("Reloading configuration")
-
-				// Reload config file
-				newCfg, err := config.Load(*configPath)
-				if err != nil {
-					logger.Error("Failed to reload config", zap.Error(err))
-					continue
-				}
-
-				// Reload metadata matchers
-				if err := locationMatcher.Reload(newCfg.Metadata.Locations.Path); err != nil {
-					logger.Warn("Failed to reload locations", zap.Error(err))
-				} else {
-					logger.Info("Locations reloaded")
-				}
-
-				if err := roleMatcher.Reload(newCfg.Metadata.Roles.Path); err != nil {
-					logger.Warn("Failed to reload roles", zap.Error(err))
-				} else {
-					logger.Info("Roles reloaded")
-				}
-
-				// Reload topology if enabled
-				if newCfg.Topology.Enabled {
-					if err := networkTopology.Reload(newCfg.Topology.Path); err != nil {
-						logger.Warn("Failed to reload topology", zap.Error(err))
-					} else {
-						logger.Info("Topology reloaded",
-							zap.Int("devices", networkTopology.DeviceCount()))
-					}
-				}
-
-				// Update exporter with new matchers and topology
-				exporter.SetMatchers(locationMatcher, roleMatcher)
-				exporter.SetTopology(networkTopology)
-
-				logger.Info("Configuration reloaded successfully")
-			}
-		}
-	}()
 
 	// Wait for context cancellation
 	<-ctx.Done()
@@ -631,4 +631,25 @@ func (t *topologyCounter) Count() int {
 		return 0
 	}
 	return t.topology.DeviceCount()
+}
+
+func registerMetadataSources(api *metadata.MetadataStatusAPI, cfg *config.Config) {
+	register := func(name string, source config.FileMetadataConfig, enabled bool) {
+		url := ""
+		if source.UpdateSource != nil {
+			url = source.UpdateSource.URL
+		}
+		api.RegisterSource(name, metadata.SourceConfig{
+			FilePath: source.Path,
+			HTTPURL:  url,
+			Enabled:  enabled,
+		})
+	}
+
+	register("locations", cfg.Metadata.Locations, cfg.Metadata.Locations.UpdateSource != nil)
+	register("roles", cfg.Metadata.Roles, cfg.Metadata.Roles.UpdateSource != nil)
+	topologySource := cfg.Metadata.Topology
+	topologySource.Path = cfg.Topology.Path
+	register("topology", topologySource,
+		cfg.Topology.Enabled && cfg.Metadata.Topology.UpdateSource != nil)
 }

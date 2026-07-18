@@ -193,6 +193,15 @@ func (s *DiscoveryService) HTTPHandler() http.Handler {
 	return mux
 }
 
+// RegisterHTTPHandlers mounts all discovery endpoints on the application mux.
+// The trailing-slash pattern is required for nested routes such as
+// /api/v1/discover/top.
+func RegisterHTTPHandlers(mux *http.ServeMux, handler http.Handler) {
+	mux.Handle("/api/v1/discover", handler)
+	mux.Handle("/api/v1/discover/", handler)
+	mux.Handle("/api/v1/loss/top", handler)
+}
+
 func (s *DiscoveryService) handleDiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

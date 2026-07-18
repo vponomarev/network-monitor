@@ -21,10 +21,12 @@ When the corresponding modules are enabled, `netmon` also exposes:
 | GET | `/api/v1/discover/top` | Discover current top-loss pairs |
 | GET | `/api/v1/loss/top?limit=N` | Return top observed loss pairs |
 | GET | `/api/v1/metadata/status` | Metadata source and polling status |
+| POST | `/api/v1/config/reload` | Reload metadata and topology files from the current config |
 | GET | `/api/v1/conntrack/connections` | Combined-mode active connections |
 | GET | `/api/v1/conntrack/stats` | Combined-mode connection statistics |
 
-Example discovery request:
+Discovery endpoints are available only when `discovery.traceroute.enabled` is
+true. Start an on-demand discovery with:
 
 ```bash
 curl --fail -X POST -H 'Content-Type: application/json' \
@@ -32,7 +34,73 @@ curl --fail -X POST -H 'Content-Type: application/json' \
   http://127.0.0.1:9876/api/v1/discover
 ```
 
-Connection list filters are `limit`, `state`, and `direction`.
+Discover paths for the configured top-loss pairs or inspect the recorded pairs:
+
+```bash
+curl --fail http://127.0.0.1:9876/api/v1/discover/top
+curl --fail 'http://127.0.0.1:9876/api/v1/loss/top?limit=20'
+```
+
+`limit` defaults to `discovery.traceroute.top_n` on `/api/v1/loss/top`.
+
+### Metadata status
+
+```bash
+curl --fail http://127.0.0.1:9876/api/v1/metadata/status
+```
+
+The response always includes the configured local `file_path`. `enabled`
+indicates whether HTTP auto-update is active. When it is configured, `http_url`
+contains the update URL; polling timestamps and hash remain empty until the
+first successful update.
+
+```json
+{
+  "sources": {
+    "locations": {
+      "file_path": "/etc/netmon/locations.yaml",
+      "http_url": "https://metadata.example/locations.yaml",
+      "update_success": true,
+      "entries_count": 12,
+      "enabled": true
+    },
+    "roles": {
+      "file_path": "/etc/netmon/roles.yaml",
+      "update_success": false,
+      "entries_count": 8,
+      "enabled": false
+    }
+  }
+}
+```
+
+### Configuration reload
+
+`POST /api/v1/config/reload` is the HTTP equivalent of sending `SIGHUP`:
+
+```bash
+curl --fail -X POST http://127.0.0.1:9876/api/v1/config/reload
+```
+
+Success returns `200` with `{"status":"reloaded"}`. Invalid configuration or
+a failed metadata/topology reload returns `500` with a JSON error. Reloads are
+serialized. The operation re-reads the config file and applies locations,
+roles, and enabled topology data. Changes to listeners, authentication,
+collectors, pollers, logging, and metric schema still require a process restart.
+The reload is not transactional: all reloadable sources are attempted, and a
+partial failure returns `500` while successfully loaded sources remain active.
+Protect this mutating endpoint with `global.auth_token` or bind the service to a
+trusted interface.
+
+### Conntrack queries
+
+```bash
+curl --fail \
+  'http://127.0.0.1:9876/api/v1/conntrack/connections?limit=100&state=established&direction=outgoing'
+curl --fail http://127.0.0.1:9876/api/v1/conntrack/stats
+```
+
+Connection list filters are `limit` (default `100`), `state`, and `direction`.
 
 ## Standalone conntrack
 
@@ -46,6 +114,14 @@ When `global.auth_token` or `NETMON_AUTH_TOKEN` is set, send:
 
 ```text
 Authorization: Bearer <token>
+```
+
+For example:
+
+```bash
+curl --fail -X POST \
+  -H 'Authorization: Bearer <token>' \
+  http://127.0.0.1:9876/api/v1/config/reload
 ```
 
 Netmon protects `/metrics` and `/api/*`. Standalone conntrack protects
