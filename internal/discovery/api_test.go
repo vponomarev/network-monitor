@@ -197,6 +197,26 @@ func TestDiscoveryService_HTTPHandler_LossTop(t *testing.T) {
 	assert.Len(t, pairs, 2) // We only have 2 unique pairs
 }
 
+func TestRegisterHTTPHandlersMountsAllRoutes(t *testing.T) {
+	outer := http.NewServeMux()
+	RegisterHTTPHandlers(outer, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for _, path := range []string{
+		"/api/v1/discover",
+		"/api/v1/discover/top",
+		"/api/v1/loss/top",
+	} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			response := httptest.NewRecorder()
+			outer.ServeHTTP(response, request)
+			assert.Equal(t, http.StatusNoContent, response.Code)
+		})
+	}
+}
+
 func TestDiscoveryService_StartPeriodicDiscovery(t *testing.T) {
 	service := NewTestDiscoveryService()
 	ctx, cancel := context.WithCancel(context.Background())
