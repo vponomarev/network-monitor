@@ -103,31 +103,103 @@ Defaults: `state_ttl: 24h`, `cleanup_interval: 1m`, не более 10240 tracke
 - [x] явная команда `conntrack rollback` с проверяемым rollback snapshot;
 - [x] изолированный E2E для upgrade, reinstall, explicit и automatic rollback.
 
-## Последующее развитие
+## Активный план развития
 
-### P1
+Приоритет после `v2.3.0` — закрепить эксплуатацию уже выпущенных `netmon` и
+standalone `conntrack`. Новые collectors и объединение сервисов начинаются
+только после закрытия инфраструктурного P0. Alerts относятся к внешнему контуру
+мониторинга и остаются вне scope проекта.
+
+### P0 — инфраструктура релиза и управляемость
+
+#### P0.1 — обновление GitHub Actions — выполнено 2026-07-18
+
+- first-party actions переведены на актуальные major с Node.js 24;
+- CodeQL Action обновлён с v3 до v4, hosted toolchain — до Go 1.26;
+- lint и `govulncheck` стали blocking gates, а CI Summary учитывает все jobs;
+- eBPF build, verifier smoke-load, race, security и release checks сохранены;
+- gosec SARIF публикует реальный legacy baseline вместо пустого отчёта.
+
+Проверено в PR #14: CI, eBPF, CodeQL, govulncheck и gosec проходят без
+предупреждений о deprecated Node.js runtime.
+
+#### P0.2 — стабильный observability contract
+
+- зафиксировать поддерживаемые имена метрик, labels и значения `reason/layer`;
+- добавить regression-тесты публичной схемы Prometheus и HTTP endpoints;
+- описать правила совместимости dashboards и миграцию при breaking changes;
+- отделить внутренние diagnostic metrics от стабильного operator API.
+
+**Готово, когда:** случайное переименование или изменение labels блокируется
+тестами, а версия схемы и правила миграции отражены в документации.
+
+#### P0.3 — production rollout runbook conntrack
+
+- описать staged rollout `v2.2.x → v2.3.x`, проверку readiness и rollback;
+- зафиксировать acceptance criteria по drops, state size, RSS и CPU;
+- добавить краткий post-upgrade checklist и сбор диагностического bundle;
+- проверить runbook на одном canary-хосте без изменения release binary.
+
+**Готово, когда:** оператор может обновить, проверить и откатить conntrack по
+одному воспроизводимому сценарию без знания внутреннего устройства сервиса.
+
+### P1 — надёжность и hardening (после P0)
 
 - расширенные lifecycle/API/concurrency/error-path тесты conntrack;
+- нагрузочная и saturation qualification: заполнение maps/queues, длительное
+  отсутствие `CLOSE`, стабильность retention и отсутствие неограниченного роста;
 - усиление systemd sandbox и переход с `CAP_SYS_ADMIN` на минимальные capability
-  там, где это совместимо с поддерживаемыми ядрами;
-- IPv6 для conntrack и TCP-loss;
-- ARM64: отдельный `vmlinux.h`, архитектурная eBPF-сборка и реальный runtime-хост;
-- container deployment guide, Compose и Kubernetes/Helm;
-- обновление GitHub Actions, использующих устаревающий Node.js 20;
-- версионирование схемы метрик, dashboards и внешних alert rules.
+  отдельно для каждого ядра поддерживаемой матрицы;
+- проверка совместимости конфигурации между minor-версиями и аварийных сценариев
+  повреждённого rollback snapshot;
+- генерация SBOM и provenance/signing для release assets.
 
-### P2
+Расширенные и нагрузочные тесты, а также systemd hardening остаются в roadmap,
+но не входят в ближайший P0.
 
-- объединение `netmon` и `conntrack` в единый управляемый daemon;
-- дополнительные модули bandwidth, latency, DNS и topology;
-- контейнерная orchestration после стабилизации standalone lifecycle.
+### P2 — развитие функциональности
 
-Расширенные тесты, sandbox hardening, IPv6, ARM64 и orchestration сознательно
-отложены. Alerts относятся к внешнему контуру мониторинга и остаются вне scope.
+#### P2.1 — IPv6
+
+- IPv6 lifecycle tracking для conntrack и retransmit tracking для netmon;
+- C↔Go layout checks, контроль cardinality и dashboards для IPv6 labels;
+- verifier/runtime qualification на всей поддерживаемой матрице ядер.
+
+#### P2.2 — единый управляемый daemon
+
+- объединить `netmon` и `conntrack` под одним lifecycle и конфигурацией;
+- сохранить feature flags, изоляцию отказов collectors и наблюдаемость drops;
+- определить совместимый переход со standalone conntrack и независимый rollback.
+
+#### P2.3 — container orchestration
+
+- актуализировать container deployment guide и Compose;
+- Kubernetes/Helm начинать только после стабилизации единого daemon lifecycle;
+- явно документировать privileged/capability и host-kernel requirements.
+
+#### P2.4 — дополнительные модули
+
+- bandwidth, latency, DNS и topology включать в production scope по одному;
+- для каждого модуля требовать реальные данные, bounded cardinality, health,
+  документацию и отдельный qualification profile.
+
+### P3 — условные направления
+
+- ARM64 возвращается в план только после появления реального Linux ARM-хоста,
+  отдельной архитектурной eBPF-сборки и полной runtime qualification;
+- расширение kernel matrix выполняется при появлении production-хоста с новым
+  LTS/дистрибутивным ядром, а не только на основании cross-compilation.
+
+## Порядок ближайших работ
+
+1. P0.2 — зафиксировать публичный observability contract.
+2. P0.3 — подготовить и проверить production rollout runbook.
+3. После закрытия P0 отдельно согласовать, что берём первым: reliability P1 или
+   IPv6 P2.1. По умолчанию приоритет остаётся у P1.
 
 ## Исторические планы
 
 Завершённые планы и отчёты перечислены в [`docs/README.md`](README.md). PR #3
 не вливается напрямую: его базовые conntrack-задачи вошли в v2.2.0, а
-эксплуатационный P0 scope — в v2.3.0. Оставшийся IPv6 перенесён в P1. Подробное сопоставление сохранено в
+эксплуатационный P0 scope — в v2.3.0. Оставшийся IPv6 перенесён в P2.1. Подробное сопоставление сохранено в
 [`PR_3_RECONCILIATION.md`](PR_3_RECONCILIATION.md).

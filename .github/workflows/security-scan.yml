@@ -19,29 +19,27 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.26'
 
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./... || echo "govulncheck failed, continuing"
+          govulncheck ./...
 
       - name: Run gosec
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          # G301/G302: intentional file/dir perms; G304: operator-controlled paths.
-          gosec -exclude=G301,G302,G304 -fmt sarif -out gosec.sarif ./... || {
-            echo "gosec reported findings; emitting a valid empty SARIF report";
-            echo '{"version":"2.1.0","$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","runs":[{"tool":{"driver":{"name":"gosec"}},"results":[]}]}' > gosec.sarif;
-          }
+        uses: securego/gosec@v2.28.0
+        with:
+          # Preserve and upload the legacy baseline instead of replacing it with
+          # an empty report. New findings are blocked by the lint job.
+          args: -exclude=G301,G302,G304 -no-fail -fmt sarif -out gosec.sarif ./...
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: gosec.sarif
         if: always()
@@ -56,23 +54,23 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          go-version: '1.26'
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: go
 
       - name: Build
-        run: make build || echo "Build failed, continuing with analysis"
+        run: go build ./...
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:go"
 

@@ -63,6 +63,6 @@ production releases.
 - Qualified kernels: 5.15, 6.1, 6.8, and 6.12 with BTF.
 - Conntrack is IPv4-only in the current production scope.
 - Alerts, long-term storage, and dashboards are external consumers.
-- Retention and hard limits for orphaned conntrack state are active P0 work.
+- Retention and hard limits for orphaned conntrack state are active since v2.3.0.
 
 See [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md) for current priorities.
