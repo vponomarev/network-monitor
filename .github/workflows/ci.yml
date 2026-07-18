@@ -13,7 +13,7 @@ on:
       - 'docs/**'
 
 env:
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.26'
 
 jobs:
   # =====================
@@ -24,21 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.11.4
           args: --timeout=5m --tests=false
           only-new-issues: true
-        continue-on-error: true
 
   # =====================
   # Test
@@ -48,10 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -61,9 +60,9 @@ jobs:
           go test -v -race -coverprofile=coverage.out -skip "TestMonitor_readProcNetDev|TestNewTracker|TestTracker_|TestTraceroute|TestMonitor_recordPacketLoss|TestMonitor_Events|TestMonitor_processTraceLine|Test_parsePacketCount|TestMonitor_Run_ContextCancellation" ./internal/... ./cmd/... ./pkg/...
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
-          file: ./coverage.out
+          files: ./coverage.out
           flags: unittests
           fail_ci_if_error: false
 
@@ -83,12 +82,12 @@ jobs:
             arch: amd64
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -99,7 +98,7 @@ jobs:
             go build -ldflags="-s -w" -o bin/netmon-${{ matrix.os }}-${{ matrix.arch }} ./cmd/netmon
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: netmon-${{ matrix.os }}-${{ matrix.arch }}
           path: bin/netmon-${{ matrix.os }}-${{ matrix.arch }}
@@ -113,32 +112,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Run gosec
-        uses: securego/gosec@master
+        uses: securego/gosec@v2
         with:
-          # Advisory in CI (-no-fail): the remaining findings live in deferred
-          # conntrack and peripheral discovery/traceroute code (G115 int
-          # conversions, G703, G306/G30x intentional file perms), not the core
-          # netmon loss pipeline. The full set is uploaded to GitHub code scanning
-          # by .github/workflows/security-scan.yml, so it stays visible without
-          # blocking the build. Show medium+ for signal.
+          # Keep the legacy baseline visible while the blocking lint job rejects
+          # new findings. security-scan.yml uploads the complete SARIF report.
           args: -severity=medium -exclude=G301,G302,G304 -no-fail ./...
 
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          # Advisory: govulncheck flags Go stdlib CVEs that are only fixed in newer
-          # toolchain patch releases (a moving target). Report them without failing
-          # the build — same policy as .github/workflows/security-scan.yml.
-          govulncheck ./... || echo "::warning title=govulncheck::vulnerabilities reported (advisory, non-blocking)"
+          govulncheck ./...
 
   # =====================
   # Summary
@@ -151,10 +143,14 @@ jobs:
     steps:
       - name: Check CI status
         run: |
-          if [[ "${{ needs.test.result }}" == "failure" ]] || \
-             [[ "${{ needs.build.result }}" == "failure" ]]; then
-            echo "❌ CI Failed"
-            exit 1
-          else
-            echo "✅ CI Passed"
-          fi
+          for result in \
+            "${{ needs.lint.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.build.result }}" \
+            "${{ needs.security.result }}"; do
+            if [[ "$result" != "success" ]]; then
+              echo "CI failed: at least one required job finished with '$result'"
+              exit 1
+            fi
+          done
+          echo "CI passed"
