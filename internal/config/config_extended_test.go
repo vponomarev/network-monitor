@@ -50,7 +50,7 @@ metrics:
     - src_ip
     - dst_ip
   optional_labels:
-    - path_id
+    - src_network
 
 logging:
   level: debug
@@ -71,6 +71,7 @@ logging:
 	assert.Equal(t, "/custom/roles.yaml", cfg.Metadata.Roles.Path)
 	assert.Equal(t, 20, cfg.Discovery.Traceroute.TopN)
 	assert.Equal(t, "top_loss", cfg.Discovery.Traceroute.Mode)
+	assert.Equal(t, []string{"src_ip", "dst_ip", "src_network"}, cfg.Metrics.LabelNames())
 	assert.Equal(t, "debug", cfg.Logging.Level)
 	assert.Equal(t, "console", cfg.Logging.Format)
 }
@@ -295,6 +296,8 @@ func TestConfig_DefaultLabels(t *testing.T) {
 		"dst_location",
 		"src_role",
 		"dst_role",
+		"src_vrf",
+		"dst_vrf",
 	}
 
 	assert.Equal(t, expectedLabels, cfg.Metrics.DefaultLabels)
@@ -303,13 +306,16 @@ func TestConfig_DefaultLabels(t *testing.T) {
 func TestConfig_OptionalLabels(t *testing.T) {
 	cfg := DefaultConfig()
 
-	expectedLabels := []string{
-		"src_network",
-		"dst_network",
-		"path_id",
+	assert.Empty(t, cfg.Metrics.OptionalLabels)
+}
+
+func TestMetricsConfig_LabelNames(t *testing.T) {
+	cfg := MetricsConfig{
+		DefaultLabels:  []string{"src_ip", "dst_ip"},
+		OptionalLabels: []string{"src_network"},
 	}
 
-	assert.Equal(t, expectedLabels, cfg.Metrics.OptionalLabels)
+	assert.Equal(t, []string{"src_ip", "dst_ip", "src_network"}, cfg.LabelNames())
 }
 
 func TestConfig_LoggingDefaults(t *testing.T) {

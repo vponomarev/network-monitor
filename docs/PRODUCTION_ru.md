@@ -152,13 +152,18 @@ discovery:
 
 **Уровень по умолчанию `level: role` НЕ включает `src_ip`/`dst_ip` в метки метрик.**
 
-Это сделано намеренно для предотвращения взрыва кардинальности в больших сетях. Набор меток метрики `netmon_tcp_loss_total` зависит от `cardinality.level`:
+Это сделано намеренно для предотвращения взрыва кардинальности в больших сетях. Фактический набор меток задаётся объединением `default_labels` и `optional_labels`, а `cardinality.level` ограничивает максимально допустимую детализацию:
 
-| Уровень | Метки на `netmon_tcp_loss_total` |
+| Уровень | Допустимые метки на `netmon_tcp_loss_total` |
 |---------|-----------------------------------|
 | `role` (по умолчанию) | `src_location, dst_location, src_role, dst_role, src_vrf, dst_vrf` (без IP, без network) |
 | `network` | `src_network, dst_network, src_location, dst_location, src_role, dst_role, src_vrf, dst_vrf` (/24, без IP) |
 | `ip` | `src_ip, dst_ip, src_location, dst_location, src_role, dst_role, src_network, dst_network, src_vrf, dst_vrf` (без ограничений) |
+
+Экспортируются только метки, явно перечисленные в `default_labels` или
+`optional_labels` и допустимые для выбранного уровня. Например, при `level: ip`
+удаление `src_network` и `dst_network` из `optional_labels` убирает их из
+Prometheus output, не затрагивая `src_ip` и `dst_ip`.
 
 **Для получения метрик на каждый IP (использовать с осторожностью):**
 ```yaml

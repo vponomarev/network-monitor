@@ -224,6 +224,47 @@ func TestCardinality_RoleLevel_NoIPLabels(t *testing.T) {
 	require.True(t, found, "metric not found")
 }
 
+func TestCardinality_IPLevel_UsesConfiguredLabelAllowlist(t *testing.T) {
+	logger := zap.NewNop()
+	reg := prometheus.NewRegistry()
+	exporter := NewExporterWithConfig("test_loss_ip_allowlist", metadata.NewEmptyLocationMatcher(logger),
+		metadata.NewEmptyRoleMatcher(logger), logger, reg,
+		CardinalityConfig{
+			Level:     LevelIP,
+			MaxSeries: 0,
+			LabelNames: []string{
+				"src_ip", "dst_ip",
+				"src_location", "dst_location",
+				"src_role", "dst_role",
+			},
+		})
+
+	exporter.RecordRetransmit("10.0.0.1", "10.0.0.2")
+
+	metricFamilies, err := reg.Gather()
+	require.NoError(t, err)
+	for _, family := range metricFamilies {
+		if family.GetName() != "test_loss_ip_allowlist" {
+			continue
+		}
+		require.Len(t, family.GetMetric(), 1)
+		labels := family.GetMetric()[0].GetLabel()
+		names := make([]string, 0, len(labels))
+		for _, label := range labels {
+			names = append(names, label.GetName())
+		}
+		assert.ElementsMatch(t, []string{
+			"src_ip", "dst_ip",
+			"src_location", "dst_location",
+			"src_role", "dst_role",
+		}, names)
+		assert.NotContains(t, names, "src_network")
+		assert.NotContains(t, names, "dst_network")
+		return
+	}
+	t.Fatal("loss metric not found")
+}
+
 func TestCardinality_NetworkLevel_AggregatesBySubnet(t *testing.T) {
 	logger := zap.NewNop()
 	reg := prometheus.NewRegistry()

@@ -44,8 +44,8 @@ topology:
 
 metrics:
   name: netmon_tcp_loss_total
-  default_labels: [src_ip, dst_ip, src_location, dst_location, src_role, dst_role]
-  optional_labels: [src_network, dst_network, path_id]
+  default_labels: [src_ip, dst_ip, src_location, dst_location, src_role, dst_role, src_vrf, dst_vrf]
+  optional_labels: [src_network, dst_network]
   cardinality:
     level: role
     max_series: 10000
@@ -66,6 +66,14 @@ logging:
   format: json
   output_path: ""
 ```
+
+`default_labels` and `optional_labels` together form the exact label allowlist
+for `netmon_tcp_loss_total`. Optional labels are opt-in; omit the field or use
+`optional_labels: []` to export none of them. `metrics.cardinality.level` is an
+upper bound: `role` excludes IP/network labels, `network` excludes IP labels,
+and `ip` permits all supported labels. For example, with `level: ip`, removing
+`src_network` and `dst_network` from `optional_labels` keeps `src_ip`/`dst_ip`
+but removes both network labels from Prometheus output.
 
 `loss_source: ebpf` is the production default. `tracepipe` is a legacy debug
 fallback. `/health` and `/ready` are always public; `/metrics` and `/api/*`
