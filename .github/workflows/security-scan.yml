@@ -32,7 +32,7 @@ jobs:
           govulncheck ./...
 
       - name: Run gosec
-        uses: securego/gosec@v2
+        uses: securego/gosec@v2.28.0
         with:
           # Preserve and upload the legacy baseline instead of replacing it with
           # an empty report. New findings are blocked by the lint job.

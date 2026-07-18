@@ -121,7 +121,7 @@ jobs:
           cache: true
 
       - name: Run gosec
-        uses: securego/gosec@v2
+        uses: securego/gosec@v2.28.0
         with:
           # Keep the legacy baseline visible while the blocking lint job rejects
           # new findings. security-scan.yml uploads the complete SARIF report.
