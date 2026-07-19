@@ -107,7 +107,11 @@ metadata:
 ```
 
 The local file remains the startup source. Successful remote updates are
-validated and written atomically.
+validated and written atomically. Use `POST /api/v1/metadata/refresh` to fetch
+configured HTTP sources immediately. The request defaults to a forced rewrite
+and in-memory reload even when the remote hash has not changed; pass
+`{"force":false}` for normal hash-based behavior. Invalid remote data is not
+written, and the endpoint returns the validation error in its JSON response.
 
 ## Role and location mappings
 

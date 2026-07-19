@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestHTTPPoller_GetStatus(t *testing.T) {
 
 	poller := NewHTTPPoller(cfg, logger, reg)
 
-	lastCheck, hash, success := poller.GetStatus()
+	lastCheck, _, hash, success := poller.GetStatus()
 	assert.Equal(t, time.Time{}, lastCheck)
 	assert.Equal(t, "", hash)
 	assert.False(t, success)
@@ -227,7 +228,7 @@ func TestHTTPPoller_CheckAndUpdate_NoChanges(t *testing.T) {
 	poller.checkAndUpdate(ctx)
 	time.Sleep(100 * time.Millisecond)
 
-	_, hash1, success1 := poller.GetStatus()
+	_, _, hash1, success1 := poller.GetStatus()
 	assert.NotEmpty(t, hash1)
 	assert.True(t, success1)
 
@@ -235,7 +236,7 @@ func TestHTTPPoller_CheckAndUpdate_NoChanges(t *testing.T) {
 	poller.checkAndUpdate(ctx)
 	time.Sleep(100 * time.Millisecond)
 
-	_, hash2, success2 := poller.GetStatus()
+	_, _, hash2, success2 := poller.GetStatus()
 	assert.Equal(t, hash1, hash2)
 	assert.True(t, success2)
 }
@@ -289,12 +290,12 @@ func TestHTTPPoller_CheckAndUpdate_WithChanges(t *testing.T) {
 	// First update
 	poller.checkAndUpdate(ctx)
 	time.Sleep(100 * time.Millisecond)
-	_, hash1, _ := poller.GetStatus()
+	_, _, hash1, _ := poller.GetStatus()
 
 	// Second update - with changes
 	poller.checkAndUpdate(ctx)
 	time.Sleep(100 * time.Millisecond)
-	_, hash2, success2 := poller.GetStatus()
+	_, _, hash2, success2 := poller.GetStatus()
 
 	assert.NotEqual(t, hash1, hash2)
 	assert.True(t, success2)
@@ -353,7 +354,7 @@ func TestHTTPPoller_CheckAndUpdate_ValidationFailed(t *testing.T) {
 	poller.checkAndUpdate(ctx)
 	time.Sleep(100 * time.Millisecond)
 
-	_, _, success := poller.GetStatus()
+	_, _, _, success := poller.GetStatus()
 	assert.False(t, success)
 	assert.False(t, reloadCalled)
 
@@ -361,6 +362,113 @@ func TestHTTPPoller_CheckAndUpdate_ValidationFailed(t *testing.T) {
 	content, err := os.ReadFile(filePath)
 	require.NoError(t, err)
 	assert.Equal(t, "initial: valid", string(content))
+}
+
+func TestHTTPPollerRefreshForceRestoresLocalFile(t *testing.T) {
+	logger := zap.NewNop()
+	data := []byte("roles:\n  - network: 10.0.0.1/32\n    role: api\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	filePath := filepath.Join(t.TempDir(), "roles.yaml")
+	poller := NewHTTPPoller(HTTPPollerConfig{
+		Name: "roles", URL: server.URL, Timeout: time.Second, FilePath: filePath,
+	}, logger, prometheus.NewRegistry())
+	poller.SetValidator(RolesValidator)
+	reloads := 0
+	poller.SetReloadFunc(func() error { reloads++; return nil })
+
+	first, err := poller.Refresh(context.Background(), false)
+	require.NoError(t, err)
+	assert.Equal(t, RefreshStatusUpdated, first.Status)
+
+	second, err := poller.Refresh(context.Background(), false)
+	require.NoError(t, err)
+	assert.Equal(t, RefreshStatusUnchanged, second.Status)
+	assert.Equal(t, 1, reloads)
+
+	require.NoError(t, os.WriteFile(filePath, []byte("locally corrupted"), 0o644))
+	forced, err := poller.Refresh(context.Background(), true)
+	require.NoError(t, err)
+	assert.Equal(t, RefreshStatusUpdated, forced.Status)
+	assert.Equal(t, 2, reloads)
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, data, content)
+}
+
+func TestHTTPPollerRefreshReturnsValidationError(t *testing.T) {
+	logger := zap.NewNop()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("roles:\n  - role: missing-network\n"))
+	}))
+	defer server.Close()
+
+	filePath := filepath.Join(t.TempDir(), "roles.yaml")
+	original := []byte("roles: []\n")
+	require.NoError(t, os.WriteFile(filePath, original, 0o644))
+	poller := NewHTTPPoller(HTTPPollerConfig{
+		Name: "roles", URL: server.URL, Timeout: time.Second, FilePath: filePath,
+	}, logger, prometheus.NewRegistry())
+	poller.SetValidator(RolesValidator)
+
+	result, err := poller.Refresh(context.Background(), true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validating roles metadata")
+	assert.Contains(t, err.Error(), "network or networks is required")
+	assert.Empty(t, result.Status)
+	content, readErr := os.ReadFile(filePath)
+	require.NoError(t, readErr)
+	assert.Equal(t, original, content, "invalid HTTP data must not replace the active file")
+	lastCheck, _, _, success := poller.GetStatus()
+	assert.False(t, lastCheck.IsZero())
+	assert.False(t, success)
+}
+
+func TestHTTPPollerRefreshSerializesConcurrentCalls(t *testing.T) {
+	logger := zap.NewNop()
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte("roles:\n  - network: 10.0.0.1/32\n    role: web\n"))
+		mu.Lock()
+		active--
+		mu.Unlock()
+	}))
+	defer server.Close()
+
+	poller := NewHTTPPoller(HTTPPollerConfig{
+		Name: "roles", URL: server.URL, Timeout: time.Second,
+		FilePath: filepath.Join(t.TempDir(), "roles.yaml"),
+	}, logger, prometheus.NewRegistry())
+	poller.SetValidator(RolesValidator)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := poller.Refresh(context.Background(), true)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, maxActive)
 }
 
 func TestHashFloat(t *testing.T) {
