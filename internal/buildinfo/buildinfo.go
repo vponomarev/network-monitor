@@ -35,14 +35,14 @@ func New(service, version, gitCommit, buildTime string) Info {
 }
 
 // WriteText prints a human-readable representation for --version.
-func (i Info) WriteText(w io.Writer) error {
+func (i *Info) WriteText(w io.Writer) error {
 	_, err := fmt.Fprintf(w, "%s %s (commit=%s, built=%s, go=%s, %s/%s)\n",
 		i.Service, i.Version, i.GitCommit, i.BuildTime, i.GoVersion, i.GOOS, i.GOARCH)
 	return err
 }
 
 // Handler exposes build information for the running process.
-func (i Info) Handler() http.Handler {
+func (i *Info) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -57,7 +57,7 @@ func (i Info) Handler() http.Handler {
 }
 
 // Collector returns a constant build_info metric for the running process.
-func (i Info) Collector() prometheus.Collector {
+func (i *Info) Collector() prometheus.Collector {
 	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: i.Service,
 		Name:      "build_info",
