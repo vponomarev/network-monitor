@@ -66,6 +66,7 @@ eviction, overflow и dropped events наблюдаемы через Prometheus.
 - `netmon_loss_events_dropped_total{reason}` — потери внутри pipeline;
 - `netmon_loss_active_series` и `netmon_loss_series_dropped_total` — контроль
   кардинальности;
+- `netmon_metadata_unknown_ips{attribute}` — число IP без role/location/VRF;
 - `netmon_path_*` — результаты path discovery.
 
 Основные метрики `conntrack`:
@@ -87,6 +88,9 @@ sum by (src_location, dst_location) (rate(netmon_tcp_loss_total[5m]))
 
 # Самые проблемные пары ролей
 topk(10, sum by (src_role, dst_role) (rate(netmon_tcp_loss_total[5m])))
+
+# Потери по VRF без меток отдельных IP
+sum by (src_vrf, dst_vrf) (rate(netmon_tcp_loss_total[5m]))
 
 # Переполнение или вытеснение conntrack state
 increase(conntrack_state_overflow_total[15m])
@@ -134,7 +138,7 @@ connections:
 Netmon поставляется bundle-архивом с бинарником, конфигурациями и systemd unit:
 
 ```bash
-VERSION=v2.3.0
+VERSION=v2.6.0
 curl -fLO "https://github.com/vponomarev/network-monitor/releases/download/${VERSION}/netmon-${VERSION}-linux-amd64.tar.gz"
 tar -xzf "netmon-${VERSION}-linux-amd64.tar.gz"
 cd "netmon-${VERSION}-linux-amd64"
@@ -155,8 +159,10 @@ curl --fail http://127.0.0.1:9876/metrics
 следует включать только для небольшого и контролируемого адресного пространства.
 
 HTTP-интерфейс предоставляет `/health`, `/ready`, `/metrics`, top-loss,
-discovery и metadata status API. `/metrics` и `/api/*` можно защитить bearer
-token через `global.auth_token` или `NETMON_AUTH_TOKEN`; health/readiness всегда
+discovery и metadata API. Неопознанные IP доступны через
+`/api/v1/metadata/unknown`; отдельный opt-in Prometheus endpoint находится на
+`/metrics/metadata/unknown`. `/metrics` и `/api/*` можно защитить bearer token
+через `global.auth_token` или `NETMON_AUTH_TOKEN`; health/readiness всегда
 остаются открыты для probes.
 
 ## Требования и ограничения

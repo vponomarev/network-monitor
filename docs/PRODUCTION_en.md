@@ -117,8 +117,15 @@ metadata:
     path: /etc/netmon/roles.yaml
   topology:
     path: /etc/netmon/topology.yaml
+  unknown:
+    enabled: true
+    ttl: 3h
+    max_ips: 10000
 
 metrics:
+  # Recommended production labels: VRF remains available without per-IP labels.
+  default_labels: [src_location, dst_location, src_role, dst_role, src_vrf, dst_vrf]
+  optional_labels: []
   # Cardinality control for loss metrics
   cardinality:
     # Level: "ip" | "role" | "network"
@@ -164,6 +171,21 @@ Only labels explicitly listed in `default_labels` or `optional_labels` and
 permitted by the selected level are exported. For example, with `level: ip`,
 removing `src_network` and `dst_network` from `optional_labels` removes them
 from Prometheus output without affecting `src_ip` and `dst_ip`.
+
+`src_vrf` and `dst_vrf` are populated from the `vrf` attribute of the matching
+entry in `locations.yaml`; at `level: role` they split loss series by VRF
+without adding IP cardinality. Changes to the label list require restart.
+
+Unknown role/location/VRF addresses remain discoverable even without IP labels:
+
+```bash
+curl http://localhost:9876/api/v1/metadata/unknown
+curl http://localhost:9876/metrics/metadata/unknown
+```
+
+The first endpoint is a bounded JSON inventory. The second is an opt-in
+per-IP Prometheus endpoint; the main `/metrics` endpoint contains only bounded
+`netmon_metadata_unknown_ips{attribute}` aggregates.
 
 **To get per-IP metrics (use with caution):**
 ```yaml

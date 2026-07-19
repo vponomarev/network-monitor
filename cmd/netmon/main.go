@@ -176,6 +176,27 @@ func main() {
 	// so scrapes never trigger Collect/cleanupOld — run a janitor instead.
 	exporter.StartJanitor(ctx, time.Minute)
 
+	var (
+		unknownTracker        *metadata.UnknownTracker
+		unknownMetricsHandler http.Handler
+	)
+	if cfg.Metadata.Unknown.Enabled {
+		unknownTracker = metadata.NewUnknownTracker(
+			locationMatcher,
+			roleMatcher,
+			cfg.Metadata.Unknown.TTLDuration(),
+			cfg.Metadata.Unknown.MaxIPs,
+			prometheus.DefaultRegisterer,
+		)
+		unknownRegistry := prometheus.NewRegistry()
+		unknownRegistry.MustRegister(unknownTracker)
+		unknownMetricsHandler = promhttp.HandlerFor(unknownRegistry, promhttp.HandlerOpts{
+			EnableOpenMetrics: true,
+		})
+		unknownTracker.StartJanitor(ctx, time.Minute)
+	}
+	retransmits := &retransmitRecorder{exporter: exporter, unknown: unknownTracker}
+
 	// Create metadata status API
 	metadataAPI := metadata.NewMetadataStatusAPI()
 	metadataAPI.RegisterCounter("locations", locationMatcher)
@@ -201,12 +222,18 @@ func main() {
 		)
 		locationsPoller.SetValidator(metadata.LocationsValidator)
 		locationsPoller.SetReloadFunc(func() error {
-			return reloadLocationMetadata(
+			if err := reloadLocationMetadata(
 				cfg.Metadata.Locations.Path,
 				locationMatcher,
 				roleMatcher,
 				exporter,
-			)
+			); err != nil {
+				return err
+			}
+			if unknownTracker != nil {
+				unknownTracker.Reconcile()
+			}
+			return nil
 		})
 		metadataAPI.RegisterPoller("locations", locationsPoller)
 		go locationsPoller.Run(ctx)
@@ -230,12 +257,18 @@ func main() {
 		)
 		rolesPoller.SetValidator(metadata.RolesValidator)
 		rolesPoller.SetReloadFunc(func() error {
-			return reloadRoleMetadata(
+			if err := reloadRoleMetadata(
 				cfg.Metadata.Roles.Path,
 				locationMatcher,
 				roleMatcher,
 				exporter,
-			)
+			); err != nil {
+				return err
+			}
+			if unknownTracker != nil {
+				unknownTracker.Reconcile()
+			}
+			return nil
 		})
 		metadataAPI.RegisterPoller("roles", rolesPoller)
 		go rolesPoller.Run(ctx)
@@ -305,6 +338,9 @@ func main() {
 
 		exporter.SetMatchers(locationMatcher, roleMatcher)
 		exporter.SetTopology(networkTopology)
+		if unknownTracker != nil {
+			unknownTracker.Reconcile()
+		}
 
 		if err := errors.Join(reloadErrors...); err != nil {
 			return err
@@ -388,10 +424,10 @@ func main() {
 	case "tracepipe":
 		logger.Warn("Using legacy trace_pipe loss source (not recommended for production)")
 		collectorMetrics = collector.NewCollectorMetrics(prometheus.DefaultRegisterer, logger, "trace_pipe")
-		lc = collector.NewTracePipeCollector(cfg.Global.TracePipePath, exporter, logger, collectorMetrics)
+		lc = collector.NewTracePipeCollector(cfg.Global.TracePipePath, retransmits, logger, collectorMetrics)
 	default: // "ebpf"
 		collectorMetrics = collector.NewCollectorMetrics(prometheus.DefaultRegisterer, logger, "ebpf")
-		ec, err := losscollector.NewEBPFLossCollector(exporter, logger, losscollector.Options{})
+		ec, err := losscollector.NewEBPFLossCollector(retransmits, logger, losscollector.Options{})
 		if err != nil {
 			logger.Error("FATAL: failed to init eBPF loss collector", zap.Error(err))
 			setFatal(err)
@@ -523,6 +559,9 @@ func main() {
 		},
 	)
 	mux.Handle("/metrics", requireAuth(metricsHandler))
+	if unknownTracker != nil {
+		mux.Handle("/metrics/metadata/unknown", requireAuth(unknownMetricsHandler))
+	}
 
 	// Health and ready endpoints (NEVER protected by auth).
 	// /health is liveness (always 200 while serving); /ready is readiness
@@ -547,6 +586,14 @@ func main() {
 	mux.Handle("/api/v1/metadata/", requireAuth(metadataAPI.HTTPHandler()))
 	logger.Info("Metadata API enabled",
 		zap.String("endpoint", "/api/v1/metadata/status"))
+	if unknownTracker != nil {
+		mux.Handle("/api/v1/metadata/unknown", requireAuth(unknownTracker.APIHandler()))
+		logger.Info("Unknown metadata inventory enabled",
+			zap.String("api_endpoint", "GET /api/v1/metadata/unknown"),
+			zap.String("metrics_endpoint", "GET /metrics/metadata/unknown"),
+			zap.Duration("ttl", cfg.Metadata.Unknown.TTLDuration()),
+			zap.Int("max_ips", cfg.Metadata.Unknown.MaxIPs))
+	}
 
 	// Configuration reload endpoint (protected if auth token is set)
 	mux.Handle("/api/v1/config/", requireAuth(reloadManager.HTTPHandler()))
