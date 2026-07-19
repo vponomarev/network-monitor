@@ -1,6 +1,6 @@
 # Network Monitor — статус и план развития
 
-*Актуализировано: 2026-07-18*
+*Актуализировано: 2026-07-19*
 
 ## Поддерживаемый scope
 
@@ -23,6 +23,8 @@ runtime-хостов. Conntrack пока выпускается отдельны
 - наблюдаемые kernel/userspace drops и ограничение cardinality/TTL;
 - реальные `/health` и `/ready`, bearer auth и graceful shutdown;
 - production systemd, документация и release pipeline;
+- точный allowlist labels, VRF-агрегация без IP labels и bounded inventory
+  неопознанных role/location/VRF на отдельных API/metrics endpoints;
 - verifier/runtime-проверки на ядрах 5.15, 6.1, 6.8 и 6.12.
 
 ### Conntrack
@@ -71,6 +73,15 @@ lifecycle, а один бинарник — ядра 5.15, 6.1, 6.8 и 6.12. О�
 заменены квалифицированными host-built файлами и повторно сверены по SHA256.
 Release workflow, post-merge CI, eBPF verifier, Security Scan и Docker Publish
 прошли успешно.
+
+## Netmon v2.4.0–v2.6.0
+
+- `v2.4.0`: исправлены status/discovery routes и добавлен HTTP config reload;
+- `v2.5.0`: roles/locations получили grouped `networks` с longest-prefix match;
+- `v2.5.1`: reload устраняет старые label-серии, добавлены version API и build info;
+- `v2.5.2`: SYN-handshake retransmits исключены из loss-метрики;
+- `v2.6.0`: VRF явно включён в production examples, а IP без role/location/VRF
+  доступны через bounded JSON inventory и отдельный opt-in Prometheus endpoint.
 
 ## Закрытый P0 scope v2.3.0
 

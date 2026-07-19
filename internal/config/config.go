@@ -77,9 +77,27 @@ type FileMetadataConfig struct {
 
 // MetadataConfig holds metadata source configuration
 type MetadataConfig struct {
-	Locations FileMetadataConfig `yaml:"locations"`
-	Roles     FileMetadataConfig `yaml:"roles"`
-	Topology  FileMetadataConfig `yaml:"topology"`
+	Locations FileMetadataConfig    `yaml:"locations"`
+	Roles     FileMetadataConfig    `yaml:"roles"`
+	Topology  FileMetadataConfig    `yaml:"topology"`
+	Unknown   UnknownMetadataConfig `yaml:"unknown"`
+}
+
+// UnknownMetadataConfig controls the bounded inventory of IP addresses whose
+// role, location, or VRF could not be resolved from metadata.
+type UnknownMetadataConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	TTL     string `yaml:"ttl"`
+	MaxIPs  int    `yaml:"max_ips"`
+}
+
+// TTLDuration returns the configured retention window.
+func (c UnknownMetadataConfig) TTLDuration() time.Duration {
+	d, err := time.ParseDuration(c.TTL)
+	if err != nil || d <= 0 {
+		return 3 * time.Hour
+	}
+	return d
 }
 
 // DiscoveryConfig holds discovery settings
@@ -226,6 +244,11 @@ func DefaultConfig() *Config {
 			Topology: FileMetadataConfig{
 				Path: "topology.yaml",
 			},
+			Unknown: UnknownMetadataConfig{
+				Enabled: true,
+				TTL:     "3h",
+				MaxIPs:  10000,
+			},
 		},
 		Discovery: DiscoveryConfig{
 			Traceroute: TracerouteConfig{
@@ -364,6 +387,19 @@ func (c *Config) Validate() error {
 	}
 	if c.Metrics.Cardinality.MaxSeries < 0 {
 		return fmt.Errorf("invalid metrics.cardinality.max_series: must be >= 0 (0 = unlimited)")
+	}
+
+	if c.Metadata.Unknown.Enabled {
+		unknownTTL, err := time.ParseDuration(c.Metadata.Unknown.TTL)
+		if err != nil {
+			return fmt.Errorf("invalid metadata.unknown.ttl: %w", err)
+		}
+		if unknownTTL <= 0 {
+			return fmt.Errorf("invalid metadata.unknown.ttl: must be positive")
+		}
+		if c.Metadata.Unknown.MaxIPs <= 0 {
+			return fmt.Errorf("invalid metadata.unknown.max_ips: must be positive")
+		}
 	}
 
 	if c.Connections.Enabled {

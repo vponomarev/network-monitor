@@ -23,6 +23,10 @@ metadata:
     path: roles.yaml
   topology:
     path: topology.yaml
+  unknown:
+    enabled: true
+    ttl: 3h
+    max_ips: 10000
 
 discovery:
   traceroute:
@@ -83,6 +87,11 @@ always public; `/metrics` and `/api/*`
 require `Authorization: Bearer <token>` when `global.auth_token` is non-empty.
 `NETMON_AUTH_TOKEN` supplies the token only when it is absent from YAML.
 
+`src_vrf` and `dst_vrf` are safe at `cardinality.level: role`; they do not
+require `src_ip` or `dst_ip`. VRF values come from the matching `vrf` field in
+`locations.yaml`. Changing metadata values can be applied through config
+reload, while changing the metric label allowlist requires a process restart.
+
 ## Metadata polling
 
 Each metadata file may have an optional remote update source:
@@ -121,10 +130,34 @@ locations:
       - 10.30.0.0/23
 ```
 
-Every value must use CIDR notation. Exact duplicate assignments are collapsed;
-the same canonical CIDR assigned to different roles or location attributes is
-rejected. `GET /api/v1/metadata/status` reports the number of expanded unique
-networks, not the number of YAML groups.
+The example above assigns `production` to both networks. A loss event is
+therefore exported with `src_vrf="production"` or `dst_vrf="production"`
+when the corresponding address matches. The current VRF model is CIDR-based.
+
+Every network value must use CIDR notation. Exact duplicate assignments are
+collapsed; the same canonical CIDR assigned to different roles or location
+attributes is rejected. `GET /api/v1/metadata/status` reports the number of
+expanded unique networks, not the number of YAML groups.
+
+## Unknown metadata inventory
+
+When `metadata.unknown.enabled` is true, netmon records IP addresses seen in
+loss events whose role, location, or VRF resolves to `unknown`. This inventory
+is independent of the `netmon_tcp_loss_total` label allowlist, so operators can
+remove `src_ip` and `dst_ip` without losing metadata diagnostics.
+
+`ttl` removes inactive addresses and `max_ips` is a hard in-memory cap. The
+main `/metrics` endpoint exposes only bounded aggregates:
+
+```prometheus
+netmon_metadata_unknown_ips{attribute="role"} 12
+netmon_metadata_unknown_events_total{attribute="location"} 42
+netmon_metadata_unknown_observations_dropped_total 0
+```
+
+Per-IP series are opt-in on `/metrics/metadata/unknown`; the JSON inventory is
+available on `/api/v1/metadata/unknown`. Reconciliation after a metadata reload
+immediately removes addresses that have become fully known.
 
 ## Cardinality
 

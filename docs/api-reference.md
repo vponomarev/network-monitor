@@ -21,8 +21,8 @@ curl --fail http://127.0.0.1:9876/api/v1/version
 ```json
 {
   "service": "netmon",
-  "version": "v2.5.1",
-  "git_commit": "5009d3f",
+  "version": "v2.6.0",
+  "git_commit": "abc1234",
   "build_time": "2026-07-19T00:00:00Z",
   "go_version": "go1.24.4",
   "goos": "linux",
@@ -44,6 +44,8 @@ When the corresponding modules are enabled, `netmon` also exposes:
 | GET | `/api/v1/discover/top` | Discover current top-loss pairs |
 | GET | `/api/v1/loss/top?limit=N` | Return top observed loss pairs |
 | GET | `/api/v1/metadata/status` | Metadata source and polling status |
+| GET | `/api/v1/metadata/unknown` | Bounded inventory of IPs with unresolved role, location, or VRF |
+| GET | `/metrics/metadata/unknown` | Opt-in Prometheus per-IP unknown metadata series |
 | POST | `/api/v1/config/reload` | Reload metadata and topology files from the current config |
 | GET | `/api/v1/conntrack/connections` | Combined-mode active connections |
 | GET | `/api/v1/conntrack/stats` | Combined-mode connection statistics |
@@ -96,6 +98,52 @@ first successful update.
   }
 }
 ```
+
+### Unknown metadata inventory
+
+The inventory remains available when `src_ip` and `dst_ip` are excluded from
+`netmon_tcp_loss_total`:
+
+```bash
+curl --fail 'http://127.0.0.1:9876/api/v1/metadata/unknown?limit=1000'
+curl --fail 'http://127.0.0.1:9876/api/v1/metadata/unknown?attribute=role&limit=100'
+```
+
+`attribute` is optional and accepts `role`, `location`, or `vrf`. `limit`
+defaults to 1000 and cannot exceed `metadata.unknown.max_ips`.
+
+```json
+{
+  "entries": [
+    {
+      "ip": "10.181.212.190",
+      "missing": ["role"],
+      "directions": ["dst"],
+      "first_seen": "2026-07-19T18:00:00Z",
+      "last_seen": "2026-07-19T18:05:00Z",
+      "event_count": 17
+    }
+  ],
+  "total": 1,
+  "limit": 1000,
+  "truncated": false
+}
+```
+
+Prometheus per-IP diagnostics use a separate endpoint and are not included in
+the default `/metrics` scrape:
+
+```bash
+curl --fail http://127.0.0.1:9876/metrics/metadata/unknown
+```
+
+```prometheus
+netmon_metadata_unknown_ip{ip="10.181.212.190",attribute="role"} 1
+```
+
+Both endpoints use the same bearer authentication as `/metrics` and other
+`/api/*` routes. Scraping the per-IP endpoint creates one Prometheus series per
+IP and missing attribute; configure it as a separate opt-in scrape job.
 
 ### Configuration reload
 
@@ -153,7 +201,8 @@ Netmon protects `/metrics` and `/api/*`. Standalone conntrack protects
 ## Principal metrics
 
 Netmon exports `netmon_tcp_loss_total`, collector health/drop counters,
-cardinality gauges/counters, metadata polling metrics, and `netmon_build_info`.
+cardinality gauges/counters, bounded `netmon_metadata_unknown_*` aggregates,
+metadata polling metrics, and `netmon_build_info`.
 Standalone conntrack exports `conntrack_build_info` and:
 exports:
 

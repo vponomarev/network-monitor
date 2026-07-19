@@ -41,6 +41,14 @@ metadata:
     #   poll_interval: 60m  # Check every hour
     #   timeout: 10s
 
+  # Bounded inventory of IPs observed in loss events but absent from role,
+  # location, or VRF metadata. Per-IP series are exposed only on the separate
+  # /metrics/metadata/unknown endpoint.
+  unknown:
+    enabled: true
+    ttl: 3h
+    max_ips: 10000
+
 # HTTP Update Source Behavior:
 # - Local file is REQUIRED for startup (fail-fast if missing)
 # - HTTP polling is OPTIONAL
@@ -87,6 +95,9 @@ metrics:
   optional_labels:
     - src_network
     - dst_network
+  # src_vrf/dst_vrf are resolved from the vrf field in locations.yaml. They
+  # remain available at cardinality level role even when src_ip/dst_ip are
+  # removed from this allowlist.
   # Cardinality control for netmon_tcp_loss_total (protects Prometheus from OOM).
   cardinality:
     # level:
