@@ -76,7 +76,10 @@ and `ip` permits all supported labels. For example, with `level: ip`, removing
 but removes both network labels from Prometheus output.
 
 `loss_source: ebpf` is the production default. `tracepipe` is a legacy debug
-fallback. `/health` and `/ready` are always public; `/metrics` and `/api/*`
+fallback. Handshake retransmits in `TCP_SYN_SENT`, `TCP_SYN_RECV`, and
+`TCP_NEW_SYN_RECV` are excluded from `netmon_tcp_loss_total`; the metric tracks
+retransmissions after connection establishment. `/health` and `/ready` are
+always public; `/metrics` and `/api/*`
 require `Authorization: Bearer <token>` when `global.auth_token` is non-empty.
 `NETMON_AUTH_TOKEN` supplies the token only when it is absent from YAML.
 

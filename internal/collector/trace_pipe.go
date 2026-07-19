@@ -190,6 +190,12 @@ func (c *TracePipeCollector) processLine(line string) {
 		return
 	}
 
+	// tcp_retransmit_skb also reports repeated SYN/SYN-ACK packets. Those are
+	// connection-establishment failures, not loss on an established flow.
+	if isSYNHandshakeRetransmit(line) {
+		return
+	}
+
 	matches := c.pattern.FindStringSubmatch(line)
 	if len(matches) != 3 {
 		c.logger.Debug("No match in line", zap.String("line", line))
@@ -211,6 +217,12 @@ func (c *TracePipeCollector) processLine(line string) {
 	if c.metrics != nil {
 		c.metrics.IncEventsParsed()
 	}
+}
+
+func isSYNHandshakeRetransmit(line string) bool {
+	return strings.Contains(line, "state=TCP_SYN_SENT") ||
+		strings.Contains(line, "state=TCP_SYN_RECV") ||
+		strings.Contains(line, "state=TCP_NEW_SYN_RECV")
 }
 
 // contains is a helper to check if a string contains a substring

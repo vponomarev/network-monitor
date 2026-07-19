@@ -21,6 +21,9 @@
  *
  * Limitations:
  * - IPv4 only (AF_INET). IPv6 (AF_INET6) events are ignored — see family check.
+ * - Handshake retransmits are intentionally ignored. Repeated SYN/SYN-ACK
+ *   packets indicate connection-establishment failure, not loss on an
+ *   established TCP flow.
  * - No bpf_printk in the hot path (unlike conntrack.bpf.c) to avoid trace_pipe
  *   pollution and per-event overhead.
  */
@@ -71,6 +74,13 @@ int handle_tcp_retransmit(struct trace_event_raw_tcp_event_sk_skb *ctx)
     /* IPv4 only for now. */
     __u16 family = BPF_CORE_READ(ctx, family);
     if (family != AF_INET)
+        return 0;
+
+    /* tcp_retransmit_skb fires for handshake packets too. Do not report
+     * repeated SYN or SYN-ACK packets as established-flow packet loss. */
+    int state = BPF_CORE_READ(ctx, state);
+    if (state == TCP_SYN_SENT || state == TCP_SYN_RECV ||
+        state == TCP_NEW_SYN_RECV)
         return 0;
 
     struct tcploss_event *evt = bpf_ringbuf_reserve(&loss_events, sizeof(*evt), 0);
