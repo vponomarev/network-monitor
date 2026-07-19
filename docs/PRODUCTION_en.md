@@ -519,6 +519,10 @@ See [`dashboards/`](../dashboards/) for pre-built Grafana dashboard JSON.
 
 **This tool measures TCP retransmits, not absolute packet loss.**
 
+Retransmitted SYN and SYN-ACK handshake packets are excluded. A failed outbound
+connection attempt therefore does not create `netmon_tcp_loss_total`; the
+metric represents retransmits after TCP connection establishment.
+
 A retransmit indicates a packet was lost **somewhere on the path**, but:
 - One retransmit ≠ one lost packet (could be spurious retransmit)
 - Multiple retransmits per original packet are counted separately

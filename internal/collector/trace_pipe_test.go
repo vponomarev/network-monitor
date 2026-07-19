@@ -62,6 +62,31 @@ func TestTracePipeCollector_processLine_NoMatch(t *testing.T) {
 	assert.Len(t, exporter.events, 0)
 }
 
+func TestTracePipeCollector_processLine_FiltersHandshakeRetransmits(t *testing.T) {
+	states := []string{"TCP_SYN_SENT", "TCP_SYN_RECV", "TCP_NEW_SYN_RECV"}
+	for _, state := range states {
+		t.Run(state, func(t *testing.T) {
+			exporter := &mockExporter{events: make([]TCPRetransmitEvent, 0)}
+			collector := NewTracePipeCollector(TracePipePath, exporter, zap.NewNop(), nil)
+			line := "tcp_retransmit_skb: family=AF_INET saddr=10.0.0.1 daddr=1.2.3.4 state=" + state
+
+			collector.processLine(line)
+
+			assert.Empty(t, exporter.events)
+		})
+	}
+}
+
+func TestTracePipeCollector_processLine_KeepsEstablishedRetransmit(t *testing.T) {
+	exporter := &mockExporter{events: make([]TCPRetransmitEvent, 0)}
+	collector := NewTracePipeCollector(TracePipePath, exporter, zap.NewNop(), nil)
+	line := "tcp_retransmit_skb: family=AF_INET saddr=10.0.0.1 daddr=10.0.0.2 state=TCP_ESTABLISHED"
+
+	collector.processLine(line)
+
+	require.Len(t, exporter.events, 1)
+}
+
 func Test_contains(t *testing.T) {
 	tests := []struct {
 		s        string
