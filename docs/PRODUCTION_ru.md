@@ -183,13 +183,17 @@ netmon использует **longest prefix match** для сопоставле
 ```yaml
 # roles.yaml
 roles:
-  - network: 10.179.64.0/22    # Общий диапазон датацентра
-    role: datacenter
-  - network: 10.179.64.32/32   # Конкретный хост побеждает для этого IP
+  - role: datacenter
+    networks: [10.179.64.0/22, 10.180.0.0/20]
+  - network: 10.179.64.32/32   # Старый одиночный формат также поддерживается
     role: s3-dwh05
 ```
 
-Для IP `10.179.64.32` роль будет `s3-dwh05` (а не `datacenter`).
+В `roles.yaml` и `locations.yaml` можно использовать одиночное поле `network`
+или список `networks`. Одновременно указывать оба поля нельзя; каждое значение
+задаётся в CIDR-формате. Для сгруппированных записей также действует longest
+prefix match.
+Для IP `10.179.64.32` победит более специфичная роль `s3-dwh05`.
 
 **Смотрите примеры конфигов:**
 - [`configs/roles.example.yaml`](../configs/roles.example.yaml)

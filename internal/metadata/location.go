@@ -26,10 +26,11 @@ type netWithLocation struct {
 }
 
 type LocationEntry struct {
-	Network  string `yaml:"network"`
-	Location string `yaml:"location"`
-	Hostname string `yaml:"hostname,omitempty"`
-	Vrf      string `yaml:"vrf,omitempty"`
+	Network  string   `yaml:"network,omitempty"`
+	Networks []string `yaml:"networks,omitempty"`
+	Location string   `yaml:"location"`
+	Hostname string   `yaml:"hostname,omitempty"`
+	Vrf      string   `yaml:"vrf,omitempty"`
 }
 
 type LocationsFile struct {
@@ -70,19 +71,9 @@ func (m *LocationMatcher) Load(path string) error {
 		return fmt.Errorf("parsing YAML: %w", err)
 	}
 
-	networks := make([]netWithLocation, 0, len(file.Locations))
-	for _, entry := range file.Locations {
-		_, network, err := net.ParseCIDR(entry.Network)
-		if err != nil {
-			return fmt.Errorf("parsing network %s: %w", entry.Network, err)
-		}
-
-		networks = append(networks, netWithLocation{
-			network:  network,
-			location: entry.Location,
-			hostname: entry.Hostname,
-			vrf:      entry.Vrf,
-		})
+	networks, err := parseLocationEntries(file.Locations)
+	if err != nil {
+		return err
 	}
 
 	// Sort by prefix length (most specific first) - like Python version
