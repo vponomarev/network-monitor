@@ -44,6 +44,7 @@ When the corresponding modules are enabled, `netmon` also exposes:
 | GET | `/api/v1/discover/top` | Discover current top-loss pairs |
 | GET | `/api/v1/loss/top?limit=N` | Return top observed loss pairs |
 | GET | `/api/v1/metadata/status` | Metadata source and polling status |
+| POST | `/api/v1/metadata/refresh` | Immediately fetch and apply HTTP metadata sources |
 | GET | `/api/v1/metadata/unknown` | Bounded inventory of IPs with unresolved role, location, or VRF |
 | GET | `/metrics/metadata/unknown` | Opt-in Prometheus per-IP unknown metadata series |
 | POST | `/api/v1/config/reload` | Reload metadata and topology files from the current config |
@@ -94,6 +95,53 @@ first successful update.
       "update_success": false,
       "entries_count": 8,
       "enabled": false
+    }
+  }
+}
+```
+
+`last_check` is the most recent HTTP attempt, including a failed one.
+`last_update` changes only after data has been validated, written, and reloaded
+successfully.
+
+### Force metadata refresh
+
+Trigger all configured HTTP metadata sources without waiting for their polling
+timers:
+
+```bash
+curl --fail-with-body -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{}' \
+  http://127.0.0.1:9876/api/v1/metadata/refresh
+```
+
+An omitted `force` defaults to `true`: even when the remote hash is unchanged,
+the local file is rewritten and the in-memory matcher is reloaded. To select
+sources or retain normal hash-based behavior:
+
+```bash
+curl --fail-with-body -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"sources":["roles","locations"],"force":false}' \
+  http://127.0.0.1:9876/api/v1/metadata/refresh
+```
+
+Each source reports `updated` or `unchanged`. If fetching, validating, writing,
+or reloading any source fails, the endpoint returns `500`; the affected source
+has status `error` and its `error` field contains the same detailed error that
+is written to the service log. Validation happens before the active file is
+replaced. Other requested sources are still attempted, so the operation is not
+transactional across sources.
+
+```json
+{
+  "sources": {
+    "roles": {
+      "status": "error",
+      "file_path": "/etc/netmon/roles.yaml",
+      "http_url": "https://metadata.example/roles.yaml",
+      "error": "validating roles metadata: role entry 0: network or networks is required"
     }
   }
 }

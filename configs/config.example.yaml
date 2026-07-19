@@ -59,6 +59,8 @@ metadata:
 # - Metrics: metadata_update_total, metadata_update_errors_total,
 #            metadata_last_update_timestamp_seconds, metadata_last_hash
 # - API: GET /api/v1/metadata/status for source status
+#        POST /api/v1/metadata/refresh to fetch configured HTTP sources now
+#        (force defaults to true; validation errors are returned as JSON)
 
 discovery:
   traceroute:

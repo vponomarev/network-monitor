@@ -585,7 +585,7 @@ func main() {
 	// Metadata status API endpoint (protected if auth token is set)
 	mux.Handle("/api/v1/metadata/", requireAuth(metadataAPI.HTTPHandler()))
 	logger.Info("Metadata API enabled",
-		zap.String("endpoint", "/api/v1/metadata/status"))
+		zap.String("endpoints", "GET /api/v1/metadata/status, POST /api/v1/metadata/refresh"))
 	if unknownTracker != nil {
 		mux.Handle("/api/v1/metadata/unknown", requireAuth(unknownTracker.APIHandler()))
 		logger.Info("Unknown metadata inventory enabled",

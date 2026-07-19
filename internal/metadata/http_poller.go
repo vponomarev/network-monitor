@@ -45,10 +45,25 @@ type HTTPPoller struct {
 	lastUpdateTime prometheus.Gauge
 	lastHashGauge  prometheus.Gauge
 
-	mu        sync.RWMutex
-	lastHash  string
-	lastCheck time.Time
-	success   bool
+	mu         sync.RWMutex
+	lastHash   string
+	lastCheck  time.Time
+	lastUpdate time.Time
+	success    bool
+	refreshMu  sync.Mutex
+}
+
+const (
+	RefreshStatusUpdated   = "updated"
+	RefreshStatusUnchanged = "unchanged"
+)
+
+// RefreshResult describes one synchronous HTTP refresh attempt.
+type RefreshResult struct {
+	Status   string `json:"status"`
+	Hash     string `json:"hash,omitempty"`
+	FilePath string `json:"file_path"`
+	HTTPURL  string `json:"http_url"`
 }
 
 // NewHTTPPoller создаёт новый poller
@@ -132,92 +147,91 @@ func (p *HTTPPoller) Run(ctx context.Context) {
 }
 
 func (p *HTTPPoller) checkAndUpdate(ctx context.Context) {
+	if _, err := p.Refresh(ctx, false); err != nil {
+		p.logger.Warn("Periodic metadata refresh failed", zap.Error(err))
+	}
+}
+
+// Refresh synchronously fetches, validates, atomically writes, and reloads one
+// metadata source. Calls from the timer and API are serialized. With force set,
+// an unchanged remote document is still written and reloaded, which repairs a
+// locally modified file.
+func (p *HTTPPoller) Refresh(ctx context.Context, force bool) (RefreshResult, error) {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
+	result := RefreshResult{
+		FilePath: p.config.FilePath,
+		HTTPURL:  p.config.URL,
+	}
 	p.logger.Debug("Checking for updates", zap.String("url", p.config.URL))
 
-	// Загрузка данных из HTTP
 	data, err := p.fetch(ctx)
 	if err != nil {
-		p.logger.Warn("Failed to fetch from HTTP",
-			zap.String("url", p.config.URL),
-			zap.Error(err))
-
-		if p.updateErrors != nil {
-			p.updateErrors.Inc()
-		}
-		return
+		refreshErr := fmt.Errorf("fetching %s: %w", p.config.URL, err)
+		p.recordRefreshFailure()
+		p.logger.Warn("Failed to fetch from HTTP", zap.Error(refreshErr))
+		return result, refreshErr
 	}
 
-	// Проверка на изменения (hash comparison)
 	hash := fmt.Sprintf("%x", sha256.Sum256(data))
+	result.Hash = hash
 
 	p.mu.RLock()
-	if hash == p.lastHash {
-		p.mu.RUnlock()
+	previousHash := p.lastHash
+	p.mu.RUnlock()
+	unchanged := hash == previousHash
+	if unchanged && !force {
+		p.recordRefreshSuccess(hash, false)
 		p.logger.Debug("No changes detected",
 			zap.String("hash", hash[:8]))
-		return
+		result.Status = RefreshStatusUnchanged
+		return result, nil
 	}
-	p.mu.RUnlock()
 
 	p.logger.Info("Changes detected, validating",
 		zap.String("url", p.config.URL),
 		zap.String("old_hash", func() string {
-			if len(p.lastHash) >= 8 {
-				return p.lastHash[:8]
+			if len(previousHash) >= 8 {
+				return previousHash[:8]
 			}
 			return "initial"
 		}()),
 		zap.String("new_hash", hash[:8]))
 
-	// Валидация через type-specific валидатор
 	if p.validator != nil {
 		if err := p.validator(data); err != nil {
-			p.logger.Error("Validation failed, skipping update",
-				zap.String("url", p.config.URL),
-				zap.Error(err))
-
-			if p.updateErrors != nil {
-				p.updateErrors.Inc()
-			}
-			return
+			refreshErr := fmt.Errorf("validating %s metadata: %w", p.config.Name, err)
+			p.recordRefreshFailure()
+			p.logger.Error("Validation failed, skipping update", zap.Error(refreshErr))
+			return result, refreshErr
 		}
 		p.logger.Debug("Validation passed", zap.String("url", p.config.URL))
 	}
 
-	// Атомарная запись в файл
 	if err := p.atomicWrite(data); err != nil {
-		p.logger.Error("Failed to write file",
-			zap.String("path", p.config.FilePath),
-			zap.Error(err))
-
-		if p.updateErrors != nil {
-			p.updateErrors.Inc()
-		}
-		return
+		refreshErr := fmt.Errorf("writing %s: %w", p.config.FilePath, err)
+		p.recordRefreshFailure()
+		p.logger.Error("Failed to write file", zap.Error(refreshErr))
+		return result, refreshErr
 	}
 
 	p.logger.Debug("File written successfully",
 		zap.String("path", p.config.FilePath))
 
-	// Reload в памяти
 	if p.reload != nil {
 		if err := p.reload(); err != nil {
-			p.logger.Error("Reload failed, file updated but memory not refreshed",
-				zap.String("path", p.config.FilePath),
-				zap.Error(err))
-			// Не считаем это ошибкой update - файл уже записан
+			refreshErr := fmt.Errorf("reloading %s metadata after writing %s: %w", p.config.Name, p.config.FilePath, err)
+			p.recordRefreshFailure()
+			p.logger.Error("Reload failed, file updated but memory not refreshed", zap.Error(refreshErr))
+			return result, refreshErr
 		} else {
 			p.logger.Debug("Memory reload successful",
 				zap.String("path", p.config.FilePath))
 		}
 	}
 
-	// Обновление состояния
-	p.mu.Lock()
-	p.lastHash = hash
-	p.lastCheck = time.Now()
-	p.success = true
-	p.mu.Unlock()
+	p.recordRefreshSuccess(hash, true)
 
 	// Метрики
 	if p.updateCounter != nil {
@@ -235,6 +249,29 @@ func (p *HTTPPoller) checkAndUpdate(ctx context.Context) {
 		zap.String("url", p.config.URL),
 		zap.String("hash", hash[:8]),
 		zap.String("path", p.config.FilePath))
+	result.Status = RefreshStatusUpdated
+	return result, nil
+}
+
+func (p *HTTPPoller) recordRefreshSuccess(hash string, updated bool) {
+	p.mu.Lock()
+	p.lastHash = hash
+	p.lastCheck = time.Now()
+	if updated {
+		p.lastUpdate = p.lastCheck
+	}
+	p.success = true
+	p.mu.Unlock()
+}
+
+func (p *HTTPPoller) recordRefreshFailure() {
+	p.mu.Lock()
+	p.lastCheck = time.Now()
+	p.success = false
+	p.mu.Unlock()
+	if p.updateErrors != nil {
+		p.updateErrors.Inc()
+	}
 }
 
 func (p *HTTPPoller) fetch(ctx context.Context) ([]byte, error) {
@@ -276,10 +313,10 @@ func (p *HTTPPoller) atomicWrite(data []byte) error {
 }
 
 // GetStatus возвращает статус poller
-func (p *HTTPPoller) GetStatus() (lastCheck time.Time, hash string, success bool) {
+func (p *HTTPPoller) GetStatus() (lastCheck, lastUpdate time.Time, hash string, success bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.lastCheck, p.lastHash, p.success
+	return p.lastCheck, p.lastUpdate, p.lastHash, p.success
 }
 
 // hashFloat конвертирует hash в float64 для метрики
