@@ -10,6 +10,29 @@ address from `global.metrics_addr` and `global.metrics_port`.
 | GET | `/health` | Never | Process liveness |
 | GET | `/ready` | Never | Collector readiness; 503 before eBPF startup |
 | GET | `/metrics` | Optional bearer | Prometheus exposition |
+| GET | `/api/v1/version` | Optional bearer | Running binary version and build identity |
+
+Query the process that is actually serving traffic:
+
+```bash
+curl --fail http://127.0.0.1:9876/api/v1/version
+```
+
+```json
+{
+  "service": "netmon",
+  "version": "v2.5.1",
+  "git_commit": "5009d3f",
+  "build_time": "2026-07-19T00:00:00Z",
+  "go_version": "go1.24.4",
+  "goos": "linux",
+  "goarch": "amd64"
+}
+```
+
+The same identity is exported for inventory queries as
+`netmon_build_info{version,git_commit,build_time,go_version} 1` or
+`conntrack_build_info{version,git_commit,build_time,go_version} 1`.
 
 ## Netmon API
 
@@ -104,8 +127,8 @@ Connection list filters are `limit` (default `100`), `state`, and `direction`.
 
 ## Standalone conntrack
 
-The v2.2.0 standalone service intentionally exposes only `/health`, `/ready`,
-and `/metrics`. The `/api/v1/conntrack/*` handlers above belong to netmon's
+The standalone service exposes `/health`, `/ready`, `/metrics`, and
+`/api/v1/version`. The `/api/v1/conntrack/*` handlers above belong to netmon's
 combined-mode wiring and are not a standalone delivery contract.
 
 ## Authentication
@@ -125,12 +148,13 @@ curl --fail -X POST \
 ```
 
 Netmon protects `/metrics` and `/api/*`. Standalone conntrack protects
-`/metrics`; health probes remain unauthenticated.
+`/metrics` and `/api/v1/version`; health probes remain unauthenticated.
 
 ## Principal metrics
 
 Netmon exports `netmon_tcp_loss_total`, collector health/drop counters,
-cardinality gauges/counters, and metadata polling metrics. Standalone conntrack
+cardinality gauges/counters, metadata polling metrics, and `netmon_build_info`.
+Standalone conntrack exports `conntrack_build_info` and:
 exports:
 
 - `conntrack_connections{state,direction}`;

@@ -18,14 +18,26 @@ the Go tracker, state machine, Prometheus collector, and syslog writer. Failure
 to load or read the production eBPF source is fatal; the service does not fall
 back to simulated data.
 
-Conntrack currently runs as a separate binary and systemd unit. It exposes only
-the following HTTP endpoints:
+Conntrack currently runs as a separate binary and systemd unit. It exposes the
+following HTTP endpoints:
 
 | Endpoint | Meaning |
 |---|---|
 | `/health` | Process liveness; returns 200 while HTTP is serving |
 | `/ready` | Returns 200 only after eBPF attachment and event reader startup |
 | `/metrics` | Prometheus metrics; bearer-protected when `auth_token` is set |
+| `/api/v1/version` | Running version, commit, build time, toolchain, and architecture |
+
+Inspect the running build through HTTP or Prometheus:
+
+```bash
+curl --fail http://127.0.0.1:9876/api/v1/version
+curl --fail http://127.0.0.1:9876/metrics | grep '^conntrack_build_info'
+```
+
+When `auth_token` is set, both endpoints require the bearer token. The local
+binary can also be inspected without starting the service with
+`conntrack --version`.
 
 The older `/api/v1/conntrack/*` handlers are not part of the standalone
 production service.

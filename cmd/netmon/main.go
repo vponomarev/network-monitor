@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/vponomarev/network-monitor/internal/bandwidth"
+	"github.com/vponomarev/network-monitor/internal/buildinfo"
 	"github.com/vponomarev/network-monitor/internal/collector"
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/internal/conntrack"
@@ -38,10 +39,20 @@ var (
 )
 
 func main() {
+	buildInfo := buildinfo.New("netmon", Version, GitCommit, BuildTime)
+
 	// Parse command line flags
 	enableTracing := flag.Bool("enable-tracing", false, "Automatically enable TCP retransmit tracing (requires root)")
 	configPath := flag.String("config", "", "Path to configuration file (overrides NETMON_CONFIG env var)")
+	showVersion := flag.Bool("version", false, "Print version and build information")
 	flag.Parse()
+	if *showVersion {
+		if err := buildInfo.WriteText(os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to print version: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Load configuration
 	if *configPath == "" {
@@ -160,6 +171,7 @@ func main() {
 	)
 	exporter.SetTopology(networkTopology)
 	exporter.SetTTL(cfg.TTL())
+	prometheus.MustRegister(buildInfo.Collector())
 	// Periodic TTL cleanup: the raw CounterVec is registered (not the exporter),
 	// so scrapes never trigger Collect/cleanupOld — run a janitor instead.
 	exporter.StartJanitor(ctx, time.Minute)
@@ -189,7 +201,12 @@ func main() {
 		)
 		locationsPoller.SetValidator(metadata.LocationsValidator)
 		locationsPoller.SetReloadFunc(func() error {
-			return locationMatcher.Reload(cfg.Metadata.Locations.Path)
+			return reloadLocationMetadata(
+				cfg.Metadata.Locations.Path,
+				locationMatcher,
+				roleMatcher,
+				exporter,
+			)
 		})
 		metadataAPI.RegisterPoller("locations", locationsPoller)
 		go locationsPoller.Run(ctx)
@@ -213,7 +230,12 @@ func main() {
 		)
 		rolesPoller.SetValidator(metadata.RolesValidator)
 		rolesPoller.SetReloadFunc(func() error {
-			return roleMatcher.Reload(cfg.Metadata.Roles.Path)
+			return reloadRoleMetadata(
+				cfg.Metadata.Roles.Path,
+				locationMatcher,
+				roleMatcher,
+				exporter,
+			)
 		})
 		metadataAPI.RegisterPoller("roles", rolesPoller)
 		go rolesPoller.Run(ctx)
@@ -508,6 +530,10 @@ func main() {
 	mux.HandleFunc("/health", healthState.LivenessHandler())
 	mux.HandleFunc("/ready", healthState.ReadinessHandler())
 
+	// Running build information (protected with the other API endpoints).
+	mux.Handle("/api/v1/version", requireAuth(buildInfo.Handler()))
+	logger.Info("Version API enabled", zap.String("endpoint", "GET /api/v1/version"))
+
 	// Discovery API endpoints (protected if auth token is set)
 	if discoveryService != nil {
 		discoveryMux := discoveryService.HTTPHandler()
@@ -652,4 +678,35 @@ func registerMetadataSources(api *metadata.MetadataStatusAPI, cfg *config.Config
 	topologySource.Path = cfg.Topology.Path
 	register("topology", topologySource,
 		cfg.Topology.Enabled && cfg.Metadata.Topology.UpdateSource != nil)
+}
+
+// reloadLocationMetadata refreshes both the matcher and every active loss
+// series. Without the exporter refresh, events observed before and after an
+// HTTP metadata update are exposed as separate Prometheus series until TTL
+// cleanup removes the old label set.
+func reloadLocationMetadata(
+	path string,
+	locationMatcher *metadata.LocationMatcher,
+	roleMatcher *metadata.RoleMatcher,
+	exporter *metrics.Exporter,
+) error {
+	if err := locationMatcher.Reload(path); err != nil {
+		return err
+	}
+	exporter.SetMatchers(locationMatcher, roleMatcher)
+	return nil
+}
+
+// reloadRoleMetadata applies the same reconciliation for role updates.
+func reloadRoleMetadata(
+	path string,
+	locationMatcher *metadata.LocationMatcher,
+	roleMatcher *metadata.RoleMatcher,
+	exporter *metrics.Exporter,
+) error {
+	if err := roleMatcher.Reload(path); err != nil {
+		return err
+	}
+	exporter.SetMatchers(locationMatcher, roleMatcher)
+	return nil
 }

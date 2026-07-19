@@ -14,8 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
+	"github.com/vponomarev/network-monitor/internal/buildinfo"
 	"github.com/vponomarev/network-monitor/internal/config"
 	"github.com/vponomarev/network-monitor/internal/conntrack"
 	"github.com/vponomarev/network-monitor/pkg/embedded"
@@ -44,6 +46,7 @@ var (
 )
 
 func main() {
+	buildInfo := buildinfo.New("conntrack", Version, GitCommit, BuildTime)
 	rootCmd := &cobra.Command{
 		Use:     "conntrack",
 		Short:   "Connection Tracker",
@@ -51,6 +54,11 @@ func main() {
 		Version: Version,
 		RunE:    run,
 	}
+	rootCmd.SetVersionTemplate(fmt.Sprintf(
+		"conntrack %s (commit=%s, built=%s, go=%s, %s/%s)\n",
+		buildInfo.Version, buildInfo.GitCommit, buildInfo.BuildTime,
+		buildInfo.GoVersion, buildInfo.GOOS, buildInfo.GOARCH,
+	))
 
 	// Основные флаги
 	rootCmd.Flags().StringVarP(&ebpfProgram, "ebpf-prog", "p", "", "Path to eBPF program object file")
@@ -189,17 +197,22 @@ func runServices(ctx context.Context, tracker *conntrack.Tracker, cfg *config.Co
 	serviceCtx, stopServices := context.WithCancel(ctx)
 	defer stopServices()
 	mux := http.NewServeMux()
-	metricsHandler := promhttp.Handler()
-	if cfg.Global.AuthToken != "" {
-		metricsHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	requireAuth := func(handler http.Handler) http.Handler {
+		if cfg.Global.AuthToken == "" {
+			return handler
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer "+cfg.Global.AuthToken {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			promhttp.Handler().ServeHTTP(w, r)
+			handler.ServeHTTP(w, r)
 		})
 	}
-	mux.Handle("/metrics", metricsHandler)
+	buildInfo := buildinfo.New("conntrack", Version, GitCommit, BuildTime)
+	prometheus.MustRegister(buildInfo.Collector())
+	mux.Handle("/metrics", requireAuth(promhttp.Handler()))
+	mux.Handle("/api/v1/version", requireAuth(buildInfo.Handler()))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))

@@ -108,6 +108,7 @@ sudo systemctl enable --now conntrack
 
 curl --fail http://127.0.0.1:9876/ready
 curl --fail http://127.0.0.1:9876/metrics
+curl --fail http://127.0.0.1:9876/api/v1/version
 ```
 
 Конфигурация создаётся один раз в `/etc/conntrack/config.yaml` и сохраняется при
