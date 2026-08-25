@@ -13,41 +13,19 @@ import (
 type SyslogFacility int
 
 const (
-	// LOG_USER is user-level messages
-	LOG_USER SyslogFacility = 8
-	// LOG_DAEMON is daemon/facility
-	LOG_DAEMON SyslogFacility = 24
-	// LOG_LOCAL0-7 are local facilities
-	LOG_LOCAL0 SyslogFacility = 128
-	LOG_LOCAL1 SyslogFacility = 136
-	LOG_LOCAL2 SyslogFacility = 144
-	LOG_LOCAL3 SyslogFacility = 152
-	LOG_LOCAL4 SyslogFacility = 160
-	LOG_LOCAL5 SyslogFacility = 168
-	LOG_LOCAL6 SyslogFacility = 176
-	LOG_LOCAL7 SyslogFacility = 184
-)
-
-// SyslogPriority represents syslog priority
-type SyslogPriority int
-
-const (
-	// LOG_EMERG - system is unusable
-	LOG_EMERG SyslogPriority = 0
-	// LOG_ALERT - action must be taken immediately
-	LOG_ALERT SyslogPriority = 1
-	// LOG_CRIT - critical conditions
-	LOG_CRIT SyslogPriority = 2
-	// LOG_ERR - error conditions
-	LOG_ERR SyslogPriority = 3
-	// LOG_WARNING - warning conditions
-	LOG_WARNING SyslogPriority = 4
-	// LOG_NOTICE - normal but significant condition
-	LOG_NOTICE SyslogPriority = 5
-	// LOG_INFO - informational messages
-	LOG_INFO SyslogPriority = 6
-	// LOG_DEBUG - debug-level messages
-	LOG_DEBUG SyslogPriority = 7
+	// LogUser is the user-level syslog facility.
+	LogUser SyslogFacility = 8
+	// LogDaemon is the system-daemon syslog facility.
+	LogDaemon SyslogFacility = 24
+	// LogLocal0 through LogLocal7 are locally defined syslog facilities.
+	LogLocal0 SyslogFacility = 128
+	LogLocal1 SyslogFacility = 136
+	LogLocal2 SyslogFacility = 144
+	LogLocal3 SyslogFacility = 152
+	LogLocal4 SyslogFacility = 160
+	LogLocal5 SyslogFacility = 168
+	LogLocal6 SyslogFacility = 176
+	LogLocal7 SyslogFacility = 184
 )
 
 // SyslogConfig holds syslog writer configuration

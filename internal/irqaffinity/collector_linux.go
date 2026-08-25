@@ -39,6 +39,9 @@ type Collector struct {
 	prevDrop                                       map[string]uint64
 	prevIRQ                                        map[int]uint64
 	prevAffinity                                   map[string]affinitySample
+	prevNICNUMA                                    map[string]int
+	prevIRQs                                       map[string]map[int]struct{}
+	prevDropKinds                                  map[string]map[string]struct{}
 	prevAt                                         time.Time
 	info, crossNUMA, irqBusy, risk, anomaly, drops *prometheus.GaugeVec
 	irqRate, dropRate, lastAffinityChange          *prometheus.GaugeVec
@@ -60,7 +63,7 @@ func New(options Options, logger *zap.Logger, reg prometheus.Registerer) *Collec
 	if options.ProcRoot == "" {
 		options.ProcRoot = "/proc"
 	}
-	c := &Collector{options: options, logger: logger.Named("irq_affinity"), prevCPU: map[int]cpuSample{}, prevDrop: map[string]uint64{}, prevIRQ: map[int]uint64{}, prevAffinity: map[string]affinitySample{},
+	c := &Collector{options: options, logger: logger.Named("irq_affinity"), prevCPU: map[int]cpuSample{}, prevDrop: map[string]uint64{}, prevIRQ: map[int]uint64{}, prevAffinity: map[string]affinitySample{}, prevNICNUMA: map[string]int{}, prevIRQs: map[string]map[int]struct{}{}, prevDropKinds: map[string]map[string]struct{}{},
 		info:                 prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_info", Help: "NIC NUMA placement information."}, []string{"interface", "nic_numa"}),
 		crossNUMA:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_cross_numa", Help: "Whether an IRQ targets CPUs outside the NIC NUMA node."}, []string{"interface", "irq"}),
 		irqBusy:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_target_cpu_utilization_ratio", Help: "Maximum utilization of CPUs targeted by an IRQ."}, []string{"interface", "irq"}),
@@ -107,7 +110,6 @@ func (c *Collector) collect() error {
 		return err
 	}
 	util := cpuUtilization(c.prevCPU, cpuNow)
-	c.prevCPU = cpuNow
 	irqNow, err := readIRQCounts(filepath.Join(c.options.ProcRoot, "interrupts"))
 	if err != nil {
 		return fmt.Errorf("reading interrupts: %w", err)
@@ -122,15 +124,18 @@ func (c *Collector) collect() error {
 	if err != nil {
 		return fmt.Errorf("reading interfaces: %w", err)
 	}
-	c.info.Reset()
-	c.crossNUMA.Reset()
-	c.irqBusy.Reset()
-	c.risk.Reset()
-	c.anomaly.Reset()
-	c.drops.Reset()
-	c.irqRate.Reset()
-	c.dropRate.Reset()
+	cpuNodes := make(map[int]int, len(cpuNow))
+	for cpu := range cpuNow {
+		node, err := cpuNUMA(c.options.SysRoot, cpu)
+		if err == nil {
+			cpuNodes[cpu] = node
+		}
+	}
 	currentAffinity := make(map[string]affinitySample)
+	currentNICNUMA := make(map[string]int)
+	currentIRQs := make(map[string]map[int]struct{})
+	currentDrop := make(map[string]uint64)
+	currentDropKinds := make(map[string]map[string]struct{})
 	monitored := 0
 	for _, entry := range interfaces {
 		name := entry.Name()
@@ -144,6 +149,9 @@ func (c *Collector) collect() error {
 			continue
 		}
 		monitored++
+		currentNICNUMA[name] = numa
+		currentIRQs[name] = make(map[int]struct{}, len(irqs))
+		currentDropKinds[name] = make(map[string]struct{}, 3)
 		c.info.WithLabelValues(name, strconv.Itoa(numa)).Set(1)
 		for _, scope := range []string{"same_numa", "cross_numa"} {
 			c.affinityChanges.WithLabelValues(name, scope)
@@ -167,8 +175,7 @@ func (c *Collector) collect() error {
 			maxRemoteBusy := float64(0)
 			nodes := make(map[int]struct{})
 			for _, cpu := range cpus {
-				node, _ := cpuNUMA(c.options.SysRoot, cpu)
-				if node >= 0 {
+				if node, ok := cpuNodes[cpu]; ok {
 					nodes[node] = struct{}{}
 					if node != numa {
 						cross = true
@@ -182,6 +189,7 @@ func (c *Collector) collect() error {
 				}
 			}
 			irqLabel := strconv.Itoa(irq)
+			currentIRQs[name][irq] = struct{}{}
 			affinityKey := name + "\x00" + irqLabel
 			sample := affinitySample{cpus: intSetKey(cpus), nodes: intMapKey(nodes), cross: cross}
 			currentAffinity[affinityKey] = sample
@@ -224,18 +232,66 @@ func (c *Collector) collect() error {
 			} else {
 				c.dropRate.WithLabelValues(name, kind).Set(0)
 			}
-			c.prevDrop[key] = value
+			currentDrop[key] = value
+			currentDropKinds[name][kind] = struct{}{}
 			c.drops.WithLabelValues(name, kind).Set(float64(value))
 		}
 		c.risk.WithLabelValues(name).Set(boolFloat(interfaceRisk))
 		c.anomaly.WithLabelValues(name).Set(boolFloat(interfaceRisk && dropIncreased))
 	}
+	c.deleteStaleSeries(currentNICNUMA, currentIRQs, currentDropKinds)
+	c.prevCPU = cpuNow
 	c.prevIRQ = irqNow
 	c.prevAffinity = currentAffinity
+	c.prevNICNUMA = currentNICNUMA
+	c.prevIRQs = currentIRQs
+	c.prevDrop = currentDrop
+	c.prevDropKinds = currentDropKinds
 	c.prevAt = now
 	c.monitored.Set(float64(monitored))
 	c.up.Set(1)
 	return nil
+}
+
+func (c *Collector) deleteStaleSeries(currentNICNUMA map[string]int, currentIRQs map[string]map[int]struct{}, currentDropKinds map[string]map[string]struct{}) {
+	for name, oldNUMA := range c.prevNICNUMA {
+		newNUMA, exists := currentNICNUMA[name]
+		if !exists || newNUMA != oldNUMA {
+			c.info.DeleteLabelValues(name, strconv.Itoa(oldNUMA))
+		}
+		if exists {
+			continue
+		}
+		c.risk.DeleteLabelValues(name)
+		c.anomaly.DeleteLabelValues(name)
+		for _, scope := range []string{"same_numa", "cross_numa"} {
+			c.affinityChanges.DeleteLabelValues(name, scope)
+			c.lastAffinityChange.DeleteLabelValues(name, scope)
+		}
+		for _, direction := range []string{"enter", "leave"} {
+			c.crossNUMATransitions.DeleteLabelValues(name, direction)
+		}
+	}
+	for name, oldIRQs := range c.prevIRQs {
+		for irq := range oldIRQs {
+			if _, exists := currentIRQs[name][irq]; exists {
+				continue
+			}
+			irqLabel := strconv.Itoa(irq)
+			c.crossNUMA.DeleteLabelValues(name, irqLabel)
+			c.irqBusy.DeleteLabelValues(name, irqLabel)
+			c.irqRate.DeleteLabelValues(name, irqLabel)
+		}
+	}
+	for name, oldKinds := range c.prevDropKinds {
+		for kind := range oldKinds {
+			if _, exists := currentDropKinds[name][kind]; exists {
+				continue
+			}
+			c.drops.DeleteLabelValues(name, kind)
+			c.dropRate.DeleteLabelValues(name, kind)
+		}
+	}
 }
 
 func intSetKey(values []int) string {
@@ -274,7 +330,13 @@ func readCPUStats(path string) (map[int]cpuSample, error) {
 			continue
 		}
 		var total, idle uint64
-		for i := 1; i < len(fields); i++ {
+		// /proc/stat guest and guest_nice are already included in user and nice.
+		// Summing them again understates utilization on virtualization hosts.
+		fieldCount := len(fields)
+		if fieldCount > 9 {
+			fieldCount = 9
+		}
+		for i := 1; i < fieldCount; i++ {
 			v, _ := strconv.ParseUint(fields[i], 10, 64)
 			total += v
 			if i == 4 || i == 5 {

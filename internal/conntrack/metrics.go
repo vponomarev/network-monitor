@@ -188,7 +188,8 @@ func (mc *MetricsCollector) OnConnectionEvent(conn *Connection, event Connection
 func (mc *MetricsCollector) UpdateStateMetrics(stats Stats) {
 	mc.connectionsTotal.WithLabelValues("pending_outgoing", "outgoing").Set(float64(stats.PendingOutgoing))
 	mc.connectionsTotal.WithLabelValues("pending_incoming", "incoming").Set(float64(stats.PendingIncoming))
-	mc.connectionsTotal.WithLabelValues("established", "").Set(float64(stats.Established))
+	mc.connectionsTotal.WithLabelValues("established", "outgoing").Set(float64(stats.EstablishedOutgoing))
+	mc.connectionsTotal.WithLabelValues("established", "incoming").Set(float64(stats.EstablishedIncoming))
 }
 
 // UpdateDroppedMetrics updates the dropped events metric

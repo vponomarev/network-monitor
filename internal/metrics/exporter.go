@@ -293,6 +293,42 @@ func (e *Exporter) labelsForWithMatchers(src, dst string, locationMatcher *metad
 	return values
 }
 
+func resolveEndpoint(ip string, locationMatcher *metadata.LocationMatcher, roleMatcher *metadata.RoleMatcher) metadata.EndpointMetadata {
+	return metadata.EndpointMetadata{
+		Location: locationMatcher.Lookup(ip),
+		Role:     roleMatcher.GetRole(ip),
+	}
+}
+
+func (e *Exporter) labelsForResolved(srcIP, dstIP string, src, dst metadata.EndpointMetadata) []string {
+	values := make([]string, 0, len(e.labelNames))
+	for _, label := range e.labelNames {
+		switch label {
+		case "src_ip":
+			values = append(values, srcIP)
+		case "dst_ip":
+			values = append(values, dstIP)
+		case "src_location":
+			values = append(values, src.Location.Location)
+		case "dst_location":
+			values = append(values, dst.Location.Location)
+		case "src_role":
+			values = append(values, src.Role)
+		case "dst_role":
+			values = append(values, dst.Role)
+		case "src_network":
+			values = append(values, getNetwork(srcIP))
+		case "dst_network":
+			values = append(values, getNetwork(dstIP))
+		case "src_vrf":
+			values = append(values, src.Location.VRF)
+		case "dst_vrf":
+			values = append(values, dst.Location.VRF)
+		}
+	}
+	return values
+}
+
 // seriesKeyOf builds the internal map key identifying a series.
 func seriesKeyOf(labels []string) string {
 	return strings.Join(labels, seriesKeySep)
@@ -315,6 +351,32 @@ func (e *Exporter) RecordRetransmit(srcIP, dstIP string) {
 		// holding the lock; this is rare and prevents resurrecting stale labels.
 		labels = e.labelsFor(srcIP, dstIP)
 	}
+	e.recordRetransmitLocked(srcIP, dstIP, labels)
+}
+
+// RecordRetransmitResolved records an event and returns the endpoint metadata
+// used for its labels. Callers can reuse it for auxiliary diagnostics.
+func (e *Exporter) RecordRetransmitResolved(srcIP, dstIP string) (metadata.EndpointMetadata, metadata.EndpointMetadata) {
+	e.mu.RLock()
+	locationMatcher, roleMatcher, matcherVersion := e.locationMatcher, e.roleMatcher, e.matcherVersion
+	e.mu.RUnlock()
+	src := resolveEndpoint(srcIP, locationMatcher, roleMatcher)
+	dst := resolveEndpoint(dstIP, locationMatcher, roleMatcher)
+	labels := e.labelsForResolved(srcIP, dstIP, src, dst)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if matcherVersion != e.matcherVersion {
+		src = resolveEndpoint(srcIP, e.locationMatcher, e.roleMatcher)
+		dst = resolveEndpoint(dstIP, e.locationMatcher, e.roleMatcher)
+		labels = e.labelsForResolved(srcIP, dstIP, src, dst)
+	}
+	e.recordRetransmitLocked(srcIP, dstIP, labels)
+	return src, dst
+}
+
+// recordRetransmitLocked updates the bounded series map. Caller holds e.mu.
+func (e *Exporter) recordRetransmitLocked(srcIP, dstIP string, labels []string) {
 	key := seriesKeyOf(labels)
 
 	data, ok := e.series[key]

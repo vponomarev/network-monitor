@@ -110,11 +110,24 @@ func (t *UnknownTracker) ObservePair(srcIP, dstIP string) {
 	t.observeIP(dstIP, "dst")
 }
 
+// ObservePairResolved records both endpoints using metadata already resolved
+// by the loss exporter, avoiding duplicate longest-prefix scans on each event.
+func (t *UnknownTracker) ObservePairResolved(srcIP, dstIP string, src, dst EndpointMetadata) {
+	t.observeResolvedIP(srcIP, "src", missingFromMetadata(src))
+	t.observeResolvedIP(dstIP, "dst", missingFromMetadata(dst))
+}
+
 func (t *UnknownTracker) observeIP(ip, direction string) {
 	if net.ParseIP(ip) == nil {
 		return
 	}
-	missing := t.missingFor(ip)
+	t.observeResolvedIP(ip, direction, t.missingFor(ip))
+}
+
+func (t *UnknownTracker) observeResolvedIP(ip, direction string, missing []string) {
+	if net.ParseIP(ip) == nil {
+		return
+	}
 	now := time.Now()
 
 	t.mu.Lock()
@@ -150,15 +163,21 @@ func (t *UnknownTracker) observeIP(ip, direction string) {
 }
 
 func (t *UnknownTracker) missingFor(ip string) []string {
+	return missingFromMetadata(EndpointMetadata{
+		Location: t.locations.Lookup(ip),
+		Role:     t.roles.GetRole(ip),
+	})
+}
+
+func missingFromMetadata(endpoint EndpointMetadata) []string {
 	missing := make([]string, 0, len(unknownAttributes))
-	location := t.locations.Lookup(ip)
-	if t.roles.GetRole(ip) == "unknown" {
+	if endpoint.Role == "unknown" {
 		missing = append(missing, UnknownRole)
 	}
-	if location.Location == "unknown" {
+	if endpoint.Location.Location == "unknown" {
 		missing = append(missing, UnknownLocation)
 	}
-	if location.VRF == "unknown" {
+	if endpoint.Location.VRF == "unknown" {
 		missing = append(missing, UnknownVRF)
 	}
 	return missing

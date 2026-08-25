@@ -28,3 +28,11 @@ func TestUpdateDroppedMetricsConvertsAbsoluteValuesToCounterDeltas(t *testing.T)
 	collector.UpdateDroppedMetrics("ringbuf_full", 2)
 	require.Equal(t, float64(15), testutil.ToFloat64(metric))
 }
+
+func TestUpdateStateMetricsUsesConcreteEstablishedDirections(t *testing.T) {
+	collector := NewMetricsCollectorWithRegisterer(zap.NewNop(), prometheus.NewRegistry())
+	collector.UpdateStateMetrics(Stats{EstablishedOutgoing: 3, EstablishedIncoming: 2})
+
+	require.Equal(t, float64(3), testutil.ToFloat64(collector.connectionsTotal.WithLabelValues("established", "outgoing")))
+	require.Equal(t, float64(2), testutil.ToFloat64(collector.connectionsTotal.WithLabelValues("established", "incoming")))
+}

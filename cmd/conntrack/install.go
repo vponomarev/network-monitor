@@ -237,6 +237,7 @@ func checkWritePermissions(dir string) error {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 	testFile := filepath.Join(dir, ".conntrack-install-test")
+	// #nosec G306 -- this disposable probe contains no data and is removed below.
 	if err := os.WriteFile(testFile, []byte(""), 0644); err != nil {
 		return fmt.Errorf("cannot write to %s: %w", dir, err)
 	}

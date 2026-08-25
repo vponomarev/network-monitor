@@ -179,6 +179,7 @@ func main() {
 		cancel()
 	}
 	var discoveryService *discovery.DiscoveryService
+	var discoveryMu sync.RWMutex
 
 	// Create metrics exporter with cardinality controls.
 	exporter := metrics.NewExporterWithConfig(
@@ -365,8 +366,11 @@ func main() {
 		}
 
 		exporter.SetMatchers(locationMatcher, roleMatcher)
-		if discoveryService != nil {
-			discoveryService.SetTopology(networkTopology)
+		discoveryMu.RLock()
+		service := discoveryService
+		discoveryMu.RUnlock()
+		if service != nil {
+			service.SetTopology(networkTopology)
 		}
 		if unknownTracker != nil {
 			unknownTracker.Reconcile()
@@ -434,7 +438,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		discoveryService = discovery.NewDiscoveryService(
+		service := discovery.NewDiscoveryService(
 			tracerouter,
 			cache,
 			lossTracker,
@@ -442,10 +446,13 @@ func main() {
 			cfg.Discovery.Traceroute.Mode,
 			interval,
 		)
-		discoveryService.SetMetrics(discovery.NewMetrics(prometheus.DefaultRegisterer, 1000))
-		discoveryService.SetTopology(networkTopology)
-		discoveryService.StartPeriodicDiscovery(ctx)
-		retransmits.discovery = discoveryService
+		service.SetMetrics(discovery.NewMetrics(prometheus.DefaultRegisterer, 1000))
+		service.SetTopology(networkTopology)
+		service.StartPeriodicDiscovery(ctx)
+		discoveryMu.Lock()
+		discoveryService = service
+		discoveryMu.Unlock()
+		retransmits.discovery = service
 
 		logger.Info("Discovery service initialized",
 			zap.Int("top_n", cfg.Discovery.Traceroute.TopN),
@@ -655,7 +662,7 @@ func main() {
 
 	go func() {
 		logger.Info("Starting HTTP server", zap.Int("port", cfg.Global.MetricsPort))
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			// The HTTP server (metrics + API) is critical — bind failures etc.
 			// must take down the process.
 			logger.Error("FATAL: HTTP server error", zap.Error(err))

@@ -71,6 +71,7 @@ func WriteEBPFToFile(path string) error {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
 
+	// #nosec G306 -- packaged eBPF objects are intentionally world-readable.
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -86,6 +87,7 @@ func WriteConfigToFile(path string) error {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
 
+	// #nosec G306 -- the generated sample configuration contains no secrets.
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -101,6 +103,7 @@ func WriteSystemdUnitToFile(path string) error {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
 
+	// #nosec G306 -- systemd unit files must be readable by the service manager.
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -121,6 +124,7 @@ func ExportEBPFToFile(path string) error {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
 
+	// #nosec G306 -- exported eBPF objects are intentionally world-readable.
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("writing eBPF file: %w", err)
 	}

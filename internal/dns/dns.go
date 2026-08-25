@@ -100,8 +100,8 @@ func (m *Monitor) queryAll(ctx context.Context, domains []string) {
 func (m *Monitor) query(ctx context.Context, domain string) *QueryResult {
 	start := time.Now()
 
-	// Use system resolver
-	ips, err := net.LookupIP(domain)
+	// Use the system resolver while preserving cancellation and deadlines.
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", domain)
 	latency := time.Since(start)
 
 	result := &QueryResult{

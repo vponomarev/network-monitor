@@ -16,10 +16,12 @@ type retransmitRecorder struct {
 
 func (r *retransmitRecorder) RecordRetransmit(srcIP, dstIP string) {
 	if r.unknown != nil {
-		r.unknown.ObservePair(srcIP, dstIP)
+		src, dst := r.exporter.RecordRetransmitResolved(srcIP, dstIP)
+		r.unknown.ObservePairResolved(srcIP, dstIP, src, dst)
+	} else {
+		r.exporter.RecordRetransmit(srcIP, dstIP)
 	}
 	if r.discovery != nil {
 		r.discovery.RecordLoss(srcIP, dstIP)
 	}
-	r.exporter.RecordRetransmit(srcIP, dstIP)
 }

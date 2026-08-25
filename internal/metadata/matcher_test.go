@@ -86,12 +86,15 @@ func TestLocationMatcher_GetHostname(t *testing.T) {
 	matcher := NewEmptyLocationMatcher(newTestMatcherLogger(t))
 	matcher.networks = []netWithLocation{
 		{network: mustParseCIDR("10.179.65.31/32"), location: "IX-M5-SM13", hostname: "dwh-lb-01"},
+		{network: mustParseCIDR("10.179.65.32/32"), location: "unknown", hostname: "dwh-lb-02"},
 		{network: mustParseCIDR("10.179.64.0/22"), location: "DWH"},
 	}
 
 	// Test with hostname
 	hostname := matcher.GetHostname("10.179.65.31")
 	assert.Equal(t, "dwh-lb-01", hostname)
+	hostname = matcher.GetHostname("10.179.65.32")
+	assert.Equal(t, "dwh-lb-02", hostname)
 
 	// Test without hostname (returns location)
 	hostname = matcher.GetHostname("10.179.64.32")

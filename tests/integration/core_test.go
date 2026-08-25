@@ -203,7 +203,7 @@ func TestConntrack_Tracker_Integration(t *testing.T) {
 		SYNTimeout:      30 * time.Second,
 		Syslog: conntrack.SyslogConfig{
 			Tag:      "conntrack-test",
-			Facility: conntrack.LOG_LOCAL0,
+			Facility: conntrack.LogLocal0,
 		},
 	}
 

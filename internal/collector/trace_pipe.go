@@ -263,6 +263,7 @@ func EnableTracepoint(enablePath string) error {
 	}
 
 	// Write "1" to enable the tracepoint
+	// #nosec G306 -- this writes a kernel tracefs control node, not a new file.
 	if err := os.WriteFile(enablePath, []byte("1"), 0644); err != nil {
 		return fmt.Errorf("enabling tracepoint: %w (requires root privileges)", err)
 	}

@@ -12,9 +12,10 @@ import (
 
 // LocationMatcher provides best-match location lookup by IP
 type LocationMatcher struct {
-	mu       sync.RWMutex
-	networks []netWithLocation
-	logger   *zap.Logger
+	mu           sync.RWMutex
+	networks     []netWithLocation
+	longestFirst bool
+	logger       *zap.Logger
 }
 
 type netWithLocation struct {
@@ -28,6 +29,12 @@ type LocationMetadata struct {
 	Location string
 	Hostname string
 	VRF      string
+}
+
+// EndpointMetadata contains all metadata resolved for one event endpoint.
+type EndpointMetadata struct {
+	Location LocationMetadata
+	Role     string
 }
 
 type LocationEntry struct {
@@ -45,8 +52,9 @@ type LocationsFile struct {
 // NewLocationMatcher creates a new location matcher and loads from file
 func NewLocationMatcher(path string, logger *zap.Logger) (*LocationMatcher, error) {
 	m := &LocationMatcher{
-		networks: make([]netWithLocation, 0),
-		logger:   logger.Named("location_matcher"),
+		networks:     make([]netWithLocation, 0),
+		longestFirst: true,
+		logger:       logger.Named("location_matcher"),
 	}
 
 	if err := m.Load(path); err != nil {
@@ -90,6 +98,7 @@ func (m *LocationMatcher) Load(path string) error {
 
 	m.mu.Lock()
 	m.networks = networks
+	m.longestFirst = true
 	m.mu.Unlock()
 
 	// Log loaded networks
@@ -132,15 +141,19 @@ func (m *LocationMatcher) Lookup(ip string) LocationMetadata {
 	for _, nwl := range m.networks {
 		if nwl.network.Contains(parsedIP) {
 			ones, _ := nwl.network.Mask.Size()
-			if ones > bestLen {
-				bestLen = ones
-				result.Location = nwl.location
-				result.Hostname = nwl.hostname
-				if nwl.vrf != "" {
-					result.VRF = nwl.vrf
-				} else {
-					result.VRF = "unknown"
-				}
+			if !m.longestFirst && ones <= bestLen {
+				continue
+			}
+			bestLen = ones
+			result.Location = nwl.location
+			result.Hostname = nwl.hostname
+			if nwl.vrf != "" {
+				result.VRF = nwl.vrf
+			} else {
+				result.VRF = "unknown"
+			}
+			if m.longestFirst {
+				break
 			}
 		}
 	}
@@ -157,30 +170,14 @@ func (m *LocationMatcher) Lookup(ip string) LocationMetadata {
 
 // GetHostname returns the hostname for an IP if available (longest prefix match)
 func (m *LocationMatcher) GetHostname(ip string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
+	location := m.Lookup(ip)
+	if location.Hostname != "" {
+		return location.Hostname
+	}
+	if location.Location == "unknown" {
 		return ""
 	}
-
-	best := ""
-	bestLen := -1
-	for _, nwl := range m.networks {
-		if nwl.network.Contains(parsedIP) {
-			ones, _ := nwl.network.Mask.Size()
-			if ones > bestLen {
-				bestLen = ones
-				if nwl.hostname != "" {
-					best = nwl.hostname
-				} else {
-					best = nwl.location
-				}
-			}
-		}
-	}
-	return best
+	return location.Location
 }
 
 // GetVrf returns the VRF for an IP (longest prefix match), or "unknown" if not found

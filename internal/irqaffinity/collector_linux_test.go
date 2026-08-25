@@ -22,6 +22,15 @@ func TestReadCPUList(t *testing.T) {
 	require.Equal(t, []int{0, 1, 2, 8, 10, 11}, cpus)
 }
 
+func TestReadCPUStatsDoesNotDoubleCountGuestTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stat")
+	writeFixture(t, path, "cpu0 100 10 20 70 5 2 3 4 30 2\n")
+
+	stats, err := readCPUStats(path)
+	require.NoError(t, err)
+	require.Equal(t, cpuSample{total: 214, idle: 75}, stats[0])
+}
+
 func TestCollectorCorrelatesCrossNUMABusyCPUAndDrops(t *testing.T) {
 	root := t.TempDir()
 	sysRoot, procRoot := filepath.Join(root, "sys"), filepath.Join(root, "proc")
@@ -89,6 +98,15 @@ func TestCollectorTracksAffinityChangesWithoutCountingInventoryChurn(t *testing.
 	writeFixture(t, filepath.Join(procRoot, "irq/100/effective_affinity_list"), "0\n")
 	require.NoError(t, collector.collect())
 	require.Equal(t, float64(1), testutil.ToFloat64(collector.crossNUMATransitions.WithLabelValues("eth0", "leave")))
+
+	require.NoError(t, os.Remove(filepath.Join(sysRoot, "class/net/eth0/device/msi_irqs/100")))
+	require.NoError(t, collector.collect())
+	require.NotContains(t, collector.prevIRQs["eth0"], 100)
+
+	require.NoError(t, os.RemoveAll(filepath.Join(sysRoot, "class/net/eth0")))
+	require.NoError(t, collector.collect())
+	require.Empty(t, collector.prevDrop)
+	require.Empty(t, collector.prevNICNUMA)
 }
 
 func writeFixture(t *testing.T, path, value string) {

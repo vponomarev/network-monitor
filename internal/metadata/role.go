@@ -12,9 +12,10 @@ import (
 
 // RoleMatcher provides best-match role lookup by IP
 type RoleMatcher struct {
-	mu       sync.RWMutex
-	networks []netWithRole
-	logger   *zap.Logger
+	mu           sync.RWMutex
+	networks     []netWithRole
+	longestFirst bool
+	logger       *zap.Logger
 }
 
 type netWithRole struct {
@@ -35,8 +36,9 @@ type RolesFile struct {
 // NewRoleMatcher creates a new role matcher and loads from file
 func NewRoleMatcher(path string, logger *zap.Logger) (*RoleMatcher, error) {
 	m := &RoleMatcher{
-		networks: make([]netWithRole, 0),
-		logger:   logger.Named("role_matcher"),
+		networks:     make([]netWithRole, 0),
+		longestFirst: true,
+		logger:       logger.Named("role_matcher"),
 	}
 
 	if err := m.Load(path); err != nil {
@@ -80,6 +82,7 @@ func (m *RoleMatcher) Load(path string) error {
 
 	m.mu.Lock()
 	m.networks = networks
+	m.longestFirst = true
 	m.mu.Unlock()
 
 	// Log loaded networks
@@ -119,8 +122,11 @@ func (m *RoleMatcher) GetRole(ip string) string {
 		if nwr.network.Contains(parsedIP) {
 			ones, _ := nwr.network.Mask.Size()
 			if ones > bestLen {
-				bestLen = ones
 				best = nwr.role
+				bestLen = ones
+			}
+			if m.longestFirst {
+				break
 			}
 		}
 	}

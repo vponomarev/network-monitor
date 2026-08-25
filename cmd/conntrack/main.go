@@ -266,7 +266,7 @@ func runServices(ctx context.Context, tracker *conntrack.Tracker, cfg *config.Co
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil && result == nil {
 		result = fmt.Errorf("shutting down conntrack HTTP server: %w", err)
@@ -311,26 +311,26 @@ func checkPlatform() error {
 func parseSyslogFacility(s string) (conntrack.SyslogFacility, error) {
 	switch s {
 	case "USER", "user":
-		return conntrack.LOG_USER, nil
+		return conntrack.LogUser, nil
 	case "DAEMON", "daemon":
-		return conntrack.LOG_DAEMON, nil
+		return conntrack.LogDaemon, nil
 	case "LOCAL0", "local0":
-		return conntrack.LOG_LOCAL0, nil
+		return conntrack.LogLocal0, nil
 	case "LOCAL1", "local1":
-		return conntrack.LOG_LOCAL1, nil
+		return conntrack.LogLocal1, nil
 	case "LOCAL2", "local2":
-		return conntrack.LOG_LOCAL2, nil
+		return conntrack.LogLocal2, nil
 	case "LOCAL3", "local3":
-		return conntrack.LOG_LOCAL3, nil
+		return conntrack.LogLocal3, nil
 	case "LOCAL4", "local4":
-		return conntrack.LOG_LOCAL4, nil
+		return conntrack.LogLocal4, nil
 	case "LOCAL5", "local5":
-		return conntrack.LOG_LOCAL5, nil
+		return conntrack.LogLocal5, nil
 	case "LOCAL6", "local6":
-		return conntrack.LOG_LOCAL6, nil
+		return conntrack.LogLocal6, nil
 	case "LOCAL7", "local7":
-		return conntrack.LOG_LOCAL7, nil
+		return conntrack.LogLocal7, nil
 	default:
-		return conntrack.LOG_LOCAL0, fmt.Errorf("unsupported syslog facility %q", s)
+		return conntrack.LogLocal0, fmt.Errorf("unsupported syslog facility %q", s)
 	}
 }

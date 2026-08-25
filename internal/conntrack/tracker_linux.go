@@ -4,11 +4,11 @@
 package conntrack
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -125,7 +125,7 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 	if cfg.MaxPendingConnections <= 0 {
 		cfg.MaxPendingConnections = DefaultMaxPendingConnections
 	}
-	if uint64(cfg.MaxTrackedConnections) > uint64(^uint32(0)) || uint64(cfg.MaxPendingConnections) > uint64(^uint32(0)) {
+	if int64(cfg.MaxTrackedConnections) > int64(^uint32(0)) || int64(cfg.MaxPendingConnections) > int64(^uint32(0)) {
 		return nil, fmt.Errorf("conntrack map limits exceed uint32 capacity")
 	}
 
@@ -165,8 +165,9 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 		},
 		OnCleanup: func(reason string, count int) {
 			tracker.metricsCollector.AddCleanup(reason, count)
-			if reason == CleanupReasonCapacity {
+			if reason == CleanupReasonCapacity && count > 0 {
 				tracker.metricsCollector.AddEviction("userspace", count)
+				// #nosec G115 -- count is positive and bounded by MaxTrackedConnections.
 				tracker.metricsCollector.AddOverflow("userspace", uint64(count))
 			}
 		},
@@ -228,7 +229,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 		t.wg.Add(1)
 		go func() {
 			defer t.wg.Done()
-			t.writeSyslog(runCtx)
+			t.writeSyslog()
 		}()
 	}
 	t.ready.Store(true)
@@ -253,14 +254,24 @@ func (t *Tracker) Run(ctx context.Context) error {
 	}()
 
 	var runErr error
+	readerStopped := false
 	select {
 	case <-ctx.Done():
 	case err := <-readerErr:
+		readerStopped = true
 		if err != nil {
 			runErr = fmt.Errorf("ringbuf consumer stopped: %w", err)
 		}
 	}
 	cancelRun()
+	if !readerStopped {
+		if err := <-readerErr; err != nil && ctx.Err() == nil {
+			runErr = fmt.Errorf("ringbuf consumer stopped: %w", err)
+		}
+	}
+	if t.syslogEvents != nil {
+		close(t.syslogEvents)
+	}
 	t.ready.Store(false)
 	t.logger.Info("Stopping connection tracker")
 	t.wg.Wait()
@@ -296,24 +307,15 @@ func (t *Tracker) loadEBPF() error {
 
 // loadEmbeddedEBPF loads eBPF from embedded resources
 func (t *Tracker) loadEmbeddedEBPF() error {
-	// Create temp file
-	tmpFile, err := os.CreateTemp("", "conntrack-ebpf-*.o")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
 	data, err := embedded.GetEBPFProgram()
 	if err != nil {
 		return fmt.Errorf("getting embedded eBPF: %w", err)
 	}
-
-	if _, err := tmpFile.Write(data); err != nil {
-		return fmt.Errorf("writing eBPF: %w", err)
+	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("loading embedded collection spec: %w", err)
 	}
-	tmpFile.Close()
-
-	return t.loadEBPFFromFile(tmpFile.Name())
+	return t.loadEBPFSpec(spec)
 }
 
 // loadEBPFFromFile loads eBPF from a file path
@@ -325,10 +327,16 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("loading collection spec from %s: %w", path, err)
 	}
+	return t.loadEBPFSpec(spec)
+}
+
+func (t *Tracker) loadEBPFSpec(spec *ebpf.CollectionSpec) error {
 	if connections, ok := spec.Maps["connections"]; ok {
+		// #nosec G115 -- NewTracker rejects values outside uint32 above.
 		connections.MaxEntries = uint32(t.config.MaxTrackedConnections)
 	}
 	if pending, ok := spec.Maps["pending_outgoing"]; ok {
+		// #nosec G115 -- NewTracker rejects values outside uint32 above.
 		pending.MaxEntries = uint32(t.config.MaxPendingConnections)
 	}
 
@@ -397,6 +405,7 @@ func (t *Tracker) configurePortFilter() error {
 	if len(t.config.FilterPorts) > 0 {
 		enabled = 1
 		for _, configured := range t.config.FilterPorts {
+			// #nosec G115 -- configuration validation restricts ports to 1..65535.
 			port, value := uint16(configured), uint8(1)
 			if err := portsMap.Put(port, value); err != nil {
 				return fmt.Errorf("adding port %d: %w", configured, err)
@@ -670,15 +679,10 @@ func containsPort(ports []int, src, dst uint16) bool {
 	return false
 }
 
-func (t *Tracker) writeSyslog(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case item := <-t.syslogEvents:
-			if err := t.syslogWriter.WriteConnection(item.conn, item.event); err != nil {
-				t.logger.Warn("Failed to write to syslog", zap.Error(err))
-			}
+func (t *Tracker) writeSyslog() {
+	for item := range t.syslogEvents {
+		if err := t.syslogWriter.WriteConnection(item.conn, item.event); err != nil {
+			t.logger.Warn("Failed to write to syslog", zap.Error(err))
 		}
 	}
 }
@@ -809,6 +813,7 @@ func monotonicNowNS() (uint64, error) {
 	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
 		return 0, err
 	}
+	// #nosec G115 -- CLOCK_MONOTONIC returns non-negative seconds/nanoseconds.
 	return uint64(ts.Sec)*uint64(time.Second) + uint64(ts.Nsec), nil
 }
 
@@ -817,6 +822,7 @@ func cleanupTimestampedMap(m *ebpf.Map, nowNS uint64, ttl time.Duration) (remain
 	var key []byte
 	var value []byte
 	var expired [][]byte
+	// #nosec G115 -- configuration enforces a positive retention TTL.
 	cutoff := uint64(ttl)
 	for iter.Next(&key, &value) {
 		remaining++

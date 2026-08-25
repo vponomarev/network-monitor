@@ -8,6 +8,7 @@ output:
 linters:
   enable:
     - bodyclose
+    - contextcheck
     - errname
     - errorlint
     - gosec
@@ -15,22 +16,26 @@ linters:
     - nakedret
     - nilerr
     - predeclared
+    - revive
     - tparallel
     - unconvert
+    - unparam
     - usestdlibvars
     - whitespace
   settings:
     gosec:
       excludes:
         - G304
-        # Integer conversions below are range-checked at config/API boundaries;
-        # generated eBPF/config artifacts are intentionally operator-readable.
-        - G115
-        - G306
     govet:
       disable:
         - fieldalignment
         - shadow
+        - unusedwrite
+      enable-all: true
+    # gocritic's opinionated bundle and noctx currently report a large legacy
+    # migration backlog (mostly tests/install tooling). Keep correctness-focused
+    # contextcheck, revive, unparam and full govet blocking; migrate the other
+    # two separately instead of hiding their findings behind broad exclusions.
     revive:
       rules:
         - name: exported

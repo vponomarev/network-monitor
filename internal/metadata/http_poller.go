@@ -314,6 +314,7 @@ func (p *HTTPPoller) atomicWrite(data []byte) error {
 	}
 
 	tmpPath := p.config.FilePath + ".tmp"
+	// #nosec G306 -- metadata files are non-secret shared service configuration.
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return err
 	}

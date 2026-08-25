@@ -93,7 +93,8 @@ func (m *Monitor) measureUDP(ctx context.Context, target string) *Result {
 	start := time.Now()
 	timeout := m.config.TimeoutDuration()
 
-	conn, err := net.DialTimeout("udp", fmt.Sprintf("%s:53", target), timeout)
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "udp", fmt.Sprintf("%s:53", target))
 	if err != nil {
 		return &Result{
 			Target:    target,

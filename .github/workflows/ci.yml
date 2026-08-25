@@ -132,9 +132,7 @@ jobs:
         with:
           # Keep the legacy baseline visible while the blocking lint job rejects
           # new findings. security-scan.yml uploads the complete SARIF report.
-          # G115 conversions are range-checked at config/API boundaries; G306
-          # flags intentionally readable eBPF/config artifacts.
-          args: -severity=medium -exclude=G115,G301,G302,G304,G306 ./...
+          args: -severity=medium -exclude=G301,G302,G304 ./...
 
       - name: Run govulncheck
         run: |

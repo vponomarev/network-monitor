@@ -205,10 +205,10 @@ func (t *ICMPPacketTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Dura
 
 	// Wait for response with timeout
 	deadline := time.Now().Add(t.config.Timeout)
-	if err := conn.SetReadDeadline(deadline); err != nil {
-		return 0, nil, fmt.Errorf("setting read deadline: %w", err)
-	}
 	for {
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return 0, nil, fmt.Errorf("setting read deadline: %w", err)
+		}
 		response, fromIP, err := conn.RecvFrom()
 		if err != nil {
 			return 0, nil, err
@@ -249,10 +249,7 @@ func matchesICMPProbe(data []byte, id, seq uint16) bool {
 
 // createICMPEchoRequest creates an ICMP Echo Request packet
 func createICMPEchoRequest(seq int) []byte {
-	const (
-		ICMP_ECHO_REQUEST = 8
-		ICMP_ECHO_REPLY   = 0
-	)
+	const icmpEchoRequest = 8
 
 	// ICMP header: Type(1) + Code(1) + Checksum(2) + ID(2) + Seq(2) + Data(48)
 	id := os.Getpid() & 0xFFFF
@@ -265,10 +262,11 @@ func createICMPEchoRequest(seq int) []byte {
 
 	// Build packet
 	pkt := make([]byte, 64)
-	pkt[0] = ICMP_ECHO_REQUEST              // Type
+	pkt[0] = icmpEchoRequest                // Type
 	pkt[1] = 0                              // Code
 	binary.BigEndian.PutUint16(pkt[2:4], 0) // Checksum (filled later)
 	binary.BigEndian.PutUint16(pkt[4:6], uint16(id))
+	// #nosec G115 -- seq is masked to 16 bits by sendProbe.
 	binary.BigEndian.PutUint16(pkt[6:8], uint16(seq))
 	copy(pkt[8:], data)
 
@@ -543,11 +541,6 @@ type udpConn struct {
 func createUDPConnection() (*udpConn, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := syscall.SetNonblock(fd, true); err != nil {
-		syscall.Close(fd)
 		return nil, err
 	}
 
@@ -827,7 +820,7 @@ func (t *TCPPacketTracerouter) sendTCPProbe(conn *tcpConn, dst net.IP, port int)
 	flags := parseTCPFlags(t.config.TCPFlags)
 
 	// Create TCP packet
-	tcpData := createTCPPacket(t.srcIP, dst, t.config.SrcPort, port, flags, 0)
+	tcpData := createTCPPacket(t.config.SrcPort, port, flags, 0)
 
 	// Send
 	if err := conn.SendTo(tcpData, dst, port); err != nil {
@@ -881,11 +874,13 @@ func parseTCPFlags(flags string) byte {
 }
 
 // createTCPPacket creates a TCP packet with specified flags
-func createTCPPacket(srcIP, dstIP net.IP, srcPort, dstPort int, flags byte, seq uint32) []byte {
+func createTCPPacket(srcPort, dstPort int, flags byte, seq uint32) []byte {
 	// TCP header: Src(2) + Dst(2) + Seq(4) + Ack(4) + Off(1) + Flags(1) + Win(2) + Chksum(2) + Urg(2) = 20 bytes
 	tcpHeader := make([]byte, 20)
 
+	// #nosec G115 -- traceroute configuration validates both port ranges.
 	binary.BigEndian.PutUint16(tcpHeader[0:2], uint16(srcPort))
+	// #nosec G115 -- traceroute configuration validates both port ranges.
 	binary.BigEndian.PutUint16(tcpHeader[2:4], uint16(dstPort))
 	binary.BigEndian.PutUint32(tcpHeader[4:8], seq)
 	binary.BigEndian.PutUint32(tcpHeader[8:12], 0)      // ACK number
@@ -926,12 +921,6 @@ func createTCPConnection() (*tcpConn, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_TCP)
 	if err != nil {
 		return nil, fmt.Errorf("creating raw TCP socket: %w", err)
-	}
-
-	// Set non-blocking
-	if err := syscall.SetNonblock(fd, true); err != nil {
-		syscall.Close(fd)
-		return nil, fmt.Errorf("setting non-blocking: %w", err)
 	}
 
 	return &tcpConn{fd: fd}, nil

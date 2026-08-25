@@ -126,6 +126,7 @@ func (t *Topology) Save(path string) error {
 		return fmt.Errorf("marshaling topology: %w", err)
 	}
 
+	// #nosec G306 -- topology inventory is intentionally operator-readable.
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("writing topology file: %w", err)
 	}

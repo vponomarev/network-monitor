@@ -494,6 +494,11 @@ func (sm *StateMachine) GetStats() Stats {
 			stats.PendingIncoming++
 		case StateEstablished:
 			stats.Established++
+			if conn.Direction == DirectionOutgoing {
+				stats.EstablishedOutgoing++
+			} else {
+				stats.EstablishedIncoming++
+			}
 		}
 
 		if conn.Direction == DirectionOutgoing {
@@ -508,11 +513,13 @@ func (sm *StateMachine) GetStats() Stats {
 
 // Stats holds connection statistics
 type Stats struct {
-	TotalOutgoing   int
-	TotalIncoming   int
-	PendingOutgoing int // SYN sent, waiting SYN+ACK
-	PendingIncoming int // SYN received, waiting accept
-	Established     int
+	TotalOutgoing       int
+	TotalIncoming       int
+	PendingOutgoing     int // SYN sent, waiting SYN+ACK
+	PendingIncoming     int // SYN received, waiting accept
+	Established         int
+	EstablishedOutgoing int
+	EstablishedIncoming int
 }
 
 // ConnectionEventRaw represents raw connection event from eBPF

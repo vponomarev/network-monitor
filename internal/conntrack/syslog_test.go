@@ -10,7 +10,7 @@ import (
 func TestSyslogWriter_FormatMessage(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
+		Facility:        LogLocal0,
 		IncludeHostname: false,
 	}
 
@@ -61,7 +61,7 @@ func TestSyslogWriter_FormatMessage(t *testing.T) {
 func TestSyslogWriter_FormatIncomingConnection(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
+		Facility:        LogLocal0,
 		IncludeHostname: false,
 	}
 
@@ -109,7 +109,7 @@ func TestSyslogWriter_FormatIncomingConnection(t *testing.T) {
 func TestSyslogWriter_FormatClosedConnection(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
+		Facility:        LogLocal0,
 		IncludeHostname: false,
 	}
 
@@ -153,7 +153,7 @@ func TestSyslogWriter_FormatClosedConnection(t *testing.T) {
 func TestSyslogWriter_FormatFailedConnection(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
+		Facility:        LogLocal0,
 		IncludeHostname: false,
 	}
 
@@ -199,7 +199,7 @@ func TestSyslogWriter_FormatFailedConnection(t *testing.T) {
 func TestSyslogWriter_ProtocolString(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:      "conntrack-test",
-		Facility: LOG_LOCAL0,
+		Facility: LogLocal0,
 	}
 
 	writer, err := NewSyslogWriter(cfg)
@@ -230,7 +230,7 @@ func TestSyslogWriter_ProtocolString(t *testing.T) {
 func TestSyslogWriter_WithHostname(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
+		Facility:        LogLocal0,
 		IncludeHostname: true,
 	}
 
@@ -261,7 +261,7 @@ func TestSyslogWriter_WithHostname(t *testing.T) {
 func TestSyslogWriter_WithoutProcessName(t *testing.T) {
 	cfg := SyslogConfig{
 		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
+		Facility:        LogLocal0,
 		IncludeHostname: false,
 	}
 
