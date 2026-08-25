@@ -113,10 +113,6 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 		return nil, fmt.Errorf("validating bpfConnectionEvent: %w", err)
 	}
 
-	// Remove resource limits for eBPF
-	if err := rlimit.RemoveMemlock(); err != nil {
-		return nil, fmt.Errorf("removing memlock: %w", err)
-	}
 	if cfg.StateTTL <= 0 {
 		cfg.StateTTL = DefaultStateTTL
 	}
@@ -275,6 +271,13 @@ func (t *Tracker) Run(ctx context.Context) error {
 // Priority: 1) Explicit path via flag, 2) Embedded version.
 // Production must fail closed when no real eBPF program is available.
 func (t *Tracker) loadEBPF() error {
+	// Raising the memlock limit is a kernel-facing startup operation. Keep it
+	// out of NewTracker so callers can construct and inspect userspace state
+	// without eBPF privileges (for example API handlers and unit tests).
+	if err := rlimit.RemoveMemlock(); err != nil {
+		return fmt.Errorf("removing memlock: %w", err)
+	}
+
 	// Priority 1: Explicit path via flag
 	if t.config.EBPFProgramPath != "" {
 		t.logger.Info("Loading eBPF from specified path",

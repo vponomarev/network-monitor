@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"net"
+	"os"
 	"testing"
 	"time"
 	"unsafe"
@@ -140,6 +141,10 @@ func TestTracker_parseConnectionEventRejectsShortRecord(t *testing.T) {
 }
 
 func TestTracker_Run_ContextCancellation(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("loading and attaching the embedded eBPF program requires root")
+	}
+
 	cfg := Config{EBPFProgramPath: ""} // Use the embedded production program.
 
 	tracker := newTestTracker(t, cfg)

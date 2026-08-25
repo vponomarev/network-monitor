@@ -103,7 +103,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	wasActive := serviceActive("conntrack")
+	wasActive := serviceActive()
 	refreshBackup := true
 	if same, err := filesEqual(sourcePath, binaryPath); err == nil && same {
 		if _, err := os.Stat(filepath.Join(defaultRollbackDir, "manifest.json")); err == nil {
@@ -416,8 +416,8 @@ func validateInstalledConfig(path string) error {
 	return nil
 }
 
-func serviceActive(name string) bool {
-	return exec.Command("systemctl", "is-active", "--quiet", name).Run() == nil
+func serviceActive() bool {
+	return exec.Command("systemctl", "is-active", "--quiet", "conntrack").Run() == nil
 }
 
 func waitForReadiness(configPath string, timeout time.Duration) error {
@@ -434,7 +434,7 @@ func waitForReadiness(configPath string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	consecutive := 0
 	for time.Now().Before(deadline) {
-		if serviceActive("conntrack") {
+		if serviceActive() {
 			response, err := client.Get(url)
 			if err == nil {
 				_ = response.Body.Close()
