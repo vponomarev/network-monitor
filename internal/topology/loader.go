@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -31,14 +32,17 @@ type DeviceConfig struct {
 func Load(path string) (*Topology, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return NewTopology(), nil
-		}
 		return nil, fmt.Errorf("reading topology file: %w", err)
 	}
+	return Parse(data)
+}
 
+// Parse validates and constructs a topology from YAML bytes.
+func Parse(data []byte) (*Topology, error) {
 	var config TopologyConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("parsing topology file: %w", err)
 	}
 

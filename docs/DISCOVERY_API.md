@@ -182,12 +182,10 @@ discovery:
     interval: 5m
     
     # Traceroute-specific settings
-    protocol: icmp        # icmp | udp | tcp
+    protocol: icmp        # only production-supported protocol
     max_hops: 30          # Maximum TTL
     timeout: 3s           # Per-probe timeout
     probes_per_hop: 3     # Probes per TTL value
-    dst_port: 33434       # Destination port for UDP/TCP
-    tcp_flags: S          # TCP flags for TCP traceroute
 ```
 
 ### Protocol Selection
@@ -208,10 +206,10 @@ The Discovery service exports the following Prometheus metrics:
 
 ```prometheus
 # Total number of discovered paths
-netmon_discovery_paths_total
+netmon_discovery_paths
 
 # Timestamp of last discovery run
-netmon_discovery_last_run_seconds
+netmon_discovery_last_run_timestamp_seconds
 
 # Path hop count
 netmon_path_hops{src_ip="...", dst_ip="..."}
@@ -332,7 +330,7 @@ func discoverPath(srcIP, dstIP string) (*DiscoverResponse, error) {
 1. **Rate Limiting**: Limit on-demand discovery requests to avoid network congestion
 2. **Caching**: Use cached paths when possible (TTL: 10 minutes by default)
 3. **Error Handling**: Always check for error responses and handle gracefully
-4. **Monitoring**: Monitor `netmon_discovery_last_run_seconds` to ensure discovery is running
+4. **Monitoring**: Monitor `netmon_discovery_last_run_timestamp_seconds` to ensure discovery is running
 
 ---
 

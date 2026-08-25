@@ -1,8 +1,8 @@
 # Configuration Reference
 
 Configuration is YAML. Relative metadata paths are resolved from the directory
-containing the main config file. `netmon` uses `config.yaml` by default or the
-path supplied by `--config`/`NETMON_CONFIG`; installed conntrack uses
+containing the main config file. `netmon` uses built-in defaults when neither
+`--config` nor `NETMON_CONFIG` supplies a path; installed conntrack uses
 `/etc/conntrack/config.yaml`.
 
 ## Production settings
@@ -34,10 +34,7 @@ discovery:
     top_n: 10
     mode: both
     interval: 5m
-    protocol: icmp
-    dst_port: 33434
-    src_port: 0
-    tcp_flags: S
+    protocol: icmp  # only production-supported protocol
     max_hops: 30
     timeout: 3s
     probes_per_hop: 3
@@ -45,6 +42,11 @@ discovery:
 topology:
   enabled: false
   path: topology.yaml
+
+irq_affinity:
+  enabled: true
+  interval: 15s
+  busy_threshold: 0.80
 
 metrics:
   name: netmon_tcp_loss_total
@@ -86,6 +88,10 @@ retransmissions after connection establishment. `/health` and `/ready` are
 always public; `/metrics` and `/api/*`
 require `Authorization: Bearer <token>` when `global.auth_token` is non-empty.
 `NETMON_AUTH_TOKEN` supplies the token only when it is absent from YAML.
+
+`irq_affinity` correlates active MSI-X IRQs mapped to busy CPUs outside the
+NIC's NUMA node with increasing receive-drop counters. See
+[IRQ/NUMA affinity diagnostics](IRQ_AFFINITY.md) for metrics and alerting.
 
 `src_vrf` and `dst_vrf` are safe at `cardinality.level: role`; they do not
 require `src_ip` or `dst_ip`. VRF values come from the matching `vrf` field in

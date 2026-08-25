@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"context"
 	"net"
 	"testing"
 	"time"
@@ -144,8 +143,8 @@ func TestFindBottleneck(t *testing.T) {
 				},
 			},
 			wantNil:  false,
-			wantHop:  3,     // The bottleneck is at the last lost hop (highest loss %)
-			wantLoss: 66.67, // 2/3 hops lost
+			wantHop:  2,
+			wantLoss: 100,
 		},
 	}
 
@@ -161,33 +160,6 @@ func TestFindBottleneck(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDefaultTracerouter_Run(t *testing.T) {
-	tracerouter := NewDefaultTracerouter()
-	ctx := context.Background()
-
-	// Test with invalid destination
-	path, err := tracerouter.Run(ctx, "192.168.1.1", "invalid-ip")
-	assert.Error(t, err)
-	assert.Nil(t, path)
-
-	// Test with valid destination (returns placeholder on non-Linux)
-	path, err = tracerouter.Run(ctx, "192.168.1.1", "8.8.8.8")
-	require.NoError(t, err)
-	require.NotNil(t, path)
-	assert.Equal(t, "8.8.8.8", path.DstIP.String())
-}
-
-func TestDefaultTracerouter_RunWithTimeout(t *testing.T) {
-	tracerouter := NewDefaultTracerouter()
-	ctx := context.Background()
-
-	// Test with custom timeout
-	path, err := tracerouter.RunWithTimeout(ctx, "192.168.1.1", "8.8.8.8", 5*time.Second)
-	require.NoError(t, err)
-	require.NotNil(t, path)
-	assert.Equal(t, 10*time.Minute, path.TTL)
 }
 
 func TestPath_Discovered(t *testing.T) {

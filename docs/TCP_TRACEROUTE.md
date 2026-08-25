@@ -1,5 +1,8 @@
 # TCP Traceroute Implementation
 
+> Historical experimental design. TCP traceroute is not wired into `netmon`;
+> current production configuration accepts only `protocol: icmp`.
+
 ## Overview
 
 TCP traceroute uses TCP SYN packets instead of ICMP or UDP, making it ideal for traversing firewalls that block traditional traceroute protocols.

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,14 +11,33 @@ import (
 )
 
 func TestLoad_DefaultConfig(t *testing.T) {
-	// Test loading non-existent file returns defaults
-	cfg, err := Load("/nonexistent/config.yaml")
+	// An empty path explicitly requests built-in defaults.
+	cfg, err := Load("")
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 3, cfg.Global.TTLHours)
 	assert.Equal(t, 9876, cfg.Global.MetricsPort)
 	assert.Equal(t, "/sys/kernel/tracing/trace_pipe", cfg.Global.TracePipePath)
+}
+
+func TestLoad_ExplicitMissingFileFails(t *testing.T) {
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading config file")
+}
+
+func TestLoad_RejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("global:\n  metrics_prt: 9876\n"), 0600))
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metrics_prt")
+}
+
+func TestExampleConfigLoadsStrictly(t *testing.T) {
+	_, err := Load(filepath.Join("..", "..", "configs", "config.example.yaml"))
+	require.NoError(t, err)
 }
 
 func TestLoad_FromFile(t *testing.T) {

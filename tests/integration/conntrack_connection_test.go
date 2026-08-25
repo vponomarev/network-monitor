@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -299,7 +300,7 @@ func TestConntrack_ConnectionLifecycle(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		_, _ = conn.Write([]byte(fmt.Sprintf("msg%d", i)))
+		_, _ = fmt.Fprintf(conn, "msg%d", i)
 		time.Sleep(50 * time.Millisecond)
 		_ = conn.Close()
 	}
@@ -484,7 +485,7 @@ func TestConntrack_ConcurrentConnections(t *testing.T) {
 				return
 			}
 			defer conn.Close()
-			_, _ = conn.Write([]byte(fmt.Sprintf("concurrent-%d", id)))
+			_, _ = fmt.Fprintf(conn, "concurrent-%d", id)
 			time.Sleep(20 * time.Millisecond)
 		}(i)
 	}
@@ -667,7 +668,7 @@ func TestConntrack_MetricsIntegration(t *testing.T) {
 // TestConntrack_AppConfig загружает конфигурацию из файла и создает трекер
 func TestConntrack_AppConfig(t *testing.T) {
 	// Create temporary config
-	tmpConfig := "/tmp/conntrack_test_config.yaml"
+	tmpConfig := filepath.Join(t.TempDir(), "conntrack_test_config.yaml")
 	configContent := `
 global:
   ttl_hours: 1

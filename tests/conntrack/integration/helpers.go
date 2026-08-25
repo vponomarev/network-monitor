@@ -29,7 +29,7 @@ func GenerateUDPTraffic(target string, count int) error {
 	defer conn.Close()
 
 	for i := 0; i < count; i++ {
-		_, _ = conn.Write([]byte(fmt.Sprintf("packet %d", i)))
+		_, _ = fmt.Fprintf(conn, "packet %d", i)
 		time.Sleep(10 * time.Millisecond)
 	}
 	return nil

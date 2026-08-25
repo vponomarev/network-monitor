@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -359,7 +360,7 @@ func TestConntrack_ConcurrentConnections(t *testing.T) {
 				return
 			}
 			defer conn.Close()
-			_, _ = conn.Write([]byte(fmt.Sprintf("concurrent-%d", id)))
+			_, _ = fmt.Fprintf(conn, "concurrent-%d", id)
 			time.Sleep(20 * time.Millisecond)
 		}(i)
 	}
@@ -521,7 +522,7 @@ func TestConntrack_ConfigValidation(t *testing.T) {
 // TestConntrack_AppConfig загружает конфигурацию из файла и создает трекер
 // IT-009
 func TestConntrack_AppConfig(t *testing.T) {
-	tmpConfig := "/tmp/conntrack_test_config.yaml"
+	tmpConfig := filepath.Join(t.TempDir(), "conntrack_test_config.yaml")
 	configContent := `
 global:
   ttl_hours: 1

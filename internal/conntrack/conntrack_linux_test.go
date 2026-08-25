@@ -78,6 +78,12 @@ func TestTracker_connectionKey(t *testing.T) {
 	assert.Equal(t, key, key2)
 }
 
+func TestContainsPort(t *testing.T) {
+	assert.True(t, containsPort([]int{443, 8443}, 50000, 443))
+	assert.True(t, containsPort([]int{443, 8443}, 8443, 50000))
+	assert.False(t, containsPort([]int{443, 8443}, 50000, 80))
+}
+
 func TestTracker_GetConnections(t *testing.T) {
 	cfg := Config{}
 	tracker := newTestTracker(t, cfg)

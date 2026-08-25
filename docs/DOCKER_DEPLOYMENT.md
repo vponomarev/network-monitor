@@ -248,8 +248,7 @@ data:
     discovery:
       traceroute:
         enabled: true
-        protocol: tcp
-        dst_port: 443
+        protocol: icmp
 
     topology:
       enabled: false

@@ -296,11 +296,11 @@ func (c *EBPFLossCollector) handleRecord(raw []byte) {
 	}
 
 	var evt bpfLossEvent
-	evt.TimestampNs = binary.LittleEndian.Uint64(raw[0:8])
+	evt.TimestampNs = binary.NativeEndian.Uint64(raw[0:8])
 	copy(evt.SrcIP[:], raw[8:24])
 	copy(evt.DstIP[:], raw[24:40])
-	evt.SrcPort = binary.LittleEndian.Uint16(raw[40:42])
-	evt.DstPort = binary.LittleEndian.Uint16(raw[42:44])
+	evt.SrcPort = binary.NativeEndian.Uint16(raw[40:42])
+	evt.DstPort = binary.NativeEndian.Uint16(raw[42:44])
 	evt.Family = raw[44]
 
 	if evt.Family != afInet {

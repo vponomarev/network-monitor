@@ -147,7 +147,7 @@ discovery:
   traceroute:
     enabled: true
     mode: both  # both | top_loss | on_demand | periodic
-    protocol: icmp  # icmp | udp | tcp
+    protocol: icmp  # only production-supported protocol
     interval: 5m
     top_n: 10
     max_hops: 30

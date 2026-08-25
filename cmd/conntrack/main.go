@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net"
@@ -129,7 +130,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	logger.Info("Starting Connection Tracker",
 		zap.String("version", Version),
@@ -169,6 +170,7 @@ func run(cmd *cobra.Command, args []string) error {
 		TrackOutgoing:         trackOutgoing && cfg.Connections.TrackOutgoing,
 		TrackCloses:           trackCloses,
 		FilterPorts:           cfg.Connections.FilterPorts,
+		Registerer:            prometheus.DefaultRegisterer,
 		EventBufferSize:       cfg.Connections.EventBufferSize,
 		StateTTL:              cfg.Connections.StateTTLDuration(),
 		CleanupInterval:       cfg.Connections.CleanupIntervalDuration(),
@@ -202,7 +204,7 @@ func runServices(ctx context.Context, tracker *conntrack.Tracker, cfg *config.Co
 			return handler
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer "+cfg.Global.AuthToken {
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+cfg.Global.AuthToken)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -329,6 +331,6 @@ func parseSyslogFacility(s string) (conntrack.SyslogFacility, error) {
 	case "LOCAL7", "local7":
 		return conntrack.LOG_LOCAL7, nil
 	default:
-		return conntrack.LOG_LOCAL0, nil
+		return conntrack.LOG_LOCAL0, fmt.Errorf("unsupported syslog facility %q", s)
 	}
 }

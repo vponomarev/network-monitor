@@ -1,6 +1,7 @@
 package conntrack
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"net"
@@ -120,6 +121,8 @@ type StateMachine struct {
 
 	// Active connections
 	connections map[string]*Connection
+	order       *list.List
+	orderIndex  map[string]*list.Element
 
 	// Timeout for SYN_SENT state (no SYN+ACK received)
 	synTimeout time.Duration
@@ -165,6 +168,8 @@ func NewStateMachine(cfg StateMachineConfig) *StateMachine {
 
 	sm := &StateMachine{
 		connections:     make(map[string]*Connection),
+		order:           list.New(),
+		orderIndex:      make(map[string]*list.Element),
 		synTimeout:      cfg.SYNTimeout,
 		cleanupDelay:    cfg.CleanupDelay,
 		retentionTTL:    cfg.RetentionTTL,
@@ -189,63 +194,90 @@ func NewStateMachine(cfg StateMachineConfig) *StateMachine {
 // ProcessEvent processes an incoming connection event
 func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	key := sm.makeKey(evt)
 	conn, exists := sm.connections[key]
+	capacityEvicted := false
+	var emitted *struct {
+		conn  *Connection
+		event ConnectionEvent
+	}
 
 	switch evt.EventType {
 	case EventNew:
 		if !exists {
-			conn = sm.createConnection(evt)
+			conn, capacityEvicted = sm.createConnection(evt)
 		}
 		sm.transitionState(conn, StateSynSent)
-		sm.emitEvent(conn, EventNew)
+		emitted = pendingConnectionEvent(conn, EventNew)
 
 	case EventEstablished:
 		if exists && conn.State == StateEstablished {
+			sm.mu.Unlock()
 			return
 		}
 		if !exists {
 			// SYN+ACK without seeing SYN - create new connection
-			conn = sm.createConnection(evt)
+			conn, capacityEvicted = sm.createConnection(evt)
 		}
 		conn.SynAckReceived = true
 		conn.Established = true
 		conn.EstablishedTime = time.Now()
 		sm.transitionState(conn, StateEstablished)
-		sm.emitEvent(conn, EventEstablished)
+		emitted = pendingConnectionEvent(conn, EventEstablished)
 
 	case EventClosed:
 		if exists {
 			if conn.State == StateClosed {
+				sm.mu.Unlock()
 				return
 			}
 			conn.ClosedTime = time.Now()
 			sm.transitionState(conn, StateClosed)
-			sm.emitEvent(conn, EventClosed)
+			emitted = pendingConnectionEvent(conn, EventClosed)
 		}
 
 	case EventFailed:
 		if exists {
 			sm.transitionState(conn, StateClosed)
-			sm.emitEvent(conn, EventFailed)
-			delete(sm.connections, key)
+			emitted = pendingConnectionEvent(conn, EventFailed)
+			sm.deleteConnection(key)
 		}
 
 	case EventRejected:
 		if exists {
 			sm.transitionState(conn, StateClosed)
-			sm.emitEvent(conn, EventRejected)
-			delete(sm.connections, key)
+			emitted = pendingConnectionEvent(conn, EventRejected)
+			sm.deleteConnection(key)
 		}
+	}
+	sm.mu.Unlock()
+	if emitted != nil {
+		sm.emitEvent(emitted.conn, emitted.event)
+	}
+	if capacityEvicted {
+		sm.notifyCleanup(CleanupReasonCapacity, 1)
 	}
 }
 
+func pendingConnectionEvent(conn *Connection, event ConnectionEvent) *struct {
+	conn  *Connection
+	event ConnectionEvent
+} {
+	cloned := *conn
+	cloned.SourceIP = append(net.IP(nil), conn.SourceIP...)
+	cloned.DestIP = append(net.IP(nil), conn.DestIP...)
+	return &struct {
+		conn  *Connection
+		event ConnectionEvent
+	}{conn: &cloned, event: event}
+}
+
 // createConnection creates a new connection from event
-func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) *Connection {
+func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) (*Connection, bool) {
+	evicted := false
 	if len(sm.connections) >= sm.maxConnections {
-		sm.evictOldest()
+		evicted = sm.evictOldest()
 	}
 	now := time.Now()
 	conn := &Connection{
@@ -265,25 +297,24 @@ func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) *Connection {
 	}
 
 	sm.connections[conn.ID] = conn
-	return conn
+	sm.orderIndex[conn.ID] = sm.order.PushFront(conn.ID)
+	return conn, evicted
 }
 
-func (sm *StateMachine) evictOldest() {
-	var oldestKey string
-	var oldestTime time.Time
-	for key, conn := range sm.connections {
-		updated := conn.LastUpdated
-		if updated.IsZero() {
-			updated = conn.Timestamp
-		}
-		if oldestKey == "" || updated.Before(oldestTime) {
-			oldestKey = key
-			oldestTime = updated
-		}
+func (sm *StateMachine) evictOldest() bool {
+	if oldest := sm.order.Back(); oldest != nil {
+		oldestKey := oldest.Value.(string)
+		sm.deleteConnection(oldestKey)
+		return true
 	}
-	if oldestKey != "" {
-		delete(sm.connections, oldestKey)
-		sm.notifyCleanup(CleanupReasonCapacity, 1)
+	return false
+}
+
+func (sm *StateMachine) deleteConnection(key string) {
+	delete(sm.connections, key)
+	if element := sm.orderIndex[key]; element != nil {
+		sm.order.Remove(element)
+		delete(sm.orderIndex, key)
 	}
 }
 
@@ -292,6 +323,9 @@ func (sm *StateMachine) transitionState(conn *Connection, newState ConnectionSta
 	oldState := conn.State
 	conn.State = newState
 	conn.LastUpdated = time.Now()
+	if element := sm.orderIndex[conn.ID]; element != nil {
+		sm.order.MoveToFront(element)
+	}
 
 	if sm.onStateChange != nil {
 		sm.onStateChange(conn, oldState, newState)
@@ -320,6 +354,10 @@ func (sm *StateMachine) checkTimeouts() {
 			sm.mu.Lock()
 			now := time.Now()
 			removed := 0
+			var emitted []*struct {
+				conn  *Connection
+				event ConnectionEvent
+			}
 
 			for key, conn := range sm.connections {
 				if conn.State == StateSynSent {
@@ -327,13 +365,16 @@ func (sm *StateMachine) checkTimeouts() {
 						// SYN timeout - connection failed
 						conn.State = StateClosed
 						conn.ClosedTime = now
-						sm.emitEvent(conn, EventFailed)
-						delete(sm.connections, key)
+						emitted = append(emitted, pendingConnectionEvent(conn, EventFailed))
+						sm.deleteConnection(key)
 						removed++
 					}
 				}
 			}
 			sm.mu.Unlock()
+			for _, event := range emitted {
+				sm.emitEvent(event.conn, event.event)
+			}
 			sm.notifyCleanup(CleanupReasonSYNTimeout, removed)
 		}
 	}
@@ -358,7 +399,7 @@ func (sm *StateMachine) cleanup(now time.Time) {
 	sm.mu.Lock()
 	for key, conn := range sm.connections {
 		if conn.State == StateClosed && !conn.ClosedTime.IsZero() && now.Sub(conn.ClosedTime) >= sm.cleanupDelay {
-			delete(sm.connections, key)
+			sm.deleteConnection(key)
 			counts[CleanupReasonClosed]++
 			continue
 		}
@@ -367,7 +408,7 @@ func (sm *StateMachine) cleanup(now time.Time) {
 			updated = conn.Timestamp
 		}
 		if !updated.IsZero() && now.Sub(updated) >= sm.retentionTTL {
-			delete(sm.connections, key)
+			sm.deleteConnection(key)
 			counts[CleanupReasonTTL]++
 		}
 	}

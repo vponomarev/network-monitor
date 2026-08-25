@@ -35,8 +35,6 @@ type ConnectionResponse struct {
 	Timestamp     time.Time `json:"timestamp"`
 	LastUpdated   time.Time `json:"last_updated"`
 	Established   bool      `json:"established,omitempty"`
-	BytesSent     uint64    `json:"bytes_sent,omitempty"`
-	BytesRecv     uint64    `json:"bytes_recv,omitempty"`
 	Duration      string    `json:"duration,omitempty"`
 	HandshakeTime string    `json:"handshake_time,omitempty"`
 }
@@ -98,8 +96,6 @@ func (a *API) ListConnections(w http.ResponseWriter, r *http.Request) {
 			Timestamp:   conn.Timestamp,
 			LastUpdated: conn.LastUpdated,
 			Established: conn.Established,
-			BytesSent:   conn.BytesSent,
-			BytesRecv:   conn.BytesRecv,
 			Duration:    conn.Duration().String(),
 		}
 

@@ -84,6 +84,30 @@ struct {
     __type(value, __u64);
 } event_drops SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 256);
+    __type(key, __u16);
+    __type(value, __u8);
+} filter_ports SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u8);
+} filter_config SEC(".maps");
+
+static __always_inline bool port_is_tracked(__u16 sport, __u16 dport)
+{
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_config, &zero);
+    if (!enabled || !*enabled)
+        return true;
+    return bpf_map_lookup_elem(&filter_ports, &sport) ||
+           bpf_map_lookup_elem(&filter_ports, &dport);
+}
+
 #define DROP_RINGBUF_FULL 0
 #define DROP_CONNECTIONS_MAP_FULL 1
 #define DROP_PENDING_MAP_FULL 2
@@ -210,6 +234,10 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
     __u32 oldstate = BPF_CORE_READ(ctx, oldstate);
     __u32 newstate = BPF_CORE_READ(ctx, newstate);
     __u64 skaddr = (__u64)BPF_CORE_READ(ctx, skaddr);
+    __u16 filter_sport = BPF_CORE_READ(ctx, sport);
+    __u16 filter_dport = BPF_CORE_READ(ctx, dport);
+    if (!port_is_tracked(filter_sport, filter_dport))
+        return 0;
 
     if (track_outgoing && newstate == TCP_SYN_SENT) {
         struct pending_outgoing_meta meta = {};
@@ -380,6 +408,8 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 
     // Create key FIRST from raw socket values (local=src, remote=dst)
     make_key_from_sock(ret_sk, &key);
+    if (!port_is_tracked(key.src_port, key.dst_port))
+        return 0;
 
     // Copy to event
     __builtin_memcpy(evt.src_ip, key.src_ip, 16);
@@ -451,6 +481,8 @@ int BPF_KPROBE(tcp_close, struct sock *sk)
 
     // Create key from raw socket values (must match how it was stored)
     make_key_from_sock(sk, &key);
+    if (!port_is_tracked(key.src_port, key.dst_port))
+        return 0;
 
     // Look up stored connection to get original direction
     struct connection_entry *entry;

@@ -2,6 +2,7 @@
 
 > Completed milestone report. Current priorities are maintained in
 > [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
+> UDP/TCP traceroute described below is not production-supported.
 
 ## Overview
 

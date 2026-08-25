@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,8 +15,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testTracerouter struct{}
+
+func (testTracerouter) Run(ctx context.Context, src, dst string) (*Path, error) {
+	return testTracerouter{}.RunWithTimeout(ctx, src, dst, 0)
+}
+func (testTracerouter) RunWithTimeout(_ context.Context, src, dst string, _ time.Duration) (*Path, error) {
+	if net.ParseIP(src) == nil || net.ParseIP(dst) == nil {
+		return nil, fmt.Errorf("invalid IP")
+	}
+	return &Path{SrcIP: net.ParseIP(src), DstIP: net.ParseIP(dst), Hops: []Hop{{TTL: 1, IP: net.ParseIP(dst), RTT: time.Millisecond}}, Discovered: time.Now(), TTL: 10 * time.Minute}, nil
+}
+func newTestDiscoveryService() *DiscoveryService {
+	return NewDiscoveryService(testTracerouter{}, NewPathCache(10*time.Minute, 100), NewLossTracker(5*time.Minute), 10, "both", 5*time.Minute)
+}
+func NewTestDiscoveryService() *DiscoveryService { return newTestDiscoveryService() }
+
+type ResponseRecorder struct {
+	Code      int
+	Body      string
+	HeaderMap http.Header
+}
+
+func NewResponseRecorder() *ResponseRecorder {
+	return &ResponseRecorder{Code: http.StatusOK, HeaderMap: make(http.Header)}
+}
+func (r *ResponseRecorder) Header() http.Header { return r.HeaderMap }
+func (r *ResponseRecorder) Write(data []byte) (int, error) {
+	r.Body = string(data)
+	return len(data), nil
+}
+func (r *ResponseRecorder) WriteHeader(code int) { r.Code = code }
+
+func ValidateResponse(resp *DiscoveryResponse, srcIP, dstIP string) error {
+	if resp.SrcIP != srcIP {
+		return fmt.Errorf("expected src_ip %s, got %s", srcIP, resp.SrcIP)
+	}
+	if resp.DstIP != dstIP {
+		return fmt.Errorf("expected dst_ip %s, got %s", dstIP, resp.DstIP)
+	}
+	if resp.PathID == "" {
+		return fmt.Errorf("path_id is empty")
+	}
+	return nil
+}
+
 func TestNewDiscoveryService(t *testing.T) {
-	tracerouter := NewDefaultTracerouter()
+	tracerouter := testTracerouter{}
 	cache := DefaultPathCache()
 	lossTracker := DefaultLossTracker()
 
@@ -24,13 +71,8 @@ func TestNewDiscoveryService(t *testing.T) {
 	assert.Equal(t, "both", service.mode)
 }
 
-func TestDefaultDiscoveryService(t *testing.T) {
-	service := DefaultDiscoveryService()
-	require.NotNil(t, service)
-}
-
 func TestDiscoveryService_Discover(t *testing.T) {
-	service := NewTestDiscoveryService()
+	service := newTestDiscoveryService()
 	ctx := context.Background()
 
 	resp, err := service.Discover(ctx, "192.168.1.1", "8.8.8.8")

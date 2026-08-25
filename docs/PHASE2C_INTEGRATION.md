@@ -2,6 +2,7 @@
 
 > Completed milestone report. Current priorities are maintained in
 > [`STATUS_AND_PLAN.md`](STATUS_AND_PLAN.md).
+> Consult [`DISCOVERY_API.md`](DISCOVERY_API.md) for current supported behavior.
 
 ## Overview
 

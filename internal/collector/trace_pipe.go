@@ -3,6 +3,7 @@ package collector
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -106,7 +107,7 @@ func (c *TracePipeCollector) Run(ctx context.Context) error {
 		}
 
 		if err := c.readTracePipe(ctx); err != nil {
-			if err == context.Canceled || err == unix.ECANCELED {
+			if errors.Is(err, context.Canceled) || errors.Is(err, unix.ECANCELED) {
 				c.logger.Debug("Trace pipe collector stopped")
 				return nil
 			}
@@ -167,7 +168,7 @@ func (c *TracePipeCollector) readTracePipe(ctx context.Context) error {
 			return ctx.Err()
 		case result := <-resultCh:
 			if result.err != nil {
-				if result.err == io.EOF {
+				if errors.Is(result.err, io.EOF) {
 					time.Sleep(10 * time.Millisecond)
 					continue
 				}

@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 // RoleMatcher provides best-match role lookup by IP
@@ -63,7 +62,7 @@ func (m *RoleMatcher) Load(path string) error {
 	}
 
 	var file RolesFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	if err := decodeYAMLStrict(data, &file); err != nil {
 		return fmt.Errorf("parsing YAML: %w", err)
 	}
 
@@ -114,7 +113,7 @@ func (m *RoleMatcher) GetRole(ip string) string {
 		return "unknown"
 	}
 
-	best := ""
+	best := "unknown"
 	bestLen := -1
 	for _, nwr := range m.networks {
 		if nwr.network.Contains(parsedIP) {
@@ -124,9 +123,6 @@ func (m *RoleMatcher) GetRole(ip string) string {
 				best = nwr.role
 			}
 		}
-	}
-	if bestLen < 0 {
-		return "unknown"
 	}
 	return best
 }

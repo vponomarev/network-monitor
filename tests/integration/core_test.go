@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,6 +23,16 @@ import (
 	"github.com/vponomarev/network-monitor/internal/topology"
 	"go.uber.org/zap"
 )
+
+type integrationTracerouter struct{}
+
+func (integrationTracerouter) Run(ctx context.Context, src, dst string) (*discovery.Path, error) {
+	return integrationTracerouter{}.RunWithTimeout(ctx, src, dst, time.Second)
+}
+
+func (integrationTracerouter) RunWithTimeout(_ context.Context, src, dst string, _ time.Duration) (*discovery.Path, error) {
+	return &discovery.Path{SrcIP: net.ParseIP(src), DstIP: net.ParseIP(dst), Discovered: time.Now()}, nil
+}
 
 // TestCollector_TracePipe_Integration tests trace pipe collector with real trace_pipe
 func TestCollector_TracePipe_Integration(t *testing.T) {
@@ -55,7 +67,7 @@ func TestCollector_TracePipe_Integration(t *testing.T) {
 	// Collector should be running
 	select {
 	case err := <-errChan:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			assert.NoError(t, err)
 		}
 	default:
@@ -110,7 +122,7 @@ func TestDiscovery_Service_Integration(t *testing.T) {
 	// Create discovery service
 	cache := discovery.NewPathCache(1*time.Hour, 100)
 	lossTracker := discovery.NewLossTracker(1 * time.Hour)
-	tracerouter := discovery.NewDefaultTracerouter()
+	tracerouter := integrationTracerouter{}
 
 	service := discovery.NewDiscoveryService(
 		tracerouter,
@@ -134,7 +146,7 @@ func TestDiscovery_Service_Integration(t *testing.T) {
 // TestTopology_Load_Integration tests topology loading from file
 func TestTopology_Load_Integration(t *testing.T) {
 	// Create a temporary topology file
-	tmpFile := "/tmp/test_topology.yaml"
+	tmpFile := filepath.Join(t.TempDir(), "topology.yaml")
 	topologyContent := `
 devices:
   - id: leaf-01
@@ -220,7 +232,7 @@ func TestConntrack_Tracker_Integration(t *testing.T) {
 	cancel()
 	select {
 	case err := <-errChan:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Logf("Tracker stopped: %v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -231,7 +243,7 @@ func TestConntrack_Tracker_Integration(t *testing.T) {
 // TestMetadata_LocationMatcher_Integration tests location matcher with real data
 func TestMetadata_LocationMatcher_Integration(t *testing.T) {
 	// Create a temporary locations file
-	tmpFile := "/tmp/test_locations.yaml"
+	tmpFile := filepath.Join(t.TempDir(), "locations.yaml")
 	locationsContent := `
 locations:
   - network: 192.168.1.0/24
@@ -269,7 +281,7 @@ locations:
 // TestMetadata_RoleMatcher_Integration tests role matcher with real data
 func TestMetadata_RoleMatcher_Integration(t *testing.T) {
 	// Create a temporary roles file
-	tmpFile := "/tmp/test_roles.yaml"
+	tmpFile := filepath.Join(t.TempDir(), "roles.yaml")
 	rolesContent := `
 roles:
   - network: 192.168.1.10/32
@@ -303,7 +315,7 @@ roles:
 // TestConfig_Load_Integration tests configuration loading
 func TestConfig_Load_Integration(t *testing.T) {
 	// Create a temporary config file
-	tmpFile := "/tmp/test_config.yaml"
+	tmpFile := filepath.Join(t.TempDir(), "config.yaml")
 	configContent := `
 global:
   ttl_hours: 2
@@ -312,11 +324,9 @@ global:
 
 metadata:
   locations:
-    type: file
-    path: /tmp/locations.yaml
+    path: locations.yaml
   roles:
-    type: file
-    path: /tmp/roles.yaml
+    path: roles.yaml
 
 discovery:
   traceroute:

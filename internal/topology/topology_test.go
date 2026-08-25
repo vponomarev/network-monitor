@@ -2,6 +2,7 @@ package topology
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -299,10 +300,8 @@ func TestLoad_FromFile(t *testing.T) {
 }
 
 func TestLoad_NonExistentFile(t *testing.T) {
-	topology, err := Load("/nonexistent/topology.yaml")
-	require.NoError(t, err)
-	require.NotNil(t, topology)
-	assert.Equal(t, 0, topology.DeviceCount())
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
 }
 
 func TestLoad_InvalidYAML(t *testing.T) {

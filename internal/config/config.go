@@ -1,10 +1,14 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +20,7 @@ type Config struct {
 	Metadata    MetadataConfig    `yaml:"metadata"`
 	Discovery   DiscoveryConfig   `yaml:"discovery"`
 	Topology    TopologyConfig    `yaml:"topology"`
+	IRQAffinity IRQAffinityConfig `yaml:"irq_affinity"`
 	Metrics     MetricsConfig     `yaml:"metrics"`
 	Logging     LoggingConfig     `yaml:"logging"`
 	Connections ConnectionsConfig `yaml:"connections"`
@@ -111,6 +116,20 @@ type TopologyConfig struct {
 	Path    string `yaml:"path"`
 }
 
+type IRQAffinityConfig struct {
+	Enabled       bool    `yaml:"enabled"`
+	Interval      string  `yaml:"interval"`
+	BusyThreshold float64 `yaml:"busy_threshold"`
+}
+
+func (c IRQAffinityConfig) IntervalDuration() time.Duration {
+	d, e := time.ParseDuration(c.Interval)
+	if e != nil || d <= 0 {
+		return 15 * time.Second
+	}
+	return d
+}
+
 // TracerouteConfig holds traceroute settings
 type TracerouteConfig struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -118,9 +137,6 @@ type TracerouteConfig struct {
 	Mode         string `yaml:"mode"`
 	Interval     string `yaml:"interval"`
 	Protocol     string `yaml:"protocol"`
-	DstPort      int    `yaml:"dst_port"`
-	SrcPort      int    `yaml:"src_port"`
-	TCPFlags     string `yaml:"tcp_flags"`
 	MaxHops      int    `yaml:"max_hops"`
 	Timeout      string `yaml:"timeout"`
 	ProbesPerHop int    `yaml:"probes_per_hop"`
@@ -266,6 +282,7 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Path:    "topology.yaml",
 		},
+		IRQAffinity: IRQAffinityConfig{Enabled: true, Interval: "15s", BusyThreshold: 0.80},
 		Metrics: MetricsConfig{
 			Name: "netmon_tcp_loss_total",
 			DefaultLabels: []string{
@@ -306,21 +323,21 @@ func DefaultConfig() *Config {
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading config file %q: %w", path, err)
 		}
-		return nil, fmt.Errorf("reading config file: %w", err)
-	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
-	}
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parsing config file %q: %w", path, err)
+		}
 
-	// Resolve relative paths relative to config file directory
-	configDir := filepath.Dir(path)
-	cfg.resolveRelativePaths(configDir)
+		// Resolve relative paths relative to config file directory.
+		cfg.resolveRelativePaths(filepath.Dir(path))
+	}
 
 	// Override auth token from environment variable if not set in config
 	if cfg.Global.AuthToken == "" {
@@ -338,25 +355,29 @@ func Load(path string) (*Config, error) {
 // resolveRelativePaths converts relative paths to absolute paths relative to config file directory
 func (c *Config) resolveRelativePaths(configDir string) {
 	// Resolve metadata paths
-	if c.Metadata.Locations.Path != "" && !filepath.IsAbs(c.Metadata.Locations.Path) {
+	if c.Metadata.Locations.Path != "" && !configPathIsAbs(c.Metadata.Locations.Path) {
 		c.Metadata.Locations.Path = filepath.Join(configDir, c.Metadata.Locations.Path)
 	}
-	if c.Metadata.Roles.Path != "" && !filepath.IsAbs(c.Metadata.Roles.Path) {
+	if c.Metadata.Roles.Path != "" && !configPathIsAbs(c.Metadata.Roles.Path) {
 		c.Metadata.Roles.Path = filepath.Join(configDir, c.Metadata.Roles.Path)
 	}
-	if c.Metadata.Topology.Path != "" && !filepath.IsAbs(c.Metadata.Topology.Path) {
+	if c.Metadata.Topology.Path != "" && !configPathIsAbs(c.Metadata.Topology.Path) {
 		c.Metadata.Topology.Path = filepath.Join(configDir, c.Metadata.Topology.Path)
 	}
 
 	// Resolve topology path (legacy TopologyConfig)
-	if c.Topology.Path != "" && !filepath.IsAbs(c.Topology.Path) {
+	if c.Topology.Path != "" && !configPathIsAbs(c.Topology.Path) {
 		c.Topology.Path = filepath.Join(configDir, c.Topology.Path)
 	}
 
 	// Resolve log output path
-	if c.Logging.OutputPath != "" && !filepath.IsAbs(c.Logging.OutputPath) {
+	if c.Logging.OutputPath != "" && !configPathIsAbs(c.Logging.OutputPath) {
 		c.Logging.OutputPath = filepath.Join(configDir, c.Logging.OutputPath)
 	}
+}
+
+func configPathIsAbs(path string) bool {
+	return filepath.IsAbs(path) || strings.HasPrefix(path, "/")
 }
 
 // Validate validates the configuration
@@ -429,6 +450,14 @@ func (c *Config) Validate() error {
 		if c.Connections.MaxTrackedConnections > 1_000_000 || c.Connections.MaxPendingConnections > 1_000_000 {
 			return fmt.Errorf("invalid connections map limit: must not exceed 1000000")
 		}
+		if len(c.Connections.FilterPorts) > 256 {
+			return fmt.Errorf("invalid connections.filter_ports: at most 256 ports are supported")
+		}
+		for _, port := range c.Connections.FilterPorts {
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("invalid connections.filter_ports value %d: must be between 1 and 65535", port)
+			}
+		}
 	}
 
 	if c.Global.TracePipePath == "" {
@@ -459,9 +488,9 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate traceroute protocol
-	validProtocols := map[string]bool{"icmp": true, "udp": true, "tcp": true}
+	validProtocols := map[string]bool{"icmp": true}
 	if !validProtocols[c.Discovery.Traceroute.Protocol] {
-		return fmt.Errorf("invalid traceroute protocol: %s (valid: icmp, udp, tcp)", c.Discovery.Traceroute.Protocol)
+		return fmt.Errorf("invalid traceroute protocol: %s (only icmp is production-ready)", c.Discovery.Traceroute.Protocol)
 	}
 
 	if c.Discovery.Traceroute.MaxHops < 1 || c.Discovery.Traceroute.MaxHops > 64 {
@@ -490,6 +519,14 @@ func (c *Config) Validate() error {
 	// Validate topology path if enabled (legacy TopologyConfig)
 	if c.Topology.Enabled && c.Topology.Path == "" {
 		return fmt.Errorf("topology.path is required when topology is enabled")
+	}
+	if c.IRQAffinity.Enabled {
+		if d, err := time.ParseDuration(c.IRQAffinity.Interval); err != nil || d <= 0 {
+			return fmt.Errorf("invalid irq_affinity.interval: %q", c.IRQAffinity.Interval)
+		}
+		if c.IRQAffinity.BusyThreshold <= 0 || c.IRQAffinity.BusyThreshold > 1 {
+			return fmt.Errorf("invalid irq_affinity.busy_threshold: must be in (0,1]")
+		}
 	}
 
 	// Validate update sources if specified

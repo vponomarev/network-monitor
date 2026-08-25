@@ -1,22 +1,25 @@
 package conntrack
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
 // MetricsCollector collects and exports connection tracking metrics
 type MetricsCollector struct {
-	logger *zap.Logger
+	logger      *zap.Logger
+	reg         prometheus.Registerer
+	dropMu      sync.Mutex
+	lastDropped map[string]uint64
 
 	// Connection state metrics
 	connectionsTotal   *prometheus.GaugeVec
 	eventsTotal        *prometheus.CounterVec
 	handshakeSeconds   *prometheus.HistogramVec
 	connectionDuration *prometheus.HistogramVec
-	bytesTransferred   *prometheus.CounterVec
-	bytesPerConnection *prometheus.HistogramVec
-	droppedEventsTotal *prometheus.GaugeVec
+	droppedEventsTotal *prometheus.CounterVec
 	stateEntries       *prometheus.GaugeVec
 	stateCleanup       *prometheus.CounterVec
 	stateEvictions     *prometheus.CounterVec
@@ -25,8 +28,17 @@ type MetricsCollector struct {
 
 // NewMetricsCollector creates a new metrics collector
 func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
+	return NewMetricsCollectorWithRegisterer(logger, prometheus.DefaultRegisterer)
+}
+
+func NewMetricsCollectorWithRegisterer(logger *zap.Logger, reg prometheus.Registerer) *MetricsCollector {
+	if reg == nil {
+		reg = prometheus.NewRegistry()
+	}
 	mc := &MetricsCollector{
-		logger: logger.Named("conntrack_metrics"),
+		logger:      logger.Named("conntrack_metrics"),
+		reg:         reg,
+		lastDropped: make(map[string]uint64),
 	}
 
 	// Connection states gauge
@@ -67,28 +79,10 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 		[]string{"direction"},
 	)
 
-	// Bytes transferred counter
-	mc.bytesTransferred = prometheus.NewCounterVec(
+	// Sources report absolute monotonically increasing values. Convert their
+	// deltas into a real Prometheus counter.
+	mc.droppedEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "conntrack_bytes_total",
-			Help: "Total bytes transferred by direction",
-		},
-		[]string{"direction", "type"}, // type: sent or received
-	)
-
-	// Bytes per connection histogram
-	mc.bytesPerConnection = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "conntrack_bytes_per_connection",
-			Help:    "Bytes transferred per connection",
-			Buckets: prometheus.ExponentialBuckets(100, 10, 8), // 100B to 10GB
-		},
-		[]string{"direction"},
-	)
-
-	// Dropped events gauge (absolute count)
-	mc.droppedEventsTotal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
 			Name: "conntrack_dropped_events_total",
 			Help: "Total number of dropped connection events by reason",
 		},
@@ -124,21 +118,12 @@ func NewMetricsCollector(logger *zap.Logger) *MetricsCollector {
 	)
 
 	// Register metrics
-	prometheus.MustRegister(mc.connectionsTotal)
-	prometheus.MustRegister(mc.eventsTotal)
-	prometheus.MustRegister(mc.handshakeSeconds)
-	prometheus.MustRegister(mc.connectionDuration)
-	prometheus.MustRegister(mc.bytesTransferred)
-	prometheus.MustRegister(mc.bytesPerConnection)
-	prometheus.MustRegister(mc.droppedEventsTotal)
-	prometheus.MustRegister(mc.stateEntries)
-	prometheus.MustRegister(mc.stateCleanup)
-	prometheus.MustRegister(mc.stateEvictions)
-	prometheus.MustRegister(mc.stateOverflows)
-	mc.droppedEventsTotal.WithLabelValues("event_channel_full").Set(0)
-	mc.droppedEventsTotal.WithLabelValues("ringbuf_full").Set(0)
-	mc.droppedEventsTotal.WithLabelValues("connections_map_full").Set(0)
-	mc.droppedEventsTotal.WithLabelValues("pending_map_full").Set(0)
+	reg.MustRegister(mc.connectionsTotal, mc.eventsTotal, mc.handshakeSeconds,
+		mc.connectionDuration, mc.droppedEventsTotal, mc.stateEntries,
+		mc.stateCleanup, mc.stateEvictions, mc.stateOverflows)
+	for _, reason := range []string{"event_channel_full", "syslog_queue_full", "ringbuf_full", "connections_map_full", "pending_map_full"} {
+		mc.droppedEventsTotal.WithLabelValues(reason).Add(0)
+	}
 	for _, layer := range []string{"userspace", "kernel_connections", "kernel_pending"} {
 		mc.stateEntries.WithLabelValues(layer).Set(0)
 		mc.stateEvictions.WithLabelValues(layer).Add(0)
@@ -193,22 +178,9 @@ func (mc *MetricsCollector) OnConnectionEvent(conn *Connection, event Connection
 		}
 	}
 
-	// Track bytes transferred
-	if conn.BytesSent > 0 {
-		mc.bytesTransferred.WithLabelValues(direction, "sent").Add(float64(conn.BytesSent))
-	}
-	if conn.BytesRecv > 0 {
-		mc.bytesTransferred.WithLabelValues(direction, "received").Add(float64(conn.BytesRecv))
-	}
-
-	// Track connection duration and bytes for closed connections
+	// Track connection duration for terminal events.
 	if event == EventClosed || event == EventFailed || event == EventRejected {
 		mc.connectionDuration.WithLabelValues(direction).Observe(conn.Duration().Seconds())
-
-		totalBytes := conn.BytesSent + conn.BytesRecv
-		if totalBytes > 0 {
-			mc.bytesPerConnection.WithLabelValues(direction).Observe(float64(totalBytes))
-		}
 	}
 }
 
@@ -221,20 +193,28 @@ func (mc *MetricsCollector) UpdateStateMetrics(stats Stats) {
 
 // UpdateDroppedMetrics updates the dropped events metric
 func (mc *MetricsCollector) UpdateDroppedMetrics(reason string, dropped uint64) {
-	mc.droppedEventsTotal.WithLabelValues(reason).Set(float64(dropped))
+	mc.dropMu.Lock()
+	previous := mc.lastDropped[reason]
+	delta := dropped
+	if dropped >= previous {
+		delta = dropped - previous
+	}
+	mc.lastDropped[reason] = dropped
+	mc.dropMu.Unlock()
+	if delta > 0 {
+		mc.droppedEventsTotal.WithLabelValues(reason).Add(float64(delta))
+	}
 }
 
 // Stop unregisters metrics
 func (mc *MetricsCollector) Stop() {
-	prometheus.Unregister(mc.connectionsTotal)
-	prometheus.Unregister(mc.eventsTotal)
-	prometheus.Unregister(mc.handshakeSeconds)
-	prometheus.Unregister(mc.connectionDuration)
-	prometheus.Unregister(mc.bytesTransferred)
-	prometheus.Unregister(mc.bytesPerConnection)
-	prometheus.Unregister(mc.droppedEventsTotal)
-	prometheus.Unregister(mc.stateEntries)
-	prometheus.Unregister(mc.stateCleanup)
-	prometheus.Unregister(mc.stateEvictions)
-	prometheus.Unregister(mc.stateOverflows)
+	mc.reg.Unregister(mc.connectionsTotal)
+	mc.reg.Unregister(mc.eventsTotal)
+	mc.reg.Unregister(mc.handshakeSeconds)
+	mc.reg.Unregister(mc.connectionDuration)
+	mc.reg.Unregister(mc.droppedEventsTotal)
+	mc.reg.Unregister(mc.stateEntries)
+	mc.reg.Unregister(mc.stateCleanup)
+	mc.reg.Unregister(mc.stateEvictions)
+	mc.reg.Unregister(mc.stateOverflows)
 }

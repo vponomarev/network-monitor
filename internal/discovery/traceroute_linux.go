@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,13 +31,16 @@ type TracerouteConfig struct {
 
 // HopResult represents a single hop result from traceroute
 type HopResult struct {
-	TTL       int           `json:"ttl"`
-	IP        string        `json:"ip,omitempty"`
-	Hostname  string        `json:"hostname,omitempty"`
-	RTT       time.Duration `json:"rtt,omitempty"`
-	Lost      bool          `json:"lost"`
-	Timeout   bool          `json:"timeout"`
-	ProbeSent time.Time     `json:"probe_sent"`
+	TTL            int           `json:"ttl"`
+	IP             string        `json:"ip,omitempty"`
+	Hostname       string        `json:"hostname,omitempty"`
+	RTT            time.Duration `json:"rtt,omitempty"`
+	Lost           bool          `json:"lost"`
+	Timeout        bool          `json:"timeout"`
+	ProbeSent      time.Time     `json:"probe_sent"`
+	ProbesSent     int           `json:"probes_sent"`
+	ProbesReceived int           `json:"probes_received"`
+	LossPercent    float64       `json:"loss_percent"`
 }
 
 // TracerouteResult represents the result of a traceroute
@@ -70,7 +74,7 @@ type PacketTracerouter interface {
 type ICMPPacketTracerouter struct {
 	config *TracerouteConfig
 	logger *zap.Logger
-	srcIP  net.IP
+	seq    atomic.Uint32
 }
 
 // NewICMPTracerouter creates a new ICMP-based tracerouter
@@ -79,16 +83,9 @@ func NewICMPTracerouter(config *TracerouteConfig, logger *zap.Logger) (*ICMPPack
 		config = DefaultTracerouteConfig()
 	}
 
-	// Get source IP
-	srcIP, err := getOutboundIP()
-	if err != nil {
-		return nil, fmt.Errorf("getting source IP: %w", err)
-	}
-
 	return &ICMPPacketTracerouter{
 		config: config,
 		logger: logger.Named("traceroute"),
-		srcIP:  srcIP,
 	}, nil
 }
 
@@ -147,10 +144,11 @@ func (t *ICMPPacketTracerouter) Trace(ctx context.Context, dstIP string) (*Trace
 // traceHop traces a single hop
 func (t *ICMPPacketTracerouter) traceHop(ctx context.Context, conn *icmpConn, dst net.IP, ttl int) HopResult {
 	hop := HopResult{
-		TTL:       ttl,
-		Lost:      true,
-		Timeout:   true,
-		ProbeSent: time.Now(),
+		TTL:        ttl,
+		Lost:       true,
+		Timeout:    true,
+		ProbeSent:  time.Now(),
+		ProbesSent: t.config.ProbesPerHop,
 	}
 
 	// Set TTL on socket
@@ -170,17 +168,14 @@ func (t *ICMPPacketTracerouter) traceHop(ctx context.Context, conn *icmpConn, ds
 
 		rtt, ip, err := t.sendProbe(conn, dst)
 		if err == nil && ip != nil {
+			hop.ProbesReceived++
 			hop.Lost = false
 			hop.Timeout = false
 			hop.IP = ip.String()
 			rtts = append(rtts, rtt)
-
-			// Try reverse DNS lookup
-			if names, err := net.LookupAddr(ip.String()); err == nil && len(names) > 0 {
-				hop.Hostname = names[0]
-			}
 		}
 	}
+	hop.LossPercent = float64(hop.ProbesSent-hop.ProbesReceived) / float64(hop.ProbesSent) * 100
 
 	// Calculate average RTT
 	if len(rtts) > 0 {
@@ -199,7 +194,8 @@ func (t *ICMPPacketTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Dura
 	start := time.Now()
 
 	// Create ICMP Echo Request
-	seq := time.Now().Nanosecond() & 0xFFFF
+	seq := int(t.seq.Add(1) & 0xFFFF)
+	id := os.Getpid() & 0xFFFF
 	icmpData := createICMPEchoRequest(seq)
 
 	// Send
@@ -208,20 +204,47 @@ func (t *ICMPPacketTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Dura
 	}
 
 	// Wait for response with timeout
-	conn.SetReadDeadline(time.Now().Add(t.config.Timeout))
-	response, fromIP, err := conn.RecvFrom()
-	if err != nil {
-		return 0, nil, err
+	deadline := time.Now().Add(t.config.Timeout)
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return 0, nil, fmt.Errorf("setting read deadline: %w", err)
 	}
-
-	rtt := time.Since(start)
-
-	// Parse ICMP response
-	if isICMPTimeExceeded(response) || isICMPEchoReply(response) {
-		return rtt, fromIP, nil
+	for {
+		response, fromIP, err := conn.RecvFrom()
+		if err != nil {
+			return 0, nil, err
+		}
+		if matchesICMPProbe(response, uint16(id), uint16(seq)) {
+			return time.Since(start), fromIP, nil
+		}
+		if time.Now().After(deadline) {
+			return 0, nil, fmt.Errorf("waiting for matching ICMP response: timeout")
+		}
 	}
+}
 
-	return 0, nil, fmt.Errorf("unexpected ICMP type")
+// matchesICMPProbe rejects unrelated traffic on the shared raw ICMP socket.
+// Time Exceeded messages quote the original IPv4 and ICMP headers.
+func matchesICMPProbe(data []byte, id, seq uint16) bool {
+	if len(data) < 8 {
+		return false
+	}
+	switch data[0] {
+	case 0: // Echo Reply
+		return binary.BigEndian.Uint16(data[4:6]) == id && binary.BigEndian.Uint16(data[6:8]) == seq
+	case 11: // Time Exceeded
+		if len(data) < 8+20 {
+			return false
+		}
+		quotedIP := data[8:]
+		ihl := int(quotedIP[0]&0x0f) * 4
+		if ihl < 20 || len(quotedIP) < ihl+8 || quotedIP[9] != syscall.IPPROTO_ICMP {
+			return false
+		}
+		quotedICMP := quotedIP[ihl:]
+		return quotedICMP[0] == 8 && binary.BigEndian.Uint16(quotedICMP[4:6]) == id && binary.BigEndian.Uint16(quotedICMP[6:8]) == seq
+	default:
+		return false
+	}
 }
 
 // createICMPEchoRequest creates an ICMP Echo Request packet
@@ -276,11 +299,6 @@ func isICMPTimeExceeded(data []byte) bool {
 	return len(data) >= 1 && data[0] == 11 // Type 11: Time Exceeded
 }
 
-// isICMPEchoReply checks if packet is ICMP Echo Reply
-func isICMPEchoReply(data []byte) bool {
-	return len(data) >= 1 && data[0] == 0 // Type 0: Echo Reply
-}
-
 // icmpConn represents an ICMP connection
 type icmpConn struct {
 	fd int
@@ -292,12 +310,6 @@ func createICMPConnection() (*icmpConn, error) {
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_ICMP)
 	if err != nil {
 		return nil, fmt.Errorf("creating raw socket: %w", err)
-	}
-
-	// Set non-blocking
-	if err := syscall.SetNonblock(fd, true); err != nil {
-		syscall.Close(fd)
-		return nil, fmt.Errorf("setting non-blocking: %w", err)
 	}
 
 	return &icmpConn{fd: fd}, nil
@@ -346,9 +358,12 @@ func (c *icmpConn) RecvFrom() ([]byte, net.IP, error) {
 		srcIP = net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
 	}
 
-	// Skip IP header (usually 20 bytes) to get to ICMP payload
-	if n > 20 {
-		return buf[20:n], srcIP, nil
+	// Raw IPv4 sockets include the outer IP header. Respect IP options.
+	if n >= 20 {
+		ihl := int(buf[0]&0x0f) * 4
+		if ihl >= 20 && ihl <= n {
+			return buf[ihl:n], srcIP, nil
+		}
 	}
 
 	return buf[:n], srcIP, nil
@@ -493,7 +508,9 @@ func (t *UDPPacketTracerouter) sendUDPProbe(conn *udpConn, dst net.IP, port int)
 		return 0, nil, err
 	}
 
-	conn.SetReadDeadline(time.Now().Add(t.config.Timeout))
+	if err := conn.SetReadDeadline(time.Now().Add(t.config.Timeout)); err != nil {
+		return 0, nil, fmt.Errorf("setting UDP read deadline: %w", err)
+	}
 	response, fromIP, err := conn.RecvFrom()
 	if err != nil {
 		return 0, nil, err
@@ -608,12 +625,10 @@ func NewTracerouteFactory(config *TracerouteConfig, logger *zap.Logger) *Tracero
 // Create creates a tracerouter based on protocol
 func (f *TracerouteFactory) Create(protocol string) (PacketTracerouter, error) {
 	switch protocol {
-	case "udp":
-		return NewUDPTracerouter(f.config, f.logger)
-	case "tcp":
-		return NewTCPTracerouter(f.config, f.logger)
 	case "icmp", "":
 		return NewICMPTracerouter(f.config, f.logger)
+	case "udp", "tcp":
+		return nil, fmt.Errorf("traceroute protocol %q is not production-ready; use icmp", protocol)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s (use icmp, udp, or tcp)", protocol)
 	}
@@ -644,7 +659,10 @@ func (p *TraceroutePool) Trace(ctx context.Context, dstIP string) (*TracerouteRe
 		defer func() { <-p.semaphore }()
 	}
 
-	tracerouter, err := p.factory.Create("icmp")
+	if p.factory == nil {
+		return nil, fmt.Errorf("traceroute factory is nil")
+	}
+	tracerouter, err := p.factory.Create(p.factory.config.Protocol)
 	if err != nil {
 		return nil, err
 	}
@@ -817,7 +835,9 @@ func (t *TCPPacketTracerouter) sendTCPProbe(conn *tcpConn, dst net.IP, port int)
 	}
 
 	// Wait for response
-	conn.SetReadDeadline(time.Now().Add(t.config.Timeout))
+	if err := conn.SetReadDeadline(time.Now().Add(t.config.Timeout)); err != nil {
+		return 0, nil, fmt.Errorf("setting TCP read deadline: %w", err)
+	}
 	response, fromIP, err := conn.RecvFrom()
 	if err != nil {
 		return 0, nil, err

@@ -26,7 +26,7 @@ func TestHTTPPoller_NewHTTPPoller(t *testing.T) {
 		URL:      "http://example.com/test.yaml",
 		Interval: 10 * time.Minute,
 		Timeout:  5 * time.Second,
-		FilePath: "/tmp/test.yaml",
+		FilePath: filepath.Join(t.TempDir(), "test.yaml"),
 	}
 
 	poller := NewHTTPPoller(cfg, logger, reg)
@@ -45,7 +45,7 @@ func TestHTTPPoller_SetValidator(t *testing.T) {
 		URL:      "http://example.com/test.yaml",
 		Interval: 10 * time.Minute,
 		Timeout:  5 * time.Second,
-		FilePath: "/tmp/test.yaml",
+		FilePath: filepath.Join(t.TempDir(), "test.yaml"),
 	}
 
 	poller := NewHTTPPoller(cfg, logger, reg)
@@ -70,7 +70,7 @@ func TestHTTPPoller_SetReloadFunc(t *testing.T) {
 		URL:      "http://example.com/test.yaml",
 		Interval: 10 * time.Minute,
 		Timeout:  5 * time.Second,
-		FilePath: "/tmp/test.yaml",
+		FilePath: filepath.Join(t.TempDir(), "test.yaml"),
 	}
 
 	poller := NewHTTPPoller(cfg, logger, reg)
@@ -94,7 +94,7 @@ func TestHTTPPoller_GetStatus(t *testing.T) {
 		URL:      "http://example.com/test.yaml",
 		Interval: 10 * time.Minute,
 		Timeout:  5 * time.Second,
-		FilePath: "/tmp/test.yaml",
+		FilePath: filepath.Join(t.TempDir(), "test.yaml"),
 	}
 
 	poller := NewHTTPPoller(cfg, logger, reg)
@@ -154,7 +154,7 @@ func TestHTTPPoller_Fetch(t *testing.T) {
 		URL:      server.URL,
 		Interval: 10 * time.Minute,
 		Timeout:  5 * time.Second,
-		FilePath: "/tmp/test.yaml",
+		FilePath: filepath.Join(t.TempDir(), "test.yaml"),
 	}
 
 	poller := NewHTTPPoller(cfg, logger, reg)
@@ -180,7 +180,7 @@ func TestHTTPPoller_Fetch_ErrorStatus(t *testing.T) {
 		URL:      server.URL,
 		Interval: 10 * time.Minute,
 		Timeout:  5 * time.Second,
-		FilePath: "/tmp/test.yaml",
+		FilePath: filepath.Join(t.TempDir(), "test.yaml"),
 	}
 
 	poller := NewHTTPPoller(cfg, logger, reg)
@@ -190,6 +190,18 @@ func TestHTTPPoller_Fetch_ErrorStatus(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 404")
 	assert.Nil(t, data)
+}
+
+func TestHTTPPoller_Fetch_RejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(make([]byte, (10<<20)+1))
+	}))
+	defer server.Close()
+	poller := NewHTTPPoller(HTTPPollerConfig{Name: "large", URL: server.URL, Timeout: 5 * time.Second}, zap.NewNop(), prometheus.NewRegistry())
+	data, err := poller.fetch(context.Background())
+	require.Error(t, err)
+	assert.Nil(t, data)
+	assert.Contains(t, err.Error(), "exceeds")
 }
 
 func TestHTTPPoller_CheckAndUpdate_NoChanges(t *testing.T) {
@@ -472,13 +484,10 @@ func TestHTTPPollerRefreshSerializesConcurrentCalls(t *testing.T) {
 }
 
 func TestHashFloat(t *testing.T) {
-	// Просто проверяем что функция не паникует
-	assert.NotPanics(t, func() {
-		hashFloat("")
-		hashFloat("abc")
-		hashFloat("a1b2c3d4e5f67890")
-		hashFloat("ffffffffffffffff")
-	})
+	assert.Zero(t, hashFloat(""))
+	assert.Zero(t, hashFloat("abc"))
+	assert.Equal(t, float64(0xa1b2c3d4e5f67), hashFloat("a1b2c3d4e5f67890"))
+	assert.Equal(t, float64(0xfffffffffffff), hashFloat("ffffffffffffffff"))
 }
 
 func TestValidateYAML(t *testing.T) {

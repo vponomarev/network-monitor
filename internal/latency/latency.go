@@ -120,7 +120,9 @@ func (m *Monitor) measureUDP(ctx context.Context, target string) *Result {
 		0x00, 0x01, // Class: IN
 	}
 
-	conn.SetDeadline(time.Now().Add(timeout))
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return &Result{Target: target, Timestamp: start, Success: false, Error: fmt.Errorf("setting deadline: %w", err)}
+	}
 
 	if _, err := conn.Write(dnsQuery); err != nil {
 		return &Result{

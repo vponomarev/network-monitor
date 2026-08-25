@@ -44,6 +44,7 @@ type Tracker struct {
 
 	// Syslog writer
 	syslogWriter *SyslogWriter
+	syslogEvents chan syslogEvent
 
 	// Metrics collector
 	metricsCollector *MetricsCollector
@@ -56,10 +57,16 @@ type Tracker struct {
 
 	// Dropped events counter
 	droppedEvents             uint64
+	syslogDropped             uint64
 	kernelDroppedEvents       uint64
 	kernelConnectionOverflows uint64
 	kernelPendingOverflows    uint64
 	ready                     atomic.Bool
+}
+
+type syslogEvent struct {
+	conn  *Connection
+	event ConnectionEvent
 }
 
 // eBPF event structure (must match C struct)
@@ -142,7 +149,7 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 	logger.Info("Connection tracker buffer size", zap.Int("size", bufferSize))
 
 	// Create metrics collector
-	tracker.metricsCollector = NewMetricsCollector(logger)
+	tracker.metricsCollector = NewMetricsCollectorWithRegisterer(logger, cfg.Registerer)
 
 	// Create state machine
 	tracker.stateMachine = NewStateMachine(StateMachineConfig{
@@ -176,6 +183,7 @@ func NewTracker(cfg Config, logger *zap.Logger) (*Tracker, error) {
 			logger.Warn("Failed to create syslog writer", zap.Error(err))
 		} else {
 			tracker.syslogWriter = writer
+			tracker.syslogEvents = make(chan syslogEvent, 1024)
 		}
 	}
 
@@ -196,19 +204,43 @@ func (t *Tracker) Run(ctx context.Context) error {
 	}
 	defer t.close()
 	defer t.ready.Store(false)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	// Create the reader before advertising readiness. A missing/incompatible map
+	// is a startup failure, not a healthy daemon with a dead consumer.
+	if t.colls == nil {
+		return fmt.Errorf("eBPF collection is nil after load")
+	}
+	ringBuf, ok := t.colls.Maps["events"]
+	if !ok {
+		return fmt.Errorf("events map not found in eBPF collection")
+	}
+	rd, err := ringbuf.NewReader(ringBuf)
+	if err != nil {
+		return fmt.Errorf("creating ringbuf reader: %w", err)
+	}
 
 	// Start background consumers and wait for them before closing eBPF maps.
+	readerErr := make(chan error, 1)
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		t.readEvents(ctx)
+		readerErr <- t.readEvents(runCtx, rd)
 	}()
+	if t.syslogEvents != nil {
+		t.wg.Add(1)
+		go func() {
+			defer t.wg.Done()
+			t.writeSyslog(runCtx)
+		}()
+	}
 	t.ready.Store(true)
 	if dropMap, ok := t.colls.Maps["event_drops"]; ok {
 		t.wg.Add(1)
 		go func() {
 			defer t.wg.Done()
-			t.observeKernelDrops(ctx, dropMap)
+			t.observeKernelDrops(runCtx, dropMap)
 		}()
 	} else {
 		t.logger.Warn("Kernel drop counter map is unavailable; rebuild conntrack eBPF")
@@ -216,18 +248,27 @@ func (t *Tracker) Run(ctx context.Context) error {
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		t.cleanupKernelState(ctx)
+		t.cleanupKernelState(runCtx)
 	}()
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
-		t.updateMetrics(ctx)
+		t.updateMetrics(runCtx)
 	}()
 
-	<-ctx.Done()
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case err := <-readerErr:
+		if err != nil {
+			runErr = fmt.Errorf("ringbuf consumer stopped: %w", err)
+		}
+	}
+	cancelRun()
+	t.ready.Store(false)
 	t.logger.Info("Stopping connection tracker")
 	t.wg.Wait()
-	return nil
+	return runErr
 }
 
 // loadEBPF loads and attaches eBPF programs
@@ -290,8 +331,8 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 
 	// Log available programs and maps
 	t.logger.Debug("eBPF spec loaded",
-		zap.Strings("programs", getMapKeysSpec(spec.Programs)),
-		zap.Strings("maps", getMapKeys2(spec.Maps)),
+		zap.Strings("programs", mapKeys(spec.Programs)),
+		zap.Strings("maps", mapKeys(spec.Maps)),
 	)
 
 	// Check if tracepoint is present - may not be supported on older kernels
@@ -318,6 +359,11 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 		}
 	}
 	t.colls = colls
+	if err := t.configurePortFilter(); err != nil {
+		t.colls.Close()
+		t.colls = nil
+		return fmt.Errorf("configuring port filter: %w", err)
+	}
 
 	t.logger.Info("eBPF collection loaded successfully",
 		zap.Bool("track_incoming", t.config.TrackIncoming),
@@ -332,24 +378,35 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 	return nil
 }
 
-// getMapKeys returns keys from a map as string slice
-func getMapKeys(m map[string]*ebpf.Program) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+func (t *Tracker) configurePortFilter() error {
+	configMap, ok := t.colls.Maps["filter_config"]
+	if !ok {
+		if len(t.config.FilterPorts) > 0 {
+			return fmt.Errorf("filter_config map is unavailable; rebuild conntrack eBPF")
+		}
+		return nil
 	}
-	return keys
+	portsMap, ok := t.colls.Maps["filter_ports"]
+	if !ok {
+		return fmt.Errorf("filter_ports map is unavailable")
+	}
+	enabled := uint8(0)
+	if len(t.config.FilterPorts) > 0 {
+		enabled = 1
+		for _, configured := range t.config.FilterPorts {
+			port, value := uint16(configured), uint8(1)
+			if err := portsMap.Put(port, value); err != nil {
+				return fmt.Errorf("adding port %d: %w", configured, err)
+			}
+		}
+	}
+	if err := configMap.Put(uint32(0), enabled); err != nil {
+		return fmt.Errorf("setting filter state: %w", err)
+	}
+	return nil
 }
 
-func getMapKeysSpec(m map[string]*ebpf.ProgramSpec) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func getMapKeys2(m map[string]*ebpf.MapSpec) []string {
+func mapKeys[T any](m map[string]T) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -363,7 +420,7 @@ func getMapKeys2(m map[string]*ebpf.MapSpec) []string {
 func (t *Tracker) attachPrograms() error {
 	// Log available programs
 	t.logger.Info("Available eBPF programs",
-		zap.Strings("programs", getMapKeys(t.colls.Programs)),
+		zap.Strings("programs", mapKeys(t.colls.Programs)),
 	)
 
 	if t.config.TrackOutgoing || t.config.TrackCloses {
@@ -396,26 +453,7 @@ func (t *Tracker) attachPrograms() error {
 }
 
 // readEvents reads connection events from eBPF ring buffer
-func (t *Tracker) readEvents(ctx context.Context) {
-	if t.colls == nil {
-		// eBPF not loaded, events will come from simulation
-		t.logger.Info("eBPF collection not loaded, using simulation")
-		return
-	}
-
-	// Get ring buffer reader
-	ringBuf, ok := t.colls.Maps["events"]
-	if !ok {
-		t.logger.Error("Events map not found in eBPF collection")
-		return
-	}
-
-	t.logger.Info("Creating ringbuf reader", zap.String("map", ringBuf.String()))
-	rd, err := ringbuf.NewReader(ringBuf)
-	if err != nil {
-		t.logger.Error("Creating ringbuf reader", zap.Error(err))
-		return
-	}
+func (t *Tracker) readEvents(ctx context.Context, rd *ringbuf.Reader) error {
 	defer rd.Close()
 	go func() {
 		<-ctx.Done()
@@ -428,23 +466,20 @@ func (t *Tracker) readEvents(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			t.logger.Info("Context done, exiting ringbuf reader")
-			return
+			return nil
 		default:
 		}
 
 		record, err := rd.Read()
 		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) || ctx.Err() != nil {
+			if ctx.Err() != nil {
 				t.logger.Info("Ringbuf reader stopped")
-				return
+				return nil
 			}
-			t.logger.Warn("Reading ringbuf; retrying", zap.Error(err))
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(100 * time.Millisecond):
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return fmt.Errorf("ringbuf closed unexpectedly: %w", err)
 			}
-			continue
+			return fmt.Errorf("reading ringbuf: %w", err)
 		}
 
 		t.logger.Debug("Ringbuf event received", zap.Int("bytes", len(record.RawSample)))
@@ -466,14 +501,14 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 
 	// Parse binary data (must match C struct layout)
 	event := &bpfConnectionEvent{}
-	event.TimestampNs = binary.LittleEndian.Uint64(data[0:8])
-	event.PidTgid = binary.LittleEndian.Uint64(data[8:16])
-	event.PID = binary.LittleEndian.Uint32(data[16:20])
-	event.TID = binary.LittleEndian.Uint32(data[20:24])
+	event.TimestampNs = binary.NativeEndian.Uint64(data[0:8])
+	event.PidTgid = binary.NativeEndian.Uint64(data[8:16])
+	event.PID = binary.NativeEndian.Uint32(data[16:20])
+	event.TID = binary.NativeEndian.Uint32(data[20:24])
 	copy(event.SrcIP[:], data[24:40])
 	copy(event.DstIP[:], data[40:56])
-	event.SrcPort = binary.LittleEndian.Uint16(data[56:58])
-	event.DstPort = binary.LittleEndian.Uint16(data[58:60])
+	event.SrcPort = binary.NativeEndian.Uint16(data[56:58])
+	event.DstPort = binary.NativeEndian.Uint16(data[58:60])
 	event.Protocol = data[60]
 	event.Direction = data[61]
 	event.State = data[62]
@@ -537,11 +572,15 @@ func sanitizeProcessName(name string) string {
 
 // processConnection processes a connection event through state machine
 func (t *Tracker) processConnection(conn *Connection) {
+	if len(t.config.FilterPorts) > 0 && !containsPort(t.config.FilterPorts, conn.SourcePort, conn.DestPort) {
+		return
+	}
 	// Determine event type from state
 	eventType := EventNew
-	if conn.State == StateEstablished {
+	switch conn.State {
+	case StateEstablished:
 		eventType = EventEstablished
-	} else if conn.State == StateClosed {
+	case StateClosed:
 		eventType = EventClosed
 	}
 
@@ -590,10 +629,14 @@ func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
 		t.metricsCollector.OnConnectionEvent(conn, event)
 	}
 
-	// Write to syslog
-	if t.syslogWriter != nil {
-		if err := t.syslogWriter.WriteConnection(conn, event); err != nil {
-			t.logger.Warn("Failed to write to syslog", zap.Error(err))
+	// Queue syslog I/O so a slow remote collector cannot stall ring-buffer
+	// consumption. The queue is bounded and drops are observable.
+	if t.syslogEvents != nil {
+		select {
+		case t.syslogEvents <- syslogEvent{conn: cloneConnection(conn), event: event}:
+		default:
+			dropped := atomic.AddUint64(&t.syslogDropped, 1)
+			t.metricsCollector.UpdateDroppedMetrics("syslog_queue_full", dropped)
 		}
 	}
 
@@ -612,6 +655,28 @@ func (t *Tracker) onConnectionEvent(conn *Connection, event ConnectionEvent) {
 		atomic.AddUint64(&t.droppedEvents, 1)
 		t.logger.Debug("Event channel full, dropping event",
 			zap.Uint64("dropped_total", atomic.LoadUint64(&t.droppedEvents)))
+	}
+}
+
+func containsPort(ports []int, src, dst uint16) bool {
+	for _, port := range ports {
+		if port > 0 && port <= 65535 && (uint16(port) == src || uint16(port) == dst) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tracker) writeSyslog(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case item := <-t.syslogEvents:
+			if err := t.syslogWriter.WriteConnection(item.conn, item.event); err != nil {
+				t.logger.Warn("Failed to write to syslog", zap.Error(err))
+			}
+		}
 	}
 }
 
@@ -755,7 +820,7 @@ func cleanupTimestampedMap(m *ebpf.Map, nowNS uint64, ttl time.Duration) (remain
 		if len(value) < 8 {
 			return remaining, deleted, fmt.Errorf("map value too short: %d", len(value))
 		}
-		timestamp := binary.LittleEndian.Uint64(value[:8])
+		timestamp := binary.NativeEndian.Uint64(value[:8])
 		if timestamp > nowNS || nowNS-timestamp < cutoff {
 			continue
 		}

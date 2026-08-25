@@ -151,13 +151,14 @@ func (t *UnknownTracker) observeIP(ip, direction string) {
 
 func (t *UnknownTracker) missingFor(ip string) []string {
 	missing := make([]string, 0, len(unknownAttributes))
+	location := t.locations.Lookup(ip)
 	if t.roles.GetRole(ip) == "unknown" {
 		missing = append(missing, UnknownRole)
 	}
-	if t.locations.GetLocation(ip) == "unknown" {
+	if location.Location == "unknown" {
 		missing = append(missing, UnknownLocation)
 	}
-	if t.locations.GetVrf(ip) == "unknown" {
+	if location.VRF == "unknown" {
 		missing = append(missing, UnknownVRF)
 	}
 	return missing

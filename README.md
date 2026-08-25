@@ -27,7 +27,7 @@ CO-RE eBPF-программы фиксируют ретрансляции и и�
 | `conntrack` | Входящие и исходящие TCP `ESTABLISHED`/`CLOSED`, PID/comm, bounded state | Production-qualified standalone service |
 | `pktloss` | Старый прототип чтения `trace_pipe` | Experimental; не использовать в production |
 
-Актуальный релиз — [v2.3.0](https://github.com/vponomarev/network-monitor/releases/tag/v2.3.0).
+Актуальный релиз — [v2.8.0](https://github.com/vponomarev/network-monitor/releases/tag/v2.8.0).
 Он проверен одним Linux `amd64` бинарником на ядрах 5.15, 6.1, 6.8 и 6.12.
 ARM-артефакты не публикуются, потому что для них пока нет runtime-стенда и
 архитектурно корректной eBPF qualification.
@@ -67,7 +67,9 @@ eviction, overflow и dropped events наблюдаемы через Prometheus.
 - `netmon_loss_active_series` и `netmon_loss_series_dropped_total` — контроль
   кардинальности;
 - `netmon_metadata_unknown_ips{attribute}` — число IP без role/location/VRF;
-- `netmon_path_*` — результаты path discovery.
+- `netmon_path_*` — результаты path discovery;
+- `netmon_irq_affinity_cross_numa`, `netmon_irq_affinity_risk` и
+  `netmon_irq_affinity_packet_loss_anomaly` — диагностика NUMA/IRQ placement.
 
 Основные метрики `conntrack`:
 
@@ -79,6 +81,9 @@ eviction, overflow и dropped events наблюдаемы через Prometheus.
 - `conntrack_state_cleanup_total`, `conntrack_state_evictions_total` и
   `conntrack_state_overflow_total`;
 - `conntrack_dropped_events_total{reason}`.
+
+Сбор TCP loss и conntrack в текущей версии поддерживает IPv4. IPv6-адреса
+корректно обрабатываются metadata-агрегацией, но не собираются eBPF-программами.
 
 Примеры PromQL:
 
@@ -138,7 +143,7 @@ connections:
 Netmon поставляется bundle-архивом с бинарником, конфигурациями и systemd unit:
 
 ```bash
-VERSION=v2.6.0
+VERSION=v2.8.0
 curl -fLO "https://github.com/vponomarev/network-monitor/releases/download/${VERSION}/netmon-${VERSION}-linux-amd64.tar.gz"
 tar -xzf "netmon-${VERSION}-linux-amd64.tar.gz"
 cd "netmon-${VERSION}-linux-amd64"
@@ -220,6 +225,7 @@ docs/                operational guides, architecture, roadmap и история
 - [Конфигурация](docs/configuration.md)
 - [HTTP API](docs/api-reference.md)
 - [Архитектура](docs/architecture.md)
+- [Диагностика NUMA/IRQ affinity](docs/IRQ_AFFINITY.md)
 - [Тестирование](docs/TESTING_GUIDE.md)
 - [Процесс выпуска](docs/RELEASE_PROCESS.md)
 - [Полный индекс документации](docs/README.md)

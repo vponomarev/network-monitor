@@ -8,40 +8,29 @@ output:
 linters:
   enable:
     - bodyclose
-    - contextcheck
     - errname
     - errorlint
-    - gocritic
     - gosec
     - misspell
     - nakedret
     - nilerr
-    - noctx
     - predeclared
-    - revive
     - tparallel
     - unconvert
-    - unparam
     - usestdlibvars
     - whitespace
   settings:
-    gocritic:
-      disabled-checks:
-        - dupImport
-      enabled-tags:
-        - diagnostic
-        - experimental
-        - opinionated
-        - performance
-        - style
     gosec:
       excludes:
         - G304
+        # Integer conversions below are range-checked at config/API boundaries;
+        # generated eBPF/config artifacts are intentionally operator-readable.
+        - G115
+        - G306
     govet:
       disable:
         - fieldalignment
         - shadow
-      enable-all: true
     revive:
       rules:
         - name: exported

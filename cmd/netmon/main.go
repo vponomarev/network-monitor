@@ -23,6 +23,7 @@ import (
 	"github.com/vponomarev/network-monitor/internal/discovery"
 	"github.com/vponomarev/network-monitor/internal/dns"
 	"github.com/vponomarev/network-monitor/internal/health"
+	"github.com/vponomarev/network-monitor/internal/irqaffinity"
 	"github.com/vponomarev/network-monitor/internal/latency"
 	"github.com/vponomarev/network-monitor/internal/losscollector"
 	"github.com/vponomarev/network-monitor/internal/metadata"
@@ -37,6 +38,27 @@ var (
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 )
+
+func displayConfigPath(path string) string {
+	if path == "" {
+		return "<built-in defaults>"
+	}
+	return path
+}
+
+func requireAuthMiddleware(handler http.Handler, authToken string) http.Handler {
+	if authToken == "" {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("Authorization")
+		if subtle.ConstantTimeCompare([]byte(token), []byte("Bearer "+authToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	buildInfo := buildinfo.New("netmon", Version, GitCommit, BuildTime)
@@ -57,9 +79,6 @@ func main() {
 	// Load configuration
 	if *configPath == "" {
 		*configPath = os.Getenv("NETMON_CONFIG")
-		if *configPath == "" {
-			*configPath = "config.yaml"
-		}
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -86,7 +105,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	// Check if tracing is enabled (warn if not) — only relevant for the legacy
 	// trace_pipe loss source; the eBPF source does not use the text tracepoint.
@@ -96,7 +115,7 @@ func main() {
 
 	logger.Info("Starting Network Monitor",
 		zap.String("version", Version),
-		zap.String("config", *configPath),
+		zap.String("config", displayConfigPath(*configPath)),
 	)
 
 	// Initialize metadata matchers (from local files - required for startup)
@@ -125,8 +144,9 @@ func main() {
 	if cfg.Topology.Enabled {
 		networkTopology, err = topology.Load(cfg.Topology.Path)
 		if err != nil {
-			logger.Warn("Failed to load topology, using empty topology", zap.Error(err))
-			networkTopology = topology.NewTopology()
+			logger.Error("Failed to load enabled topology", zap.Error(err))
+			_ = logger.Sync()
+			os.Exit(1)
 		} else {
 			logger.Info("Topology loaded",
 				zap.Int("devices", networkTopology.DeviceCount()),
@@ -158,8 +178,9 @@ func main() {
 		fatalMu.Unlock()
 		cancel()
 	}
+	var discoveryService *discovery.DiscoveryService
 
-	// Create metrics exporter with topology and cardinality config.
+	// Create metrics exporter with cardinality controls.
 	exporter := metrics.NewExporterWithConfig(
 		cfg.Metrics.Name, locationMatcher, roleMatcher, logger,
 		prometheus.DefaultRegisterer,
@@ -169,12 +190,19 @@ func main() {
 			LabelNames: cfg.Metrics.LabelNames(),
 		},
 	)
-	exporter.SetTopology(networkTopology)
 	exporter.SetTTL(cfg.TTL())
 	prometheus.MustRegister(buildInfo.Collector())
 	// Periodic TTL cleanup: the raw CounterVec is registered (not the exporter),
 	// so scrapes never trigger Collect/cleanupOld — run a janitor instead.
 	exporter.StartJanitor(ctx, time.Minute)
+	if cfg.IRQAffinity.Enabled {
+		irqCollector := irqaffinity.New(irqaffinity.Options{Interval: cfg.IRQAffinity.IntervalDuration(), BusyThreshold: cfg.IRQAffinity.BusyThreshold}, logger, prometheus.DefaultRegisterer)
+		go func() {
+			if err := irqCollector.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("IRQ affinity collector stopped", zap.Error(err))
+			}
+		}()
+	}
 
 	var (
 		unknownTracker        *metadata.UnknownTracker
@@ -337,7 +365,9 @@ func main() {
 		}
 
 		exporter.SetMatchers(locationMatcher, roleMatcher)
-		exporter.SetTopology(networkTopology)
+		if discoveryService != nil {
+			discoveryService.SetTopology(networkTopology)
+		}
 		if unknownTracker != nil {
 			unknownTracker.Reconcile()
 		}
@@ -368,14 +398,13 @@ func main() {
 			default:
 				logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 				cancel()
+				signal.Stop(sigChan)
 				return
 			}
 		}
 	}()
 
 	// Create discovery service with traceroute
-	var discoveryService *discovery.DiscoveryService
-
 	if cfg.Discovery.Traceroute.Enabled {
 		// Parse interval
 		interval, err := time.ParseDuration(cfg.Discovery.Traceroute.Interval)
@@ -390,15 +419,33 @@ func main() {
 		cache := discovery.NewPathCache(cfg.TTL(), 1000)
 		lossTracker := discovery.NewLossTracker(cfg.TTL())
 
-		// Create discovery service with default tracerouter
+		probeTimeout, err := time.ParseDuration(cfg.Discovery.Traceroute.Timeout)
+		if err != nil {
+			logger.Error("Invalid traceroute timeout", zap.Error(err))
+			os.Exit(1)
+		}
+		tracerouter, err := discovery.NewPacketPathTracerouter(&discovery.TracerouteConfig{
+			MaxHops: cfg.Discovery.Traceroute.MaxHops, Timeout: probeTimeout,
+			ProbesPerHop: cfg.Discovery.Traceroute.ProbesPerHop, StartTTL: 1,
+			Protocol: cfg.Discovery.Traceroute.Protocol,
+		}, logger, 4)
+		if err != nil {
+			logger.Error("Failed to initialize traceroute", zap.Error(err))
+			os.Exit(1)
+		}
+
 		discoveryService = discovery.NewDiscoveryService(
-			discovery.NewDefaultTracerouter(),
+			tracerouter,
 			cache,
 			lossTracker,
 			cfg.Discovery.Traceroute.TopN,
 			cfg.Discovery.Traceroute.Mode,
 			interval,
 		)
+		discoveryService.SetMetrics(discovery.NewMetrics(prometheus.DefaultRegisterer, 1000))
+		discoveryService.SetTopology(networkTopology)
+		discoveryService.StartPeriodicDiscovery(ctx)
+		retransmits.discovery = discoveryService
 
 		logger.Info("Discovery service initialized",
 			zap.Int("top_n", cfg.Discovery.Traceroute.TopN),
@@ -447,7 +494,7 @@ func main() {
 			// Collector stopped (error or shutdown): no longer collecting data.
 			collectorMetrics.SetUp(false)
 			healthState.SetCollectorReady(false)
-			if err != nil && err != context.Canceled {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				// The loss collector is critical — its failure must take down the
 				// process so it gets restarted rather than running blind.
 				logger.Error("FATAL: loss collector stopped", zap.Error(err))
@@ -464,6 +511,7 @@ func main() {
 			TrackOutgoing:         cfg.Connections.TrackOutgoing,
 			TrackCloses:           true,
 			FilterPorts:           cfg.Connections.FilterPorts,
+			Registerer:            prometheus.DefaultRegisterer,
 			SYNTimeout:            30 * time.Second,
 			EventBufferSize:       cfg.Connections.EventBufferSize,
 			StateTTL:              cfg.Connections.StateTTLDuration(),
@@ -534,21 +582,7 @@ func main() {
 
 	// Helper to wrap handlers with optional auth
 	requireAuth := func(handler http.Handler) http.Handler {
-		if cfg.Global.AuthToken == "" {
-			return handler
-		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Use subtle constant-time comparison to prevent timing attacks
-			token := r.Header.Get("Authorization")
-			if token == "" {
-				token = r.URL.Query().Get("token")
-			}
-			if subtle.ConstantTimeCompare([]byte(token), []byte("Bearer "+cfg.Global.AuthToken)) != 1 {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			handler.ServeHTTP(w, r)
-		})
+		return requireAuthMiddleware(handler, cfg.Global.AuthToken)
 	}
 
 	// Prometheus metrics endpoint (protected if auth token is set)
@@ -611,11 +645,12 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Global.MetricsAddr, cfg.Global.MetricsPort),
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              fmt.Sprintf("%s:%d", cfg.Global.MetricsAddr, cfg.Global.MetricsPort),
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {

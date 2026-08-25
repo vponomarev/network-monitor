@@ -117,9 +117,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 	rollbackOnError := func(installErr error) error {
 		if err := restoreRollback(defaultRollbackDir, binaryPath, defaultSystemdPath); err != nil {
-			return fmt.Errorf("%v; automatic rollback failed: %w", installErr, err)
+			return fmt.Errorf("%w; automatic rollback failed: %w", installErr, err)
 		}
-		return fmt.Errorf("%v; previous installation restored", installErr)
+		return fmt.Errorf("%w; previous installation restored", installErr)
 	}
 
 	// 1. Установка бинарника
@@ -188,8 +188,8 @@ func runDeinstall(cmd *cobra.Command, args []string) error {
 	fmt.Println("Deinstalling conntrack...")
 
 	// 1. Остановка сервиса
-	exec.Command("systemctl", "stop", "conntrack").Run()
-	exec.Command("systemctl", "disable", "conntrack").Run()
+	_ = exec.Command("systemctl", "stop", "conntrack").Run()
+	_ = exec.Command("systemctl", "disable", "conntrack").Run()
 	fmt.Println("✓ Stopped and disabled systemd service")
 
 	// 2. Remove managed files (config is preserved).
@@ -242,15 +242,6 @@ func checkWritePermissions(dir string) error {
 	}
 	os.Remove(testFile)
 	return nil
-}
-
-// installBinary копирует текущий бинарник в указанное место
-func installBinary(destPath string) error {
-	srcPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("getting executable path: %w", err)
-	}
-	return installBinaryAtomic(srcPath, destPath)
 }
 
 func installBinaryAtomic(srcPath, destPath string) error {

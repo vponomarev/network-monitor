@@ -46,30 +46,13 @@ func TestExporter_getNetwork(t *testing.T) {
 	}{
 		{"192.168.1.10", "192.168.1.0/24"},
 		{"10.0.0.1", "10.0.0.0/24"},
-		{"invalid", "0.0.0.0/24"},
+		{"2001:db8:1:2::42", "2001:db8:1:2::/64"},
+		{"invalid", "unknown"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.ip, func(t *testing.T) {
 			result := getNetwork(tt.ip)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestExporter_splitIP(t *testing.T) {
-	tests := []struct {
-		ip       string
-		expected []string
-	}{
-		{"192.168.1.10", []string{"192", "168", "1", "10"}},
-		{"10.0.0.1", []string{"10", "0", "0", "1"}},
-		{"invalid", []string{"invalid"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.ip, func(t *testing.T) {
-			result := splitIP(tt.ip)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

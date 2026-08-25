@@ -27,7 +27,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 		middleware := requireAuthMiddleware(okHandler, "")
 
 		// Request without auth
-		req := httptest.NewRequest("GET", "/test", nil)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
 
@@ -37,7 +37,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 	t.Run("token configured - no auth header - returns 401", func(t *testing.T) {
 		middleware := requireAuthMiddleware(okHandler, testToken)
 
-		req := httptest.NewRequest("GET", "/test", nil)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
 
@@ -48,7 +48,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 	t.Run("token configured - wrong auth header - returns 401", func(t *testing.T) {
 		middleware := requireAuthMiddleware(okHandler, testToken)
 
-		req := httptest.NewRequest("GET", "/test", nil)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set("Authorization", "Bearer wrong-token")
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
@@ -59,7 +59,7 @@ func TestRequireAuthMiddleware(t *testing.T) {
 	t.Run("token configured - correct auth header - returns 200", func(t *testing.T) {
 		middleware := requireAuthMiddleware(okHandler, testToken)
 
-		req := httptest.NewRequest("GET", "/test", nil)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set("Authorization", "Bearer "+testToken)
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
@@ -67,20 +67,20 @@ func TestRequireAuthMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rr.Code)
 	})
 
-	t.Run("token configured - correct token via query param - returns 200", func(t *testing.T) {
+	t.Run("token configured - token via query param is rejected", func(t *testing.T) {
 		middleware := requireAuthMiddleware(okHandler, testToken)
 
-		req := httptest.NewRequest("GET", "/test?token=Bearer%20"+testToken, nil)
+		req := httptest.NewRequest(http.MethodGet, "/test?token=Bearer%20"+testToken, nil)
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
 
-		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, http.StatusUnauthorized, rr.Code)
 	})
 
 	t.Run("token configured - empty token in header - returns 401", func(t *testing.T) {
 		middleware := requireAuthMiddleware(okHandler, testToken)
 
-		req := httptest.NewRequest("GET", "/test", nil)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set("Authorization", "")
 		rr := httptest.NewRecorder()
 		middleware.ServeHTTP(rr, req)
@@ -177,19 +177,3 @@ func singleMetric(t *testing.T, registry *prometheus.Registry, name string) (map
 }
 
 // requireAuthMiddleware is a test helper that mimics the middleware from main.go
-func requireAuthMiddleware(handler http.Handler, authToken string) http.Handler {
-	if authToken == "" {
-		return handler
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if token == "" {
-			token = r.URL.Query().Get("token")
-		}
-		if token != "Bearer "+authToken {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		handler.ServeHTTP(w, r)
-	})
-}

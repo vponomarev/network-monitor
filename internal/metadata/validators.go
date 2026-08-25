@@ -1,10 +1,18 @@
 package metadata
 
 import (
+	"bytes"
 	"fmt"
 
+	"github.com/vponomarev/network-monitor/internal/topology"
 	"gopkg.in/yaml.v3"
 )
+
+func decodeYAMLStrict(data []byte, target interface{}) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	return decoder.Decode(target)
+}
 
 // LocationsValidator validates locations.yaml.
 func LocationsValidator(data []byte) error {
@@ -13,7 +21,7 @@ func LocationsValidator(data []byte) error {
 	}
 
 	var file LocationsFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	if err := decodeYAMLStrict(data, &file); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
 	}
 	if len(file.Locations) == 0 {
@@ -32,7 +40,7 @@ func RolesValidator(data []byte) error {
 	}
 
 	var file RolesFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	if err := decodeYAMLStrict(data, &file); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
 	}
 	if len(file.Roles) == 0 {
@@ -50,8 +58,7 @@ func TopologyValidator(data []byte) error {
 		return fmt.Errorf("empty topology data")
 	}
 
-	var document interface{}
-	if err := yaml.Unmarshal(data, &document); err != nil {
+	if _, err := topology.Parse(data); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
 	}
 	return nil

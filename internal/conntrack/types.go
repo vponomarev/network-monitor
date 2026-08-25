@@ -3,6 +3,8 @@ package conntrack
 import (
 	"net"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // DefaultEBPFProgramPath is the default path to the eBPF program object file
@@ -34,6 +36,10 @@ type Config struct {
 
 	// Filter by ports (empty = all ports)
 	FilterPorts []int
+
+	// Registerer receives conntrack metrics. Nil uses an isolated registry,
+	// which keeps library callers from panicking when creating two trackers.
+	Registerer prometheus.Registerer
 
 	// Syslog configuration
 	Syslog SyslogConfig
@@ -125,8 +131,6 @@ type Connection struct {
 	ClosedTime      time.Time
 
 	// Statistics
-	BytesSent uint64
-	BytesRecv uint64
 }
 
 // Duration returns the duration of the connection

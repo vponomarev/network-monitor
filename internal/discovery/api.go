@@ -3,11 +3,13 @@ package discovery
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/vponomarev/network-monitor/internal/topology"
 )
 
 // DiscoveryService coordinates path discovery
@@ -20,6 +22,9 @@ type DiscoveryService struct {
 	mode        string // both, top_loss, on_demand, periodic
 	interval    time.Duration
 	stopCh      chan struct{}
+	stopOnce    sync.Once
+	metrics     *Metrics
+	topology    *topology.Topology
 }
 
 // DiscoveryRequest represents an API discovery request
@@ -30,14 +35,15 @@ type DiscoveryRequest struct {
 
 // DiscoveryResponse represents an API discovery response
 type DiscoveryResponse struct {
-	PathID     string      `json:"path_id"`
-	SrcIP      string      `json:"src_ip"`
-	DstIP      string      `json:"dst_ip"`
-	Hops       []Hop       `json:"hops"`
-	Bottleneck *Bottleneck `json:"bottleneck,omitempty"`
-	Discovered time.Time   `json:"discovered"`
-	TotalLoss  float64     `json:"total_loss"`
-	AvgRTT     string      `json:"avg_rtt"`
+	PathID     string             `json:"path_id"`
+	SrcIP      string             `json:"src_ip"`
+	DstIP      string             `json:"dst_ip"`
+	Hops       []Hop              `json:"hops"`
+	Bottleneck *Bottleneck        `json:"bottleneck,omitempty"`
+	Discovered time.Time          `json:"discovered"`
+	TotalLoss  float64            `json:"total_loss"`
+	AvgRTT     string             `json:"avg_rtt"`
+	Topology   *topology.PathInfo `json:"topology,omitempty"`
 }
 
 // NewDiscoveryService creates a new discovery service
@@ -60,34 +66,6 @@ func NewDiscoveryService(
 	}
 }
 
-// NewDiscoveryServiceWithFactory creates a discovery service with traceroute factory
-// Note: This function is deprecated due to interface incompatibility. Use NewDiscoveryService directly.
-func NewDiscoveryServiceWithFactory(
-	factory *TracerouteFactory,
-	cache *PathCache,
-	lossTracker *LossTracker,
-	topN int,
-	mode string,
-	interval time.Duration,
-	protocol string,
-) (*DiscoveryService, error) {
-	_ = factory
-	_ = protocol
-	return nil, fmt.Errorf("NewDiscoveryServiceWithFactory is deprecated: use NewDiscoveryService with a Tracerouter implementation")
-}
-
-// DefaultDiscoveryService creates a service with default settings
-func DefaultDiscoveryService() *DiscoveryService {
-	return NewDiscoveryService(
-		NewDefaultTracerouter(),
-		DefaultPathCache(),
-		DefaultLossTracker(),
-		10,
-		"both",
-		5*time.Minute,
-	)
-}
-
 // Discover performs path discovery for a specific pair
 func (s *DiscoveryService) Discover(ctx context.Context, srcIP, dstIP string) (*DiscoveryResponse, error) {
 	// Try cache first
@@ -103,8 +81,9 @@ func (s *DiscoveryService) Discover(ctx context.Context, srcIP, dstIP string) (*
 
 	// Cache the result
 	s.cache.Set(path)
-
-	return s.pathToResponse(path), nil
+	response := s.pathToResponse(path)
+	s.metrics.Observe(path, response.Bottleneck)
+	return response, nil
 }
 
 // DiscoverTop performs discovery for top N lossy pairs
@@ -148,7 +127,17 @@ func (s *DiscoveryService) StartPeriodicDiscovery(ctx context.Context) {
 
 // Stop stops periodic discovery
 func (s *DiscoveryService) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() { close(s.stopCh) })
+}
+
+func (s *DiscoveryService) SetMetrics(metrics *Metrics) {
+	s.metrics = metrics
+}
+
+func (s *DiscoveryService) SetTopology(networkTopology *topology.Topology) {
+	s.mu.Lock()
+	s.topology = networkTopology
+	s.mu.Unlock()
 }
 
 // RecordLoss records a loss event (called by collector)
@@ -169,8 +158,7 @@ func (s *DiscoveryService) GetLossTracker() *LossTracker {
 // pathToResponse converts a Path to DiscoveryResponse
 func (s *DiscoveryService) pathToResponse(path *Path) *DiscoveryResponse {
 	bottleneck := FindBottleneck(path)
-
-	return &DiscoveryResponse{
+	response := &DiscoveryResponse{
 		PathID:     path.PathID(),
 		SrcIP:      path.SrcIP.String(),
 		DstIP:      path.DstIP.String(),
@@ -180,6 +168,13 @@ func (s *DiscoveryService) pathToResponse(path *Path) *DiscoveryResponse {
 		TotalLoss:  path.TotalLoss(),
 		AvgRTT:     path.AvgRTT().String(),
 	}
+	s.mu.RLock()
+	networkTopology := s.topology
+	s.mu.RUnlock()
+	if networkTopology != nil {
+		response.Topology = networkTopology.EnrichPath(response.SrcIP, response.DstIP)
+	}
+	return response
 }
 
 // HTTPHandler returns an HTTP handler for the discovery API
@@ -208,14 +203,17 @@ func (s *DiscoveryService) handleDiscover(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req DiscoveryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	if req.SrcIP == "" || req.DstIP == "" {
-		http.Error(w, "src_ip and dst_ip required", http.StatusBadRequest)
+	if net.ParseIP(req.SrcIP) == nil || net.ParseIP(req.DstIP) == nil {
+		http.Error(w, "valid src_ip and dst_ip are required", http.StatusBadRequest)
 		return
 	}
 
@@ -225,8 +223,7 @@ func (s *DiscoveryService) handleDiscover(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	writeJSONResponse(w, resp)
 }
 
 func (s *DiscoveryService) handleDiscoverTop(w http.ResponseWriter, r *http.Request) {
@@ -241,8 +238,7 @@ func (s *DiscoveryService) handleDiscoverTop(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(responses)
+	writeJSONResponse(w, responses)
 }
 
 func (s *DiscoveryService) handleLossTop(w http.ResponseWriter, r *http.Request) {
@@ -258,76 +254,21 @@ func (s *DiscoveryService) handleLossTop(w http.ResponseWriter, r *http.Request)
 			limit = parsed
 		}
 	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 100 {
+		limit = 100
+	}
 
 	pairs := s.lossTracker.GetTopPairs(limit)
 
+	writeJSONResponse(w, pairs)
+}
+
+func writeJSONResponse(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(pairs)
-}
-
-// Integration helpers
-
-// NewTestDiscoveryService creates a service for testing
-func NewTestDiscoveryService() *DiscoveryService {
-	return NewDiscoveryService(
-		NewDefaultTracerouter(),
-		NewPathCache(10*time.Minute, 100),
-		NewLossTracker(5*time.Minute),
-		10,
-		"both",
-		5*time.Minute,
-	)
-}
-
-// ResponseRecorder is a simple HTTP response recorder for tests
-type ResponseRecorder struct {
-	Code      int
-	Body      string
-	HeaderMap http.Header
-}
-
-func NewResponseRecorder() *ResponseRecorder {
-	return &ResponseRecorder{
-		Code:      http.StatusOK,
-		HeaderMap: make(http.Header),
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		http.Error(w, "encoding response", http.StatusInternalServerError)
 	}
-}
-
-func (r *ResponseRecorder) Header() http.Header {
-	return r.HeaderMap
-}
-
-func (r *ResponseRecorder) Write(data []byte) (int, error) {
-	r.Body = string(data)
-	return len(data), nil
-}
-
-func (r *ResponseRecorder) WriteHeader(code int) {
-	r.Code = code
-}
-
-// ValidateResponse validates a discovery response
-func ValidateResponse(resp *DiscoveryResponse, srcIP, dstIP string) error {
-	if resp.SrcIP != srcIP {
-		return errorf("expected src_ip %s, got %s", srcIP, resp.SrcIP)
-	}
-	if resp.DstIP != dstIP {
-		return errorf("expected dst_ip %s, got %s", dstIP, resp.DstIP)
-	}
-	if resp.PathID == "" {
-		return errorf("path_id is empty")
-	}
-	return nil
-}
-
-func errorf(format string, args ...interface{}) error {
-	return &testError{message: fmt.Sprintf(format, args...)}
-}
-
-type testError struct {
-	message string
-}
-
-func (e *testError) Error() string {
-	return e.message
 }

@@ -56,8 +56,8 @@ metadata:
 # - Validation: type-specific (locations/roles/topology)
 # - Auto-reload: memory updated after successful file update
 # - Atomic writes: write to temp file + rename
-# - Metrics: metadata_update_total, metadata_update_errors_total,
-#            metadata_last_update_timestamp_seconds, metadata_last_hash
+# - Metrics: netmon_metadata_update_total, netmon_metadata_update_errors_total,
+#            netmon_metadata_last_update_timestamp_seconds, netmon_metadata_last_hash
 # - API: GET /api/v1/metadata/status for source status
 #        POST /api/v1/metadata/refresh to fetch configured HTTP sources now
 #        (force defaults to true; validation errors are returned as JSON)
@@ -69,18 +69,21 @@ discovery:
     mode: both  # both | top_loss | on_demand | periodic
     interval: 5m
     # Traceroute-specific settings
-    protocol: icmp        # icmp | udp | tcp
+    protocol: icmp        # only production-supported protocol
     max_hops: 30          # Maximum TTL
     timeout: 3s           # Per-probe timeout
     probes_per_hop: 3     # Probes per TTL value
-    start_ttl: 1          # Starting TTL
-    dst_port: 33434       # Destination port for UDP/TCP traceroute
-    src_port: 0           # Source port (0 = auto) for TCP traceroute
-    tcp_flags: S          # TCP flags: S=SYN, A=ACK, F=FIN, R=RST (for TCP traceroute)
 
 topology:
   enabled: false          # Enable topology enrichment
   path: topology.yaml     # Path to topology YAML file
+
+# Detect MSI-X IRQs mapped across NUMA nodes onto busy CPUs and correlate that
+# risk with increasing kernel RX drop counters.
+irq_affinity:
+  enabled: true
+  interval: 15s
+  busy_threshold: 0.80
 
 metrics:
   name: netmon_tcp_loss_total

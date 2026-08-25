@@ -25,13 +25,16 @@ type TracerouteConfig struct {
 
 // HopResult represents a single hop result from traceroute
 type HopResult struct {
-	TTL       int           `json:"ttl"`
-	IP        string        `json:"ip,omitempty"`
-	Hostname  string        `json:"hostname,omitempty"`
-	RTT       time.Duration `json:"rtt,omitempty"`
-	Lost      bool          `json:"lost"`
-	Timeout   bool          `json:"timeout"`
-	ProbeSent time.Time     `json:"probe_sent"`
+	TTL            int           `json:"ttl"`
+	IP             string        `json:"ip,omitempty"`
+	Hostname       string        `json:"hostname,omitempty"`
+	RTT            time.Duration `json:"rtt,omitempty"`
+	Lost           bool          `json:"lost"`
+	Timeout        bool          `json:"timeout"`
+	ProbeSent      time.Time     `json:"probe_sent"`
+	ProbesSent     int           `json:"probes_sent"`
+	ProbesReceived int           `json:"probes_received"`
+	LossPercent    float64       `json:"loss_percent"`
 }
 
 // TracerouteResult represents the result of a traceroute

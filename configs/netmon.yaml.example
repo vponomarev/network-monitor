@@ -1,5 +1,7 @@
-# Network Monitor Configuration Example
-# Copy this file to /etc/netmon/config.yaml and customize
+# Legacy configuration example retained for migration reference.
+# Do not copy this file for a new deployment: its historical `monitoring:`
+# layout is intentionally not accepted by the strict parser. Use
+# configs/config.example.yaml instead.
 
 # Global settings
 global:
@@ -45,8 +47,8 @@ metadata:
 # - Validation: type-specific (locations/roles/topology)
 # - Auto-reload: memory updated after successful file update
 # - Atomic writes: write to temp file + rename
-# - Metrics: metadata_update_total, metadata_update_errors_total,
-#            metadata_last_update_timestamp_seconds, metadata_last_hash
+# - Metrics: netmon_metadata_update_total, netmon_metadata_update_errors_total,
+#            netmon_metadata_last_update_timestamp_seconds, netmon_metadata_last_hash
 # - API: GET /api/v1/metadata/status for source status
 
 # Monitoring module configurations

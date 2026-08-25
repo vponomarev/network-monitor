@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 // LocationMatcher provides best-match location lookup by IP
@@ -23,6 +22,12 @@ type netWithLocation struct {
 	location string
 	hostname string
 	vrf      string
+}
+
+type LocationMetadata struct {
+	Location string
+	Hostname string
+	VRF      string
 }
 
 type LocationEntry struct {
@@ -67,7 +72,7 @@ func (m *LocationMatcher) Load(path string) error {
 	}
 
 	var file LocationsFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	if err := decodeYAMLStrict(data, &file); err != nil {
 		return fmt.Errorf("parsing YAML: %w", err)
 	}
 
@@ -111,27 +116,33 @@ func (m *LocationMatcher) Reload(path string) error {
 
 // GetLocation returns the best-match location for an IP (longest prefix match)
 func (m *LocationMatcher) GetLocation(ip string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	return m.Lookup(ip).Location
+}
 
+// Lookup returns all location attributes with one parse, lock and LPM scan.
+func (m *LocationMatcher) Lookup(ip string) LocationMetadata {
+	result := LocationMetadata{Location: "unknown", VRF: "unknown"}
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
-		return "unknown"
+		return result
 	}
-
-	best := ""
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	bestLen := -1
 	for _, nwl := range m.networks {
 		if nwl.network.Contains(parsedIP) {
 			ones, _ := nwl.network.Mask.Size()
 			if ones > bestLen {
 				bestLen = ones
-				best = nwl.location
+				result.Location = nwl.location
+				result.Hostname = nwl.hostname
+				if nwl.vrf != "" {
+					result.VRF = nwl.vrf
+				} else {
+					result.VRF = "unknown"
+				}
 			}
 		}
-	}
-	if bestLen < 0 {
-		return "unknown"
 	}
 
 	// Debug logging for each lookup (only in debug mode)
@@ -141,7 +152,7 @@ func (m *LocationMatcher) GetLocation(ip string) string {
 			zap.Int("networks_count", len(m.networks)))
 	}
 
-	return best
+	return result
 }
 
 // GetHostname returns the hostname for an IP if available (longest prefix match)
@@ -174,34 +185,7 @@ func (m *LocationMatcher) GetHostname(ip string) string {
 
 // GetVrf returns the VRF for an IP (longest prefix match), or "unknown" if not found
 func (m *LocationMatcher) GetVrf(ip string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	parsedIP := net.ParseIP(ip)
-	if parsedIP == nil {
-		return "unknown"
-	}
-
-	best := ""
-	bestLen := -1
-	for _, nwl := range m.networks {
-		if nwl.network.Contains(parsedIP) {
-			ones, _ := nwl.network.Mask.Size()
-			if ones > bestLen {
-				bestLen = ones
-				if nwl.vrf != "" {
-					best = nwl.vrf
-				}
-			}
-		}
-	}
-	if bestLen < 0 {
-		return "unknown"
-	}
-	if best == "" {
-		return "unknown"
-	}
-	return best
+	return m.Lookup(ip).VRF
 }
 
 // Count returns the number of loaded networks

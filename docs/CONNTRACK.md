@@ -118,8 +118,6 @@ Key metrics are:
 - `conntrack_events_total{event,direction}`;
 - `conntrack_handshake_duration_seconds{direction}`;
 - `conntrack_connection_duration_seconds{direction}`;
-- `conntrack_bytes_total{direction,type}`;
-- `conntrack_bytes_per_connection{direction}`;
 - `conntrack_dropped_events_total{reason}`.
 - `conntrack_state_entries{layer}`;
 - `conntrack_state_cleanup_total{reason}`;

@@ -251,16 +251,15 @@ Netmon protects `/metrics` and `/api/*`. Standalone conntrack protects
 Netmon exports `netmon_tcp_loss_total`, collector health/drop counters,
 cardinality gauges/counters, bounded `netmon_metadata_unknown_*` aggregates,
 metadata polling metrics, and `netmon_build_info`.
+IRQ diagnostics add bounded `netmon_irq_affinity_*` metrics per interface and
+MSI-X IRQ, including `netmon_irq_affinity_packet_loss_anomaly`.
 Standalone conntrack exports `conntrack_build_info` and:
-exports:
 
 - `conntrack_connections{state,direction}`;
 - `conntrack_events_total{event,direction}`;
 - `conntrack_handshake_duration_seconds{direction}`;
 - `conntrack_connection_duration_seconds{direction}`;
-- `conntrack_bytes_total{direction,type}`;
-- `conntrack_bytes_per_connection{direction}`;
-- `conntrack_dropped_events_total{reason}`.
+- `conntrack_dropped_events_total{reason}`;
 - `conntrack_state_entries{layer}` and retention cleanup/eviction/overflow
   counters.
 

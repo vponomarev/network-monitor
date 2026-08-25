@@ -5,6 +5,7 @@ import (
 	"log/syslog"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -209,78 +210,11 @@ func (w *SyslogWriter) formatMessage(conn *Connection, event ConnectionEvent) st
 	// Add timestamp
 	parts = append(parts, fmt.Sprintf("ts=%s", conn.Timestamp.Format(time.RFC3339)))
 
-	return joinStrings(parts, " ")
+	return strings.Join(parts, " ")
 }
 
 // protocolString returns protocol name
 func (w *SyslogWriter) protocolString(proto uint8) string {
-	switch proto {
-	case 6:
-		return "TCP"
-	case 17:
-		return "UDP"
-	case 1:
-		return "ICMP"
-	default:
-		return fmt.Sprintf("UNKNOWN(%d)", proto)
-	}
-}
-
-// joinStrings joins strings with separator
-func joinStrings(parts []string, sep string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-
-	result := parts[0]
-	for _, s := range parts[1:] {
-		result += sep + s
-	}
-	return result
-}
-
-// TestSyslogWriter is a mock syslog writer for testing
-type TestSyslogWriter struct {
-	Messages []string
-}
-
-// NewTestSyslogWriter creates a test syslog writer
-func NewTestSyslogWriter() *TestSyslogWriter {
-	return &TestSyslogWriter{
-		Messages: make([]string, 0),
-	}
-}
-
-// Write writes a message (mock implementation)
-func (w *TestSyslogWriter) Write(conn *Connection, event ConnectionEvent) error {
-	// Create a simple writer for testing
-	cfg := SyslogConfig{
-		Tag:             "conntrack-test",
-		Facility:        LOG_LOCAL0,
-		IncludeHostname: false,
-	}
-
-	writer, err := NewSyslogWriter(cfg)
-	if err != nil {
-		// If syslog is not available, just store the message
-		msg := fmt.Sprintf("%s src=%s:%d dst=%s:%d proto=%s dir=%s state=%s",
-			event.String(),
-			conn.SourceIP.String(), conn.SourcePort,
-			conn.DestIP.String(), conn.DestPort,
-			protocolString(conn.Protocol),
-			conn.Direction.String(),
-			conn.State.String(),
-		)
-		w.Messages = append(w.Messages, msg)
-		return nil
-	}
-	defer writer.Close()
-
-	return writer.WriteConnection(conn, event)
-}
-
-// protocolString converts protocol number to string
-func protocolString(proto uint8) string {
 	switch proto {
 	case 6:
 		return "TCP"

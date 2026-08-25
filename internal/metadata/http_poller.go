@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -79,24 +80,28 @@ func NewHTTPPoller(cfg HTTPPollerConfig, logger *zap.Logger, reg prometheus.Regi
 	// Регистрация метрик
 	if reg != nil {
 		poller.updateCounter = prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace:   "netmon",
 			Name:        "metadata_update_total",
 			Help:        "Total number of successful metadata updates from HTTP",
 			ConstLabels: prometheus.Labels{"source": cfg.Name},
 		})
 
 		poller.updateErrors = prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace:   "netmon",
 			Name:        "metadata_update_errors_total",
 			Help:        "Total number of metadata update errors from HTTP",
 			ConstLabels: prometheus.Labels{"source": cfg.Name},
 		})
 
 		poller.lastUpdateTime = prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "netmon",
 			Name:        "metadata_last_update_timestamp_seconds",
 			Help:        "Timestamp of last successful metadata update from HTTP",
 			ConstLabels: prometheus.Labels{"source": cfg.Name},
 		})
 
 		poller.lastHashGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace:   "netmon",
 			Name:        "metadata_last_hash",
 			Help:        "Hash of last successfully loaded metadata",
 			ConstLabels: prometheus.Labels{"source": cfg.Name},
@@ -275,7 +280,7 @@ func (p *HTTPPoller) recordRefreshFailure() {
 }
 
 func (p *HTTPPoller) fetch(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", p.config.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.config.URL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +295,15 @@ func (p *HTTPPoller) fetch(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	const maxMetadataBytes = 10 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxMetadataBytes {
+		return nil, fmt.Errorf("metadata response exceeds %d bytes", maxMetadataBytes)
+	}
+	return data, nil
 }
 
 func (p *HTTPPoller) atomicWrite(data []byte) error {
@@ -321,12 +334,15 @@ func (p *HTTPPoller) GetStatus() (lastCheck, lastUpdate time.Time, hash string, 
 
 // hashFloat конвертирует hash в float64 для метрики
 func hashFloat(hash string) float64 {
-	if len(hash) < 16 {
+	// Thirteen hex digits fit exactly in float64's 53-bit integer mantissa.
+	if len(hash) < 13 {
 		return 0
 	}
-	var val float64
-	fmt.Sscanf(hash[:16], "%x", &val)
-	return val
+	val, err := strconv.ParseUint(hash[:13], 16, 52)
+	if err != nil {
+		return 0
+	}
+	return float64(val)
 }
 
 // validateYAML базовая валидация YAML (используется как fallback)

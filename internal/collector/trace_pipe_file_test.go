@@ -111,13 +111,13 @@ func TestTracePipeCollector_ParseAllFormats(t *testing.T) {
 		collector.processLine(tc.line)
 
 		if tc.wantMatch {
-			assert.Equal(t, 1, len(exporter.events), "Should match: %s", tc.line[:min(50, len(tc.line))])
+			assert.Equal(t, 1, len(exporter.events), "Should match: %s", tc.line[:minInt(50, len(tc.line))])
 			if len(exporter.events) > 0 {
 				assert.Equal(t, tc.wantSrc, exporter.events[0].SourceIP)
 				assert.Equal(t, tc.wantDst, exporter.events[0].DestIP)
 			}
 		} else {
-			assert.Equal(t, 0, len(exporter.events), "Should not match: %s", tc.line[:min(50, len(tc.line))])
+			assert.Equal(t, 0, len(exporter.events), "Should not match: %s", tc.line[:minInt(50, len(tc.line))])
 		}
 	}
 }
@@ -183,7 +183,7 @@ func TestTracePipeCollector_StatisticsFromRealData(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

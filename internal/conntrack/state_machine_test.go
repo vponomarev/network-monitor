@@ -162,6 +162,22 @@ func TestStateMachine_NewConnection(t *testing.T) {
 	}
 }
 
+func TestStateMachine_EventCallbackRunsWithoutStateLock(t *testing.T) {
+	var sm *StateMachine
+	done := make(chan struct{})
+	sm = NewStateMachine(StateMachineConfig{OnEvent: func(_ *Connection, _ ConnectionEvent) {
+		_ = sm.GetConnectionCount()
+		close(done)
+	}})
+	defer sm.Stop()
+	go sm.ProcessEvent(&ConnectionEventRaw{SourceIP: net.ParseIP("10.0.0.1"), DestIP: net.ParseIP("10.0.0.2"), SourcePort: 1234, DestPort: 443, Protocol: 6, EventType: EventNew})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event callback was invoked while the state lock was held")
+	}
+}
+
 func TestStateMachine_EstablishedConnection(t *testing.T) {
 	sm := NewStateMachine(StateMachineConfig{
 		SYNTimeout: 1 * time.Second,

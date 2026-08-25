@@ -2,13 +2,13 @@ package metrics
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vponomarev/network-monitor/internal/metadata"
-	"github.com/vponomarev/network-monitor/internal/topology"
 	"go.uber.org/zap"
 )
 
@@ -58,7 +58,8 @@ type Exporter struct {
 	counter         *prometheus.CounterVec
 	locationMatcher *metadata.LocationMatcher
 	roleMatcher     *metadata.RoleMatcher
-	topology        *topology.Topology
+	registerer      prometheus.Registerer
+	matcherVersion  uint64
 	logger          *zap.Logger
 	ttl             time.Duration
 
@@ -85,6 +86,7 @@ type seriesData struct {
 	lastSeen time.Time
 	repSrc   string
 	repDst   string
+	counter  prometheus.Counter
 }
 
 // NewExporter creates a new metrics exporter on the default registry with the
@@ -154,6 +156,7 @@ func NewExporterWithConfig(
 		counter:         counter,
 		locationMatcher: locationMatcher,
 		roleMatcher:     roleMatcher,
+		registerer:      reg,
 		logger:          logger.Named("exporter"),
 		ttl:             3 * time.Hour, // Default TTL
 		level:           level,
@@ -234,6 +237,28 @@ func allowedLabelsForLevel(level string) map[string]bool {
 // labelsFor computes only the configured label values in the order matching
 // e.labelNames.
 func (e *Exporter) labelsFor(src, dst string) []string {
+	return e.labelsForWithMatchers(src, dst, e.locationMatcher, e.roleMatcher)
+}
+
+func (e *Exporter) labelsForWithMatchers(src, dst string, locationMatcher *metadata.LocationMatcher, roleMatcher *metadata.RoleMatcher) []string {
+	var srcLocation, dstLocation metadata.LocationMetadata
+	locationsLoaded := false
+	loadLocations := func() {
+		if !locationsLoaded {
+			srcLocation = locationMatcher.Lookup(src)
+			dstLocation = locationMatcher.Lookup(dst)
+			locationsLoaded = true
+		}
+	}
+	var srcRole, dstRole string
+	rolesLoaded := false
+	loadRoles := func() {
+		if !rolesLoaded {
+			srcRole = roleMatcher.GetRole(src)
+			dstRole = roleMatcher.GetRole(dst)
+			rolesLoaded = true
+		}
+	}
 	values := make([]string, 0, len(e.labelNames))
 	for _, label := range e.labelNames {
 		switch label {
@@ -242,21 +267,27 @@ func (e *Exporter) labelsFor(src, dst string) []string {
 		case "dst_ip":
 			values = append(values, dst)
 		case "src_location":
-			values = append(values, e.locationMatcher.GetLocation(src))
+			loadLocations()
+			values = append(values, srcLocation.Location)
 		case "dst_location":
-			values = append(values, e.locationMatcher.GetLocation(dst))
+			loadLocations()
+			values = append(values, dstLocation.Location)
 		case "src_role":
-			values = append(values, e.roleMatcher.GetRole(src))
+			loadRoles()
+			values = append(values, srcRole)
 		case "dst_role":
-			values = append(values, e.roleMatcher.GetRole(dst))
+			loadRoles()
+			values = append(values, dstRole)
 		case "src_network":
 			values = append(values, getNetwork(src))
 		case "dst_network":
 			values = append(values, getNetwork(dst))
 		case "src_vrf":
-			values = append(values, e.locationMatcher.GetVrf(src))
+			loadLocations()
+			values = append(values, srcLocation.VRF)
 		case "dst_vrf":
-			values = append(values, e.locationMatcher.GetVrf(dst))
+			loadLocations()
+			values = append(values, dstLocation.VRF)
 		}
 	}
 	return values
@@ -269,10 +300,21 @@ func seriesKeyOf(labels []string) string {
 
 // RecordRetransmit records a single retransmit event.
 func (e *Exporter) RecordRetransmit(srcIP, dstIP string) {
+	// Metadata lookup can be much more expensive than the counter update. Keep
+	// it outside the exporter write lock so independent ring-buffer events do
+	// not serialize on linear prefix scans.
+	e.mu.RLock()
+	locationMatcher, roleMatcher, matcherVersion := e.locationMatcher, e.roleMatcher, e.matcherVersion
+	e.mu.RUnlock()
+	labels := e.labelsForWithMatchers(srcIP, dstIP, locationMatcher, roleMatcher)
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	labels := e.labelsFor(srcIP, dstIP)
+	if matcherVersion != e.matcherVersion {
+		// A reload raced with the lookup. Recompute against the new matchers while
+		// holding the lock; this is rare and prevents resurrecting stale labels.
+		labels = e.labelsFor(srcIP, dstIP)
+	}
 	key := seriesKeyOf(labels)
 
 	data, ok := e.series[key]
@@ -284,9 +326,10 @@ func (e *Exporter) RecordRetransmit(srcIP, dstIP string) {
 			return
 		}
 		data = &seriesData{
-			labels: labels,
-			repSrc: srcIP,
-			repDst: dstIP,
+			labels:  labels,
+			repSrc:  srcIP,
+			repDst:  dstIP,
+			counter: e.counter.WithLabelValues(labels...),
 		}
 		e.series[key] = data
 		e.activeSeries.Set(float64(len(e.series)))
@@ -296,7 +339,7 @@ func (e *Exporter) RecordRetransmit(srcIP, dstIP string) {
 	data.lastSeen = time.Now()
 
 	// Increment the Prometheus counter by exactly 1 per event.
-	e.counter.WithLabelValues(labels...).Inc()
+	data.counter.Inc()
 }
 
 // logDropRateLimited logs a max_series overflow at most once per 30s. Caller
@@ -314,28 +357,17 @@ func (e *Exporter) logDropRateLimited(srcIP, dstIP string) {
 		zap.String("dropped_dst", dstIP))
 }
 
-// getNetwork returns the /24 network for an IP.
+// getNetwork returns a bounded-cardinality network for IPv4 or IPv6.
 func getNetwork(ip string) string {
-	// Simple /24 network extraction.
-	parts := splitIP(ip)
-	if len(parts) != 4 {
-		return "0.0.0.0/24"
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return "unknown"
 	}
-	return parts[0] + "." + parts[1] + "." + parts[2] + ".0/24"
-}
-
-// splitIP splits an IP string into octets.
-func splitIP(ip string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i < len(ip); i++ {
-		if ip[i] == '.' {
-			parts = append(parts, ip[start:i])
-			start = i + 1
-		}
+	bits := 64
+	if addr.Is4() {
+		bits = 24
 	}
-	parts = append(parts, ip[start:])
-	return parts
+	return netip.PrefixFrom(addr, bits).Masked().String()
 }
 
 // cleanupOld removes series older than TTL and deletes them from the CounterVec.
@@ -427,6 +459,7 @@ func (e *Exporter) SetMatchers(locationMatcher *metadata.LocationMatcher, roleMa
 	// Update matchers.
 	e.locationMatcher = locationMatcher
 	e.roleMatcher = roleMatcher
+	e.matcherVersion++
 
 	// Reset Prometheus metrics and rebuild the series map with new labels.
 	e.counter.Reset()
@@ -449,7 +482,8 @@ func (e *Exporter) SetMatchers(locationMatcher *metadata.LocationMatcher, roleMa
 
 	// Recreate Prometheus metrics with new labels but preserved counts.
 	for _, data := range e.series {
-		e.counter.WithLabelValues(data.labels...).Add(float64(data.count))
+		data.counter = e.counter.WithLabelValues(data.labels...)
+		data.counter.Add(float64(data.count))
 	}
 	e.activeSeries.Set(float64(len(e.series)))
 
@@ -457,15 +491,7 @@ func (e *Exporter) SetMatchers(locationMatcher *metadata.LocationMatcher, roleMa
 		zap.Int("series", len(e.series)))
 }
 
-// SetTopology sets the network topology (for SIGHUP reload).
-func (e *Exporter) SetTopology(topology *topology.Topology) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.topology = topology
-	e.logger.Info("Topology updated")
-}
-
 // Registry returns the Prometheus registerer used by the exporter.
 func (e *Exporter) Registry() prometheus.Registerer {
-	return prometheus.DefaultRegisterer
+	return e.registerer
 }

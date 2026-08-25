@@ -283,11 +283,7 @@ func TestMonitor_collect_Concurrent(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
 				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							// Ignore panics
-						}
-					}()
+					defer func() { _ = recover() }()
 					monitor.collect()
 				}()
 			}

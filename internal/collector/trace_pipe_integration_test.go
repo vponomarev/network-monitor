@@ -210,7 +210,7 @@ func TestTracePipeCollector_RapidEvents(t *testing.T) {
 	// Generate many events rapidly
 	var testData strings.Builder
 	for i := 0; i < 100; i++ {
-		testData.WriteString(fmt.Sprintf("tcp_retransmit_skb: saddr=192.168.1.%d daddr=192.168.2.%d\n", i%256, i%256))
+		fmt.Fprintf(&testData, "tcp_retransmit_skb: saddr=192.168.1.%d daddr=192.168.2.%d\n", i%256, i%256)
 	}
 
 	_, err = tmpfile.WriteString(testData.String())
