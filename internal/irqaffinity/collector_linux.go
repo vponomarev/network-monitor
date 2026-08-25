@@ -26,15 +26,23 @@ type Options struct {
 
 type cpuSample struct{ total, idle uint64 }
 
+type affinitySample struct {
+	cpus  string
+	nodes string
+	cross bool
+}
+
 type Collector struct {
 	options                                        Options
 	logger                                         *zap.Logger
 	prevCPU                                        map[int]cpuSample
 	prevDrop                                       map[string]uint64
 	prevIRQ                                        map[int]uint64
+	prevAffinity                                   map[string]affinitySample
 	prevAt                                         time.Time
 	info, crossNUMA, irqBusy, risk, anomaly, drops *prometheus.GaugeVec
-	irqRate                                        *prometheus.GaugeVec
+	irqRate, dropRate, lastAffinityChange          *prometheus.GaugeVec
+	affinityChanges, crossNUMATransitions          *prometheus.CounterVec
 	up                                             prometheus.Gauge
 	monitored                                      prometheus.Gauge
 }
@@ -52,19 +60,23 @@ func New(options Options, logger *zap.Logger, reg prometheus.Registerer) *Collec
 	if options.ProcRoot == "" {
 		options.ProcRoot = "/proc"
 	}
-	c := &Collector{options: options, logger: logger.Named("irq_affinity"), prevCPU: map[int]cpuSample{}, prevDrop: map[string]uint64{}, prevIRQ: map[int]uint64{},
-		info:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_info", Help: "NIC NUMA placement information."}, []string{"interface", "nic_numa"}),
-		crossNUMA: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_cross_numa", Help: "Whether an IRQ targets CPUs outside the NIC NUMA node."}, []string{"interface", "irq"}),
-		irqBusy:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_target_cpu_utilization_ratio", Help: "Maximum utilization of CPUs targeted by an IRQ."}, []string{"interface", "irq"}),
-		risk:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_risk", Help: "Active cross-NUMA IRQ placement combined with busy remote target CPUs."}, []string{"interface"}),
-		anomaly:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_packet_loss_anomaly", Help: "IRQ affinity risk correlated with increasing receive drops."}, []string{"interface"}),
-		drops:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_rx_drop_counter", Help: "Kernel-reported absolute receive drop counter used for IRQ correlation."}, []string{"interface", "type"}),
-		up:        prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_collector_up", Help: "Whether the last IRQ affinity collection succeeded."}),
-		monitored: prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_monitored_interfaces", Help: "Number of NICs with discoverable NUMA and MSI-X IRQ data."}),
-		irqRate:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_interrupts_per_second", Help: "Approximate interrupt rate for a NIC IRQ."}, []string{"interface", "irq"}),
+	c := &Collector{options: options, logger: logger.Named("irq_affinity"), prevCPU: map[int]cpuSample{}, prevDrop: map[string]uint64{}, prevIRQ: map[int]uint64{}, prevAffinity: map[string]affinitySample{},
+		info:                 prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_info", Help: "NIC NUMA placement information."}, []string{"interface", "nic_numa"}),
+		crossNUMA:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_cross_numa", Help: "Whether an IRQ targets CPUs outside the NIC NUMA node."}, []string{"interface", "irq"}),
+		irqBusy:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_target_cpu_utilization_ratio", Help: "Maximum utilization of CPUs targeted by an IRQ."}, []string{"interface", "irq"}),
+		risk:                 prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_risk", Help: "Active cross-NUMA IRQ placement combined with busy remote target CPUs."}, []string{"interface"}),
+		anomaly:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_packet_loss_anomaly", Help: "IRQ affinity risk correlated with increasing receive drops."}, []string{"interface"}),
+		drops:                prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_rx_drop_counter", Help: "Kernel-reported absolute receive drop counter used for IRQ correlation."}, []string{"interface", "type"}),
+		up:                   prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_collector_up", Help: "Whether the last IRQ affinity collection succeeded."}),
+		monitored:            prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_monitored_interfaces", Help: "Number of NICs with discoverable NUMA and MSI-X IRQ data."}),
+		irqRate:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_interrupts_per_second", Help: "Approximate interrupt rate for a NIC IRQ."}, []string{"interface", "irq"}),
+		dropRate:             prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_rx_drops_per_second", Help: "Rate of increase in a kernel receive drop counter during the last collection interval."}, []string{"interface", "type"}),
+		affinityChanges:      prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "netmon", Name: "irq_affinity_changes_total", Help: "Number of observed IRQ affinity changes, grouped by whether the target NUMA node set changed."}, []string{"interface", "scope"}),
+		crossNUMATransitions: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "netmon", Name: "irq_affinity_cross_numa_transitions_total", Help: "Number of observed IRQ affinity transitions into or out of a mapping that crosses the NIC NUMA node."}, []string{"interface", "direction"}),
+		lastAffinityChange:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "netmon", Name: "irq_affinity_last_change_timestamp_seconds", Help: "Unix timestamp of the last observed IRQ affinity change, grouped by change scope."}, []string{"interface", "scope"}),
 	}
 	if reg != nil {
-		reg.MustRegister(c.info, c.crossNUMA, c.irqBusy, c.risk, c.anomaly, c.drops, c.irqRate, c.up, c.monitored)
+		reg.MustRegister(c.info, c.crossNUMA, c.irqBusy, c.risk, c.anomaly, c.drops, c.irqRate, c.dropRate, c.affinityChanges, c.crossNUMATransitions, c.lastAffinityChange, c.up, c.monitored)
 	}
 	return c
 }
@@ -117,6 +129,8 @@ func (c *Collector) collect() error {
 	c.anomaly.Reset()
 	c.drops.Reset()
 	c.irqRate.Reset()
+	c.dropRate.Reset()
+	currentAffinity := make(map[string]affinitySample)
 	monitored := 0
 	for _, entry := range interfaces {
 		name := entry.Name()
@@ -131,22 +145,36 @@ func (c *Collector) collect() error {
 		}
 		monitored++
 		c.info.WithLabelValues(name, strconv.Itoa(numa)).Set(1)
+		for _, scope := range []string{"same_numa", "cross_numa"} {
+			c.affinityChanges.WithLabelValues(name, scope)
+			c.lastAffinityChange.WithLabelValues(name, scope)
+		}
+		for _, direction := range []string{"enter", "leave"} {
+			c.crossNUMATransitions.WithLabelValues(name, direction)
+		}
 		interfaceRisk := false
 		for _, irq := range irqs {
 			affinityPath := filepath.Join(c.options.ProcRoot, "irq", strconv.Itoa(irq), "effective_affinity_list")
 			cpus, err := readCPUList(affinityPath)
 			if err != nil {
-				cpus, _ = readCPUList(filepath.Join(c.options.ProcRoot, "irq", strconv.Itoa(irq), "smp_affinity_list"))
+				cpus, err = readCPUList(filepath.Join(c.options.ProcRoot, "irq", strconv.Itoa(irq), "smp_affinity_list"))
+			}
+			if err != nil {
+				continue
 			}
 			cross := false
 			maxBusy := float64(0)
 			maxRemoteBusy := float64(0)
+			nodes := make(map[int]struct{})
 			for _, cpu := range cpus {
 				node, _ := cpuNUMA(c.options.SysRoot, cpu)
-				if node >= 0 && node != numa {
-					cross = true
-					if util[cpu] > maxRemoteBusy {
-						maxRemoteBusy = util[cpu]
+				if node >= 0 {
+					nodes[node] = struct{}{}
+					if node != numa {
+						cross = true
+						if util[cpu] > maxRemoteBusy {
+							maxRemoteBusy = util[cpu]
+						}
 					}
 				}
 				if util[cpu] > maxBusy {
@@ -154,6 +182,24 @@ func (c *Collector) collect() error {
 				}
 			}
 			irqLabel := strconv.Itoa(irq)
+			affinityKey := name + "\x00" + irqLabel
+			sample := affinitySample{cpus: intSetKey(cpus), nodes: intMapKey(nodes), cross: cross}
+			currentAffinity[affinityKey] = sample
+			if previous, ok := c.prevAffinity[affinityKey]; ok && previous.cpus != sample.cpus {
+				scope := "same_numa"
+				if previous.nodes != sample.nodes {
+					scope = "cross_numa"
+				}
+				c.affinityChanges.WithLabelValues(name, scope).Inc()
+				c.lastAffinityChange.WithLabelValues(name, scope).Set(float64(now.Unix()))
+				if previous.cross != sample.cross {
+					direction := "leave"
+					if sample.cross {
+						direction = "enter"
+					}
+					c.crossNUMATransitions.WithLabelValues(name, direction).Inc()
+				}
+			}
 			rate := float64(0)
 			if previous, ok := c.prevIRQ[irq]; ok && irqNow[irq] >= previous {
 				rate = float64(irqNow[irq]-previous) / elapsed
@@ -174,6 +220,9 @@ func (c *Collector) collect() error {
 			key := name + "\x00" + kind
 			if previous, ok := c.prevDrop[key]; ok && value > previous {
 				dropIncreased = true
+				c.dropRate.WithLabelValues(name, kind).Set(float64(value-previous) / elapsed)
+			} else {
+				c.dropRate.WithLabelValues(name, kind).Set(0)
 			}
 			c.prevDrop[key] = value
 			c.drops.WithLabelValues(name, kind).Set(float64(value))
@@ -182,10 +231,29 @@ func (c *Collector) collect() error {
 		c.anomaly.WithLabelValues(name).Set(boolFloat(interfaceRisk && dropIncreased))
 	}
 	c.prevIRQ = irqNow
+	c.prevAffinity = currentAffinity
 	c.prevAt = now
 	c.monitored.Set(float64(monitored))
 	c.up.Set(1)
 	return nil
+}
+
+func intSetKey(values []int) string {
+	values = append([]int(nil), values...)
+	sort.Ints(values)
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return strings.Join(parts, ",")
+}
+
+func intMapKey(values map[int]struct{}) string {
+	keys := make([]int, 0, len(values))
+	for value := range values {
+		keys = append(keys, value)
+	}
+	return intSetKey(keys)
 }
 
 func readCPUStats(path string) (map[int]cpuSample, error) {

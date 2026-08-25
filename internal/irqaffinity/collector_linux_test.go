@@ -5,6 +5,7 @@ package irqaffinity
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -46,6 +47,48 @@ func TestCollectorCorrelatesCrossNUMABusyCPUAndDrops(t *testing.T) {
 	require.Equal(t, float64(1), testutil.ToFloat64(collector.crossNUMA.WithLabelValues("eth0", "100")))
 	require.Equal(t, float64(1), testutil.ToFloat64(collector.risk.WithLabelValues("eth0")))
 	require.Equal(t, float64(1), testutil.ToFloat64(collector.anomaly.WithLabelValues("eth0")))
+	require.Greater(t, testutil.ToFloat64(collector.dropRate.WithLabelValues("eth0", "rx_dropped")), float64(0))
+}
+
+func TestCollectorTracksAffinityChangesWithoutCountingInventoryChurn(t *testing.T) {
+	root := t.TempDir()
+	sysRoot, procRoot := filepath.Join(root, "sys"), filepath.Join(root, "proc")
+	writeFixture(t, filepath.Join(sysRoot, "class/net/eth0/device/numa_node"), "0\n")
+	writeFixture(t, filepath.Join(sysRoot, "class/net/eth0/device/msi_irqs/100"), "")
+	for cpu, node := range map[int]int{0: 0, 1: 0, 2: 1} {
+		require.NoError(t, os.MkdirAll(filepath.Join(sysRoot, "devices/system/cpu", "cpu"+strconv.Itoa(cpu), "node"+strconv.Itoa(node)), 0755))
+	}
+	for _, kind := range []string{"rx_dropped", "rx_missed_errors", "rx_nohandler"} {
+		writeFixture(t, filepath.Join(sysRoot, "class/net/eth0/statistics", kind), "0\n")
+	}
+	writeFixture(t, filepath.Join(procRoot, "stat"), "cpu 0 0 0 0\ncpu0 1 0 0 1\ncpu1 1 0 0 1\ncpu2 1 0 0 1\n")
+	writeFixture(t, filepath.Join(procRoot, "interrupts"), "100: 1 0 0 PCI-MSI eth0\n")
+	writeFixture(t, filepath.Join(procRoot, "irq/100/effective_affinity_list"), "0\n")
+
+	collector := New(Options{SysRoot: sysRoot, ProcRoot: procRoot}, zap.NewNop(), prometheus.NewRegistry())
+	require.NoError(t, collector.collect())
+	require.Zero(t, testutil.ToFloat64(collector.affinityChanges.WithLabelValues("eth0", "same_numa")))
+
+	writeFixture(t, filepath.Join(procRoot, "irq/100/effective_affinity_list"), "1\n")
+	require.NoError(t, collector.collect())
+	require.Equal(t, float64(1), testutil.ToFloat64(collector.affinityChanges.WithLabelValues("eth0", "same_numa")))
+	require.Zero(t, testutil.ToFloat64(collector.crossNUMATransitions.WithLabelValues("eth0", "enter")))
+
+	writeFixture(t, filepath.Join(procRoot, "irq/100/effective_affinity_list"), "2\n")
+	require.NoError(t, collector.collect())
+	require.Equal(t, float64(1), testutil.ToFloat64(collector.affinityChanges.WithLabelValues("eth0", "cross_numa")))
+	require.Equal(t, float64(1), testutil.ToFloat64(collector.crossNUMATransitions.WithLabelValues("eth0", "enter")))
+	require.Greater(t, testutil.ToFloat64(collector.lastAffinityChange.WithLabelValues("eth0", "cross_numa")), float64(0))
+
+	writeFixture(t, filepath.Join(sysRoot, "class/net/eth0/device/msi_irqs/101"), "")
+	writeFixture(t, filepath.Join(procRoot, "irq/101/effective_affinity_list"), "0\n")
+	require.NoError(t, collector.collect())
+	require.Equal(t, float64(1), testutil.ToFloat64(collector.affinityChanges.WithLabelValues("eth0", "same_numa")))
+	require.Equal(t, float64(1), testutil.ToFloat64(collector.affinityChanges.WithLabelValues("eth0", "cross_numa")))
+
+	writeFixture(t, filepath.Join(procRoot, "irq/100/effective_affinity_list"), "0\n")
+	require.NoError(t, collector.collect())
+	require.Equal(t, float64(1), testutil.ToFloat64(collector.crossNUMATransitions.WithLabelValues("eth0", "leave")))
 }
 
 func writeFixture(t *testing.T, path, value string) {

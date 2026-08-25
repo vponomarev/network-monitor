@@ -252,7 +252,8 @@ Netmon exports `netmon_tcp_loss_total`, collector health/drop counters,
 cardinality gauges/counters, bounded `netmon_metadata_unknown_*` aggregates,
 metadata polling metrics, and `netmon_build_info`.
 IRQ diagnostics add bounded `netmon_irq_affinity_*` metrics per interface and
-MSI-X IRQ, including `netmon_irq_affinity_packet_loss_anomaly`.
+MSI-X IRQ, including packet-loss correlation, RX-drop rate, and cumulative
+same-NUMA/cross-NUMA affinity transition counters.
 Standalone conntrack exports `conntrack_build_info` and:
 
 - `conntrack_connections{state,direction}`;
