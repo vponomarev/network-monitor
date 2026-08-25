@@ -120,6 +120,7 @@ jobs:
       - name: Download binaries
         uses: actions/download-artifact@v8
         with:
+          name: binaries-linux-amd64
           path: ./downloaded
 
       - name: Assemble release assets
@@ -129,9 +130,9 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           for arch in amd64; do
-            bin="downloaded/binaries-linux-${arch}/netmon-linux-${arch}"
-            conntrack_bin="downloaded/binaries-linux-${arch}/conntrack-linux-${arch}"
-            irqdiag_bin="downloaded/binaries-linux-${arch}/irqdiag-linux-${arch}"
+            bin="downloaded/netmon-linux-${arch}"
+            conntrack_bin="downloaded/conntrack-linux-${arch}"
+            irqdiag_bin="downloaded/irqdiag-linux-${arch}"
             # Raw binary + checksum (for direct download)
             cp "$bin" "dist/netmon-linux-${arch}"
             chmod +x "dist/netmon-linux-${arch}"
