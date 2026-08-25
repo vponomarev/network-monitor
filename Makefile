@@ -3,12 +3,12 @@
 #
 # Usage: make [target]
 # Examples:
-#   make build          - Build both applications
+#   make build          - Build all production applications
 #   make build-netmon   - Build only netmon
 #   make build-conntrack - Build only conntrack
 #   make all            - Build everything (default)
 
-.PHONY: all build build-netmon build-conntrack build-conntrack-embedded test clean lint help deps \
+.PHONY: all build build-netmon build-conntrack build-conntrack-embedded build-irqdiag test clean lint help deps \
         docker-build docker-build-netmon docker-build-conntrack \
         docker-run docker-stop docker-logs docker-clean \
         ebpf-build ebpf-clean prepare-embedded install uninstall package release
@@ -46,9 +46,9 @@ all: build
 # Build targets
 # =============================================================================
 
-## build: Build both netmon and conntrack binaries
-build: build-netmon build-conntrack
-	@echo "✓ Built both applications"
+## build: Build all production binaries
+build: build-netmon build-conntrack build-irqdiag
+	@echo "✓ Built all applications"
 
 ## build-netmon: Build netmon binary
 build-netmon:
@@ -63,6 +63,13 @@ build-conntrack: ebpf-build
 	@echo "Building conntrack..."
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/conntrack ./cmd/conntrack
 	@echo "✓ Built $(BUILD_DIR)/conntrack"
+
+## build-irqdiag: Build the read-only IRQ/NUMA diagnostic binary
+build-irqdiag:
+	@mkdir -p $(BUILD_DIR)
+	@echo "Building irqdiag..."
+	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/irqdiag ./cmd/irqdiag
+	@echo "✓ Built $(BUILD_DIR)/irqdiag"
 
 ## build-all: Build all binaries for current platform
 build-all: build
@@ -111,13 +118,15 @@ release-linux-amd64:
 	@echo "Building release for linux/amd64..."
 	GOOS=linux GOARCH=amd64 $(MAKE) build-conntrack-embedded
 	@cp $(BUILD_DIR)/conntrack dist/conntrack-linux-amd64
+	GOOS=linux GOARCH=amd64 $(MAKE) build-irqdiag
+	@cp $(BUILD_DIR)/irqdiag dist/irqdiag-linux-amd64
 
 ## release: Создать все релиз артефакты
 release: clean
 	@echo "Creating release artifacts..."
 	@mkdir -p dist
 	$(MAKE) release-linux-amd64
-	@cd dist && sha256sum conntrack-* > SHA256SUMS
+	@cd dist && sha256sum conntrack-* irqdiag-* > SHA256SUMS
 	@echo "✓ Release artifacts created in dist/"
 	@ls -lh dist/
 

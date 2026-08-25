@@ -138,6 +138,21 @@ connections:
 Безопасное обновление выполняется повторным `install`. Для ручного возврата к
 сохранённой версии используется `sudo /usr/local/bin/conntrack rollback`.
 
+## Диагностика IRQ/NUMA
+
+Отдельный read-only бинарник собирает единый JSON-отчёт по NIC, PCI,
+NUMA, MSI-X IRQ, affinity, CPU load, softnet и RX drop counters:
+
+```bash
+curl -fLO https://github.com/vponomarev/network-monitor/releases/latest/download/irqdiag-linux-amd64
+chmod +x irqdiag-linux-amd64
+./irqdiag-linux-amd64 --output irq-report.json
+```
+
+Инструмент не меняет IRQ mapping или сетевые настройки. Отчёт содержит
+имя хоста, MAC-адреса и kernel cmdline; перед внешней передачей его следует
+просмотреть.
+
 ## Установка netmon
 
 Netmon поставляется bundle-архивом с бинарником, конфигурациями и systemd unit:

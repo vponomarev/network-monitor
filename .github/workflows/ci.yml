@@ -99,12 +99,16 @@ jobs:
         run: |
           GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
             go build -ldflags="-s -w" -o bin/netmon-${{ matrix.os }}-${{ matrix.arch }} ./cmd/netmon
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
+            go build -ldflags="-s -w" -o bin/irqdiag-${{ matrix.os }}-${{ matrix.arch }} ./cmd/irqdiag
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: netmon-${{ matrix.os }}-${{ matrix.arch }}
-          path: bin/netmon-${{ matrix.os }}-${{ matrix.arch }}
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            bin/netmon-${{ matrix.os }}-${{ matrix.arch }}
+            bin/irqdiag-${{ matrix.os }}-${{ matrix.arch }}
           retention-days: 7
 
   # =====================

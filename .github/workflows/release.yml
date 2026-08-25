@@ -87,6 +87,12 @@ jobs:
               -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
               -X main.GitCommit=$(git rev-parse --short HEAD)" \
             -o conntrack-${{ matrix.os }}-${{ matrix.arch }} ./cmd/conntrack
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
+            go build -ldflags="-s -w \
+              -X main.Version=${VERSION} \
+              -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+              -X main.GitCommit=$(git rev-parse --short HEAD)" \
+            -o irqdiag-${{ matrix.os }}-${{ matrix.arch }} ./cmd/irqdiag
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -95,6 +101,7 @@ jobs:
           path: |
             netmon-${{ matrix.os }}-${{ matrix.arch }}
             conntrack-${{ matrix.os }}-${{ matrix.arch }}
+            irqdiag-${{ matrix.os }}-${{ matrix.arch }}
           retention-days: 1
 
   # =====================
@@ -124,6 +131,7 @@ jobs:
           for arch in amd64; do
             bin="downloaded/binaries-linux-${arch}/netmon-linux-${arch}"
             conntrack_bin="downloaded/binaries-linux-${arch}/conntrack-linux-${arch}"
+            irqdiag_bin="downloaded/binaries-linux-${arch}/irqdiag-linux-${arch}"
             # Raw binary + checksum (for direct download)
             cp "$bin" "dist/netmon-linux-${arch}"
             chmod +x "dist/netmon-linux-${arch}"
@@ -152,10 +160,13 @@ jobs:
             cp packaging/systemd/conntrack.service "dist/${conntrack_stage}/conntrack.service"
             tar -czf "dist/${conntrack_stage}.tar.gz" -C dist "${conntrack_stage}"
             rm -rf "dist/${conntrack_stage}"
+
+            cp "$irqdiag_bin" "dist/irqdiag-linux-${arch}"
+            chmod +x "dist/irqdiag-linux-${arch}"
           done
 
           # Single checksums file over all published assets
-          ( cd dist && sha256sum netmon-linux-* conntrack-linux-* *.tar.gz > checksums.txt )
+          ( cd dist && sha256sum netmon-linux-* conntrack-linux-* irqdiag-linux-* *.tar.gz > checksums.txt )
           echo "=== release assets ==="
           ls -la dist/
 
@@ -213,6 +224,16 @@ jobs:
             They contain the embedded-eBPF binary, minimal configuration, and
             the qualified systemd unit.
 
+            ## IRQ/NUMA diagnostics
+
+            `irqdiag-linux-amd64` is a read-only support tool. Run it on an
+            affected host and share the generated JSON report:
+
+            ```bash
+            chmod +x irqdiag-linux-amd64
+            ./irqdiag-linux-amd64 --output irq-report.json
+            ```
+
             ## 🔍 Verify checksums
 
             ```bash
@@ -235,6 +256,7 @@ jobs:
             dist/netmon-*-linux-amd64.tar.gz
             dist/conntrack-linux-amd64
             dist/conntrack-*-linux-amd64.tar.gz
+            dist/irqdiag-linux-amd64
             dist/checksums.txt
           token: ${{ secrets.GITHUB_TOKEN }}
         env:

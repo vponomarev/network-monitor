@@ -52,6 +52,7 @@ Expected assets:
 
 - `netmon-linux-amd64` and `netmon-<version>-linux-amd64.tar.gz`;
 - `conntrack-linux-amd64` and `conntrack-<version>-linux-amd64.tar.gz`;
+- `irqdiag-linux-amd64` for read-only IRQ/NUMA support reports;
 - `checksums.txt`.
 
 Verify downloaded assets with:

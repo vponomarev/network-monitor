@@ -36,3 +36,22 @@ max_over_time(netmon_irq_affinity_packet_loss_anomaly[5m]) > 0
 The anomaly is diagnostic evidence, not proof of causality. Driver-specific
 ring exhaustion counters may provide additional confirmation; the portable
 collector deliberately relies only on kernel sysfs/procfs interfaces.
+
+## Standalone support report
+
+The release also contains `irqdiag-linux-amd64`. It is read-only, needs no
+configuration, and does not change IRQ affinity or network settings. It samples
+CPU and IRQ activity for one second and emits a versioned JSON report:
+
+```bash
+chmod +x irqdiag-linux-amd64
+./irqdiag-linux-amd64 > irq-report.json
+# or, with restrictive 0600 file permissions:
+./irqdiag-linux-amd64 --output irq-report.json
+```
+
+Use `--sample-duration=5s` on a busy host to obtain a less noisy CPU utilization
+and interrupt-rate sample. The report includes host name, MAC addresses, kernel
+command line, and PCI identifiers; review it before sharing outside the support
+channel. Missing sysfs/procfs data is recorded in `warnings` instead of making
+the entire collection fail.

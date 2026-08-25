@@ -1,7 +1,7 @@
 # Installation Guide
 
 Production releases contain only Linux `amd64` binaries and bundles for
-`netmon` and `conntrack`. Use a host with BTF at
+`netmon` and `conntrack`, plus the read-only `irqdiag` support tool. Use a host with BTF at
 `/sys/kernel/btf/vmlinux`; the maintained kernel matrix is 5.15, 6.1, 6.8, and
 6.12.
 
@@ -51,6 +51,18 @@ address, bearer token, metadata paths, and metric cardinality.
 wget https://github.com/vponomarev/network-monitor/releases/download/<version>/checksums.txt
 sha256sum -c checksums.txt --ignore-missing
 ```
+
+## Collect IRQ/NUMA diagnostics
+
+```bash
+wget https://github.com/vponomarev/network-monitor/releases/latest/download/irqdiag-linux-amd64
+chmod +x irqdiag-linux-amd64
+./irqdiag-linux-amd64 --output irq-report.json
+```
+
+The report is JSON and may be collected without root on systems where sysfs and
+procfs are world-readable. It contains host identifiers and network addresses;
+review it before sharing outside the intended support channel.
 
 ## Build from source
 
