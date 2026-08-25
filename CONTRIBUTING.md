@@ -40,7 +40,7 @@ git remote add upstream https://github.com/vponomarev/network-monitor.git
 ### 2. Set Up Development Environment
 
 ```bash
-# Install Go 1.21+
+# Install Go 1.25+
 go version
 
 # Install dependencies

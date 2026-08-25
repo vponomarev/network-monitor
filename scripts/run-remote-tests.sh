@@ -23,7 +23,7 @@ DEFAULT_HOSTS=("192.168.5.214" "192.168.5.193" "192.168.5.217" "192.168.5.99")
 REMOTE_USER="${REMOTE_USER:-root}"
 REMOTE_DIR="/tmp/network-monitor-tests"
 LOCAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GO_VERSION="${GO_VERSION:-1.24}"
+GO_VERSION="${GO_VERSION:-1.25}"
 
 # Флаги
 RUN_UNIT_TESTS="${RUN_UNIT_TESTS:-true}"

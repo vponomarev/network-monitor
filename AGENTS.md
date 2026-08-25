@@ -8,7 +8,7 @@ Configuration examples are in `configs/`, deployment assets in `packaging/`, das
 
 ## Build, Test, and Development Commands
 
-- `go mod download` installs Go dependencies (Go 1.21+).
+- `go mod download` installs Go dependencies (Go 1.25+).
 - `make build-netmon` builds the production binary at `bin/netmon`.
 - `make ebpf-build` compiles eBPF objects; it requires Linux, Clang, kernel headers/BTF, and libbpf tooling.
 - `make test` runs all Go tests with verbose output and the race detector.

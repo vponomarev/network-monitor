@@ -54,7 +54,7 @@ sha256sum -c checksums.txt --ignore-missing
 
 ## Build from source
 
-Go 1.21+, Clang/LLVM, libbpf headers, make, and Git are required:
+Go 1.25+, Clang/LLVM, libbpf headers, make, and Git are required:
 
 ```bash
 git clone https://github.com/vponomarev/network-monitor.git

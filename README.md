@@ -181,7 +181,7 @@ discovery и metadata API. Неопознанные IP доступны чере
 
 ## Сборка и проверка
 
-Для Go-кода нужен Go 1.21+. Для eBPF-сборки дополнительно нужны Linux,
+Для Go-кода нужен Go 1.25+. Для eBPF-сборки дополнительно нужны Linux,
 Clang/LLVM, libbpf headers и BTF:
 
 ```bash

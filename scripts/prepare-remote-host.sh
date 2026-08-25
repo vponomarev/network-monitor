@@ -27,7 +27,7 @@ print_error() { print_msg "$RED" "[ERROR] $1"; }
 
 REMOTE_USER="root"
 REMOTE_DIR="/tmp/network-monitor-tests"
-GO_VERSION="1.21.0"
+GO_VERSION="1.25.0"
 
 # Check if Go is installed
 check_go() {
@@ -46,10 +46,10 @@ install_go() {
     ssh "$REMOTE_USER@$host" << 'EOF'
 # Download and install Go
 cd /tmp
-wget -q https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+wget -q https://go.dev/dl/go1.25.0.linux-amd64.tar.gz
 rm -rf /usr/local/go
-tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
-rm -f go1.21.0.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
+rm -f go1.25.0.linux-amd64.tar.gz
 
 # Add to PATH
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
