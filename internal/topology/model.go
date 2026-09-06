@@ -122,7 +122,7 @@ func (t *Topology) GetDeviceByIP(ip string) (*NetworkDevice, bool) {
 	}
 
 	var bestMatch string
-	var bestPrefixLen int
+	bestPrefixLen := -1
 
 	for subnet, deviceID := range t.subnetIndex {
 		_, network, err := net.ParseCIDR(subnet)
@@ -155,36 +155,46 @@ func (t *Topology) GetDevicePath(srcIP, dstIP string) ([]*NetworkDevice, bool) {
 		return nil, false
 	}
 
-	// Simple path: source -> destination
-	path := []*NetworkDevice{srcDevice}
-
-	// If same device, return
-	if srcDevice.ID == dstDevice.ID {
-		return path, true
-	}
-
-	// Find common ancestor (simple implementation)
-	// In production, would use graph traversal
-	if srcDevice.ParentID != "" && srcDevice.ParentID == dstDevice.ParentID {
-		// Same parent (e.g., same spine)
-		parent, ok := t.GetDevice(srcDevice.ParentID)
-		if ok {
-			path = append(path, parent)
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	// Parent and explicit connections describe undirected physical links.
+	adjacent := make(map[string][]string)
+	for id, device := range t.devices {
+		links := append([]string(nil), device.ConnectedDevices...)
+		if device.ParentID != "" {
+			links = append(links, device.ParentID)
 		}
-	} else if srcDevice.Type == DeviceTypeLeaf && dstDevice.Type == DeviceTypeLeaf {
-		// Leaf to Leaf through Spine
-		for _, connectedID := range srcDevice.ConnectedDevices {
-			if connected, ok := t.GetDevice(connectedID); ok {
-				if connected.Type == DeviceTypeSpine {
-					path = append(path, connected)
-					break
-				}
+		for _, peer := range links {
+			if t.devices[peer] != nil {
+				adjacent[id] = append(adjacent[id], peer)
+				adjacent[peer] = append(adjacent[peer], id)
 			}
 		}
 	}
-
-	path = append(path, dstDevice)
-	return path, true
+	queue := []string{srcDevice.ID}
+	previous := map[string]string{srcDevice.ID: ""}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if id == dstDevice.ID {
+			var path []*NetworkDevice
+			for id != "" {
+				path = append(path, t.devices[id])
+				id = previous[id]
+			}
+			for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+				path[i], path[j] = path[j], path[i]
+			}
+			return path, true
+		}
+		for _, next := range adjacent[id] {
+			if _, seen := previous[next]; !seen {
+				previous[next] = id
+				queue = append(queue, next)
+			}
+		}
+	}
+	return nil, false
 }
 
 // GetAllDevices returns all devices
@@ -268,6 +278,8 @@ func (t *Topology) EnrichPath(srcIP, dstIP string) *PathInfo {
 
 	// Get intermediate path
 	if srcOk && dstOk {
+		pathInfo.CrossesDatacenter = srcDevice.Datacenter != dstDevice.Datacenter
+		pathInfo.CrossesRack = srcDevice.Rack != dstDevice.Rack
 		devices, ok := t.GetDevicePath(srcIP, dstIP)
 		if ok {
 			pathInfo.IntermediateDevices = devices

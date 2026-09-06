@@ -122,7 +122,7 @@ with open(sys.argv[1], encoding="utf-8") as stream:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if item.get("msg") == "Parsed eBPF event":
+        if item.get("msg") == "Connection event":
             events.append(item)
 
 for direction in ("outgoing", "incoming"):
@@ -130,8 +130,8 @@ for direction in ("outgoing", "incoming"):
     closed = [e for e in events if e.get("direction") == direction and e.get("state") == "CLOSED"]
     if not established or not closed:
         raise SystemExit(f"missing {direction} ESTABLISHED/CLOSED lifecycle")
-    closed_tuples = {(e.get("src_ip"), e.get("src_port"), e.get("dst_ip"), e.get("dst_port")) for e in closed}
-    if not any((e.get("src_ip"), e.get("src_port"), e.get("dst_ip"), e.get("dst_port")) in closed_tuples for e in established):
+    closed_tuples = {(e.get("source"), e.get("src_port"), e.get("dest"), e.get("dst_port")) for e in closed}
+    if not any((e.get("source"), e.get("src_port"), e.get("dest"), e.get("dst_port")) in closed_tuples for e in established):
         raise SystemExit(f"{direction} ESTABLISHED and CLOSED tuples do not match")
 
 outgoing = [e for e in events if e.get("direction") == "outgoing" and e.get("state") == "ESTABLISHED"]
@@ -146,7 +146,9 @@ metrics_contain() {
 # State/drop gauges are refreshed by a periodic tracker ticker.
 wait_for 'conntrack drop metrics' metrics_contain 'conntrack_dropped_events_total{reason="ringbuf_full"}'
 METRICS=$(curl -fsS "http://127.0.0.1:$METRICS_PORT/metrics")
-printf '%s\n' "$METRICS" | grep -q 'conntrack_events_total{direction="outgoing",event="ESTABLISHED"}'
+for direction in outgoing incoming; do
+    printf '%s\n' "$METRICS" | awk -v d="$direction" '$1 == "conntrack_events_total{direction=\"" d "\",event=\"ESTABLISHED\"}" && $2 >= 3 { found=1 } END { exit !found }'
+done
 printf '%s\n' "$METRICS" | grep -q 'conntrack_dropped_events_total{reason="ringbuf_full"}'
 printf '%s\n' "$METRICS" | grep -q 'conntrack_dropped_events_total{reason="event_channel_full"}'
 printf '%s\n' "$METRICS" | grep -q 'conntrack_state_entries{layer="userspace"}'

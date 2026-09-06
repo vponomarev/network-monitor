@@ -51,14 +51,14 @@ build: build-netmon build-conntrack build-irqdiag
 	@echo "✓ Built all applications"
 
 ## build-netmon: Build netmon binary
-build-netmon:
+build-netmon: prepare-embedded
 	@mkdir -p $(BUILD_DIR)
 	@echo "Building netmon..."
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/netmon ./cmd/netmon
 	@echo "✓ Built $(BUILD_DIR)/netmon"
 
 ## build-conntrack: Build conntrack binary (Linux only)
-build-conntrack: ebpf-build
+build-conntrack: prepare-embedded
 	@mkdir -p $(BUILD_DIR)
 	@echo "Building conntrack..."
 	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/conntrack ./cmd/conntrack
@@ -97,10 +97,10 @@ ebpf-clean:
 # =============================================================================
 
 ## prepare-embedded: Подготовить embedded ресурсы
-prepare-embedded:
+prepare-embedded: ebpf-build
 	@echo "Preparing embedded resources..."
 	@mkdir -p pkg/embedded/bpf pkg/embedded/configs pkg/embedded/systemd
-	@cp bpf/conntrack.bpf.o pkg/embedded/bpf/
+	@cp bpf/conntrack.bpf.o bpf/tcploss.bpf.o pkg/embedded/bpf/
 	@cp configs/conntrack.example.yaml pkg/embedded/configs/
 	@cp packaging/systemd/conntrack.service pkg/embedded/systemd/ 2>/dev/null || true
 	@echo "✓ Embedded resources prepared"
@@ -231,7 +231,7 @@ docker-build: docker-build-netmon docker-build-conntrack
 	@echo "✓ Built all Docker images"
 
 ## docker-build-netmon: Build netmon Docker image
-docker-build-netmon:
+docker-build-netmon: prepare-embedded
 	@echo "Building netmon Docker image..."
 	docker build --target netmon -t $(DOCKER_IMAGE)/netmon:$(DOCKER_TAG) .
 

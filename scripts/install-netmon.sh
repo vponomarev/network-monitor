@@ -37,7 +37,7 @@ fi
 ARCH=$(uname -m)
 case $ARCH in
     x86_64) ARCH="amd64" ;;
-    aarch64) ARCH="arm64" ;;
+    aarch64) log_error "Only Linux amd64 releases are qualified"; exit 1 ;;
     *) log_error "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
@@ -47,32 +47,39 @@ log_info "Installing netmon for Linux/$ARCH"
 log_info "Creating directories..."
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
 
-# Download binary
-BINARY_URL="https://github.com/vponomarev/network-monitor/releases/${NETMON_VERSION}/download/netmon-linux-${ARCH}"
-log_info "Downloading binary from $BINARY_URL"
-curl -fsSL "$BINARY_URL" -o "$INSTALL_DIR/$BIN_NAME" || {
-    log_error "Failed to download binary. Check if the release exists."
-    exit 1
-}
-chmod +x "$INSTALL_DIR/$BIN_NAME"
-
-# Create symlink
-log_info "Creating symlink in /usr/local/bin"
+# Resolve a single tag so binary and configuration always come from the same release.
+if [[ "$NETMON_VERSION" == latest ]]; then
+    resolved=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/vponomarev/network-monitor/releases/latest)
+    NETMON_VERSION=${resolved##*/}
+fi
+if [[ ! "$NETMON_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[-a-zA-Z0-9.]*$ ]]; then
+    log_error "Invalid release tag"; exit 1
+fi
+base="https://github.com/vponomarev/network-monitor/releases/download/$NETMON_VERSION"
+stage=$(mktemp -d "$INSTALL_DIR/.netmon-install.XXXXXX")
+trap 'rm -rf -- "$stage"' EXIT
+asset="netmon-$NETMON_VERSION-linux-$ARCH.tar.gz"
+curl -fsSL "$base/$asset" -o "$stage/$asset"
+curl -fsSL "$base/checksums.txt" -o "$stage/checksums.txt"
+expected=$(awk -v name="$asset" '$2 == name {print $1}' "$stage/checksums.txt")
+actual=$(sha256sum "$stage/$asset" | cut -d ' ' -f1)
+[[ "$expected" =~ ^[0-9a-f]{64}$ && "$actual" == "$expected" ]] || { log_error "Checksum mismatch"; exit 1; }
+# Extract only known regular release assets, never arbitrary archive paths.
+prefix="netmon-$NETMON_VERSION-linux-$ARCH"
+tar -xOf "$stage/$asset" "$prefix/netmon" > "$stage/netmon"
+chmod 0755 "$stage/netmon"
+"$stage/netmon" --version >/dev/null
+for name in config locations roles topology; do
+    tar -xOf "$stage/$asset" "$prefix/configs/$name.yaml" > "$stage/$name.yaml"
+done
+for name in config locations roles topology; do
+    if [[ ! -e "$CONFIG_DIR/$name.yaml" ]]; then
+        install -m 0644 "$stage/$name.yaml" "$CONFIG_DIR/$name.yaml"
+    fi
+done
+if [[ -f "$INSTALL_DIR/$BIN_NAME" ]]; then cp -p "$INSTALL_DIR/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME.previous"; fi
+mv -f -- "$stage/netmon" "$INSTALL_DIR/$BIN_NAME"
 ln -sf "$INSTALL_DIR/$BIN_NAME" /usr/local/bin/$BIN_NAME
-
-# Download configuration files
-log_info "Downloading configuration files..."
-curl -fsSL "https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/config.example.yaml" -o "$CONFIG_DIR/config.yaml" || {
-    log_warn "Failed to download config.example.yaml"
-}
-
-curl -fsSL "https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/locations.example.yaml" -o "$CONFIG_DIR/locations.yaml" || {
-    log_warn "Failed to download locations.example.yaml"
-}
-
-curl -fsSL "https://raw.githubusercontent.com/vponomarev/network-monitor/main/configs/roles.example.yaml" -o "$CONFIG_DIR/roles.yaml" || {
-    log_warn "Failed to download roles.example.yaml"
-}
 
 # Mount tracefs if not already mounted
 if ! mountpoint -q /sys/kernel/tracing 2>/dev/null; then

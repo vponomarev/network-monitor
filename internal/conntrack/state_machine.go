@@ -205,6 +205,14 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 
 	switch evt.EventType {
 	case EventNew:
+		if exists {
+			if conn.State != StateClosed {
+				sm.mu.Unlock()
+				return
+			}
+			sm.deleteConnection(key)
+			exists = false
+		}
 		if !exists {
 			conn, capacityEvicted = sm.createConnection(evt)
 		}
@@ -216,13 +224,21 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 			sm.mu.Unlock()
 			return
 		}
+		if exists && conn.State == StateClosed {
+			sm.deleteConnection(key)
+			exists = false
+		}
 		if !exists {
 			// SYN+ACK without seeing SYN - create new connection
 			conn, capacityEvicted = sm.createConnection(evt)
 		}
 		conn.SynAckReceived = true
 		conn.Established = true
-		conn.EstablishedTime = time.Now()
+		conn.EstablishedTime = eventTime(evt)
+		conn.MeasuredHandshake = evt.Handshake
+		conn.SourceIP = append(net.IP(nil), evt.SourceIP...)
+		conn.DestIP = append(net.IP(nil), evt.DestIP...)
+		conn.SourcePort, conn.DestPort = evt.SourcePort, evt.DestPort
 		sm.transitionState(conn, StateEstablished)
 		emitted = pendingConnectionEvent(conn, EventEstablished)
 
@@ -232,13 +248,23 @@ func (sm *StateMachine) ProcessEvent(evt *ConnectionEventRaw) {
 				sm.mu.Unlock()
 				return
 			}
-			conn.ClosedTime = time.Now()
+			conn.ClosedTime = eventTime(evt)
 			sm.transitionState(conn, StateClosed)
 			emitted = pendingConnectionEvent(conn, EventClosed)
 		}
 
 	case EventFailed:
-		if exists {
+		if !exists {
+			conn, capacityEvicted = sm.createConnection(evt)
+		}
+		if exists && conn.State == StateClosed {
+			// The userspace SYN timeout may precede the kernel's terminal event.
+			// Its retained tombstone prevents counting the attempt twice.
+			sm.mu.Unlock()
+			return
+		}
+		if exists || conn != nil {
+			conn.ClosedTime = eventTime(evt)
 			sm.transitionState(conn, StateClosed)
 			emitted = pendingConnectionEvent(conn, EventFailed)
 			sm.deleteConnection(key)
@@ -279,8 +305,10 @@ func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) (*Connection, 
 	if len(sm.connections) >= sm.maxConnections {
 		evicted = sm.evictOldest()
 	}
-	now := time.Now()
+	now := eventTime(evt)
 	conn := &Connection{
+		SocketID:    evt.SocketID,
+		StartedNS:   evt.StartedNS,
 		ID:          sm.makeKey(evt),
 		SourceIP:    evt.SourceIP,
 		SourcePort:  evt.SourcePort,
@@ -293,9 +321,11 @@ func (sm *StateMachine) createConnection(evt *ConnectionEventRaw) (*Connection, 
 		LastUpdated: now,
 		PID:         evt.PID,
 		ProcessName: evt.ProcessName,
-		SynSentTime: now,
 	}
 
+	if evt.EventType == EventNew {
+		conn.SynSentTime = now
+	}
 	sm.connections[conn.ID] = conn
 	sm.orderIndex[conn.ID] = sm.order.PushFront(conn.ID)
 	return conn, evicted
@@ -359,14 +389,13 @@ func (sm *StateMachine) checkTimeouts() {
 				event ConnectionEvent
 			}
 
-			for key, conn := range sm.connections {
+			for _, conn := range sm.connections {
 				if conn.State == StateSynSent {
 					if now.Sub(conn.SynSentTime) > sm.synTimeout {
 						// SYN timeout - connection failed
 						conn.State = StateClosed
 						conn.ClosedTime = now
 						emitted = append(emitted, pendingConnectionEvent(conn, EventFailed))
-						sm.deleteConnection(key)
 						removed++
 					}
 				}
@@ -407,7 +436,7 @@ func (sm *StateMachine) cleanup(now time.Time) {
 		if updated.IsZero() {
 			updated = conn.Timestamp
 		}
-		if !updated.IsZero() && now.Sub(updated) >= sm.retentionTTL {
+		if conn.State != StateEstablished && !updated.IsZero() && now.Sub(updated) >= sm.retentionTTL {
 			sm.deleteConnection(key)
 			counts[CleanupReasonTTL]++
 		}
@@ -432,11 +461,14 @@ func (sm *StateMachine) Stop() {
 
 // makeKey generates unique key for connection
 func (sm *StateMachine) makeKey(evt *ConnectionEventRaw) string {
-	return makeConnectionKey(
+	if evt.SocketID != 0 {
+		return fmt.Sprintf("socket:%x:%d", evt.SocketID, evt.StartedNS)
+	}
+	return fmt.Sprintf("%s-%s", evt.Direction, makeConnectionKey(
 		evt.SourceIP, evt.SourcePort,
 		evt.DestIP, evt.DestPort,
 		evt.Protocol,
-	)
+	))
 }
 
 // GetConnection returns connection by key
@@ -523,7 +555,17 @@ type Stats struct {
 }
 
 // ConnectionEventRaw represents raw connection event from eBPF
+func eventTime(evt *ConnectionEventRaw) time.Time {
+	if !evt.Timestamp.IsZero() {
+		return evt.Timestamp
+	}
+	return time.Now()
+}
+
 type ConnectionEventRaw struct {
+	SocketID    uint64
+	StartedNS   uint64
+	Handshake   time.Duration
 	SourceIP    net.IP
 	SourcePort  uint16
 	DestIP      net.IP

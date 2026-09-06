@@ -34,7 +34,7 @@ type Config struct {
 type GlobalConfig struct {
 	TTLHours      int    `yaml:"ttl_hours"`
 	MetricsPort   int    `yaml:"metrics_port"`
-	MetricsAddr   string `yaml:"metrics_addr"` // Bind address (default: "0.0.0.0")
+	MetricsAddr   string `yaml:"metrics_addr"` // Bind address (default: "127.0.0.1")
 	AuthToken     string `yaml:"auth_token"`   // Optional auth token for /metrics and /api/*
 	TracePipePath string `yaml:"trace_pipe_path"`
 	// LossSource selects the TCP-loss data source:
@@ -246,7 +246,7 @@ func DefaultConfig() *Config {
 		Global: GlobalConfig{
 			TTLHours:      3,
 			MetricsPort:   9876,
-			MetricsAddr:   "0.0.0.0",
+			MetricsAddr:   "127.0.0.1",
 			TracePipePath: "/sys/kernel/tracing/trace_pipe",
 			LossSource:    "ebpf",
 		},
@@ -479,8 +479,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid discovery mode: %s (valid: both, top_loss, on_demand, periodic)", c.Discovery.Traceroute.Mode)
 	}
 
-	if _, err := time.ParseDuration(c.Discovery.Traceroute.Interval); err != nil {
-		return fmt.Errorf("invalid discovery interval: %w", err)
+	if d, err := time.ParseDuration(c.Discovery.Traceroute.Interval); err != nil || d <= 0 {
+		return fmt.Errorf("invalid discovery interval: must be a positive duration")
 	}
 
 	if c.Discovery.Traceroute.TopN < 1 || c.Discovery.Traceroute.TopN > 100 {
@@ -497,8 +497,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid traceroute max_hops: must be between 1 and 64")
 	}
 
-	if _, err := time.ParseDuration(c.Discovery.Traceroute.Timeout); err != nil {
-		return fmt.Errorf("invalid traceroute timeout: %w", err)
+	if d, err := time.ParseDuration(c.Discovery.Traceroute.Timeout); err != nil || d <= 0 {
+		return fmt.Errorf("invalid traceroute timeout: must be a positive duration")
 	}
 
 	if c.Discovery.Traceroute.ProbesPerHop < 1 || c.Discovery.Traceroute.ProbesPerHop > 10 {
@@ -546,6 +546,32 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	for name, source := range map[string]*MetadataSourceConfig{"locations": c.Metadata.Locations.UpdateSource, "roles": c.Metadata.Roles.UpdateSource, "topology": c.Metadata.Topology.UpdateSource} {
+		if source == nil {
+			continue
+		}
+		for field, value := range map[string]string{"poll_interval": source.PollInterval, "timeout": source.Timeout} {
+			if value == "" {
+				continue
+			}
+			if d, err := time.ParseDuration(value); err != nil || d <= 0 {
+				return fmt.Errorf("metadata.%s.%s must be a positive duration", name, field)
+			}
+		}
+	}
+	if c.Latency.Enabled && c.Latency.Timeout != "" {
+		if d, err := time.ParseDuration(c.Latency.Timeout); err != nil || d <= 0 {
+			return fmt.Errorf("latency.timeout must be a positive duration")
+		}
+	}
+	if c.DNS.Enabled && c.DNS.Interval != "" {
+		if d, err := time.ParseDuration(c.DNS.Interval); err != nil || d <= 0 {
+			return fmt.Errorf("dns.interval must be a positive duration")
+		}
+	}
+	if c.DNS.Enabled && (len(c.DNS.Interfaces) != 0 || (c.DNS.Port != 0 && c.DNS.Port != 53)) {
+		return fmt.Errorf("dns uses the system resolver: interfaces must be empty and port must be 53")
+	}
 	// Validate logging settings
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 	if !validLogLevels[c.Logging.Level] {
@@ -587,8 +613,8 @@ func (c *Config) Validate() error {
 		if len(c.Latency.Targets) == 0 {
 			return fmt.Errorf("latency.targets is required when latency is enabled")
 		}
-		if _, err := time.ParseDuration(c.Latency.Interval); err != nil {
-			return fmt.Errorf("invalid latency interval: %w", err)
+		if d, err := time.ParseDuration(c.Latency.Interval); err != nil || d <= 0 {
+			return fmt.Errorf("invalid latency interval: must be a positive duration")
 		}
 	}
 
@@ -597,8 +623,8 @@ func (c *Config) Validate() error {
 		if len(c.Bandwidth.Interfaces) == 0 {
 			return fmt.Errorf("bandwidth.interfaces is required when bandwidth is enabled")
 		}
-		if _, err := time.ParseDuration(c.Bandwidth.Interval); err != nil {
-			return fmt.Errorf("invalid bandwidth interval: %w", err)
+		if d, err := time.ParseDuration(c.Bandwidth.Interval); err != nil || d <= 0 {
+			return fmt.Errorf("invalid bandwidth interval: must be a positive duration")
 		}
 	}
 

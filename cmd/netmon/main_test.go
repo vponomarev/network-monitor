@@ -142,16 +142,22 @@ func TestMetadataPollerReloadReconcilesLossSeries(t *testing.T) {
 			path := filepath.Join(t.TempDir(), tt.name+".yaml")
 			require.NoError(t, os.WriteFile(path, []byte(tt.contents), 0o600))
 			require.NoError(t, tt.reload(path, locations, roles, exporter))
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			for _, family := range families {
+				require.NotEqual(t, metricName, family.GetName(), "historical counts must not acquire new labels")
+			}
+			exporter.RecordRetransmit("10.0.0.1", "10.0.0.2")
 
 			labels, value := singleMetric(t, registry, metricName)
 			for name, want := range tt.wantLabels {
 				assert.Equal(t, want, labels[name])
 			}
-			assert.Equal(t, float64(2), value, "counter must be preserved under the new labels")
+			assert.Equal(t, float64(1), value, "new metadata starts a new counter epoch")
 
 			exporter.RecordRetransmit("10.0.0.1", "10.0.0.2")
 			_, value = singleMetric(t, registry, metricName)
-			assert.Equal(t, float64(3), value)
+			assert.Equal(t, float64(2), value)
 		})
 	}
 }

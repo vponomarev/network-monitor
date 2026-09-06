@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,11 +48,14 @@ type SyslogWriter struct {
 	config   SyslogConfig
 	hostname string
 	writer   *syslog.Writer
+	remote   net.Conn
+	mu       sync.Mutex
 }
 
 // NewSyslogWriter creates a new syslog writer
 func NewSyslogWriter(cfg SyslogConfig) (*SyslogWriter, error) {
 	var writer *syslog.Writer
+	var remote net.Conn
 	var err error
 
 	// Get hostname
@@ -63,8 +67,7 @@ func NewSyslogWriter(cfg SyslogConfig) (*SyslogWriter, error) {
 	// Create syslog writer
 	if cfg.Network != "" && cfg.Address != "" {
 		// Remote syslog
-		priority := syslog.Priority(cfg.Facility) | syslog.LOG_INFO
-		writer, err = syslog.Dial(cfg.Network, cfg.Address, priority, cfg.Tag)
+		remote, err = net.DialTimeout(cfg.Network, cfg.Address, 2*time.Second)
 	} else {
 		// Local syslog
 		priority := syslog.Priority(cfg.Facility) | syslog.LOG_INFO
@@ -79,11 +82,15 @@ func NewSyslogWriter(cfg SyslogConfig) (*SyslogWriter, error) {
 		config:   cfg,
 		hostname: hostname,
 		writer:   writer,
+		remote:   remote,
 	}, nil
 }
 
 // Close closes the syslog writer
 func (w *SyslogWriter) Close() error {
+	if w.remote != nil {
+		return w.remote.Close()
+	}
 	if w.writer != nil {
 		return w.writer.Close()
 	}
@@ -96,30 +103,30 @@ func (w *SyslogWriter) WriteConnection(conn *Connection, event ConnectionEvent) 
 
 	switch event {
 	case EventFailed, EventRejected:
-		return w.writer.Warning(msg)
+		return w.write(msg, 4)
 	case EventClosed:
-		return w.writer.Info(msg)
+		return w.write(msg, 6)
 	default:
-		return w.writer.Info(msg)
+		return w.write(msg, 6)
 	}
 }
 
 // WriteEstablished writes an established connection event
 func (w *SyslogWriter) WriteEstablished(conn *Connection) error {
 	msg := w.formatMessage(conn, EventEstablished)
-	return w.writer.Info(msg)
+	return w.write(msg, 6)
 }
 
 // WriteFailed writes a failed connection event
 func (w *SyslogWriter) WriteFailed(conn *Connection, reason string) error {
 	msg := w.formatMessage(conn, EventFailed) + fmt.Sprintf(" reason=%s", reason)
-	return w.writer.Warning(msg)
+	return w.write(msg, 4)
 }
 
 // WriteRejected writes a rejected connection event
 func (w *SyslogWriter) WriteRejected(conn *Connection, reason string) error {
 	msg := w.formatMessage(conn, EventRejected) + fmt.Sprintf(" reason=%s", reason)
-	return w.writer.Warning(msg)
+	return w.write(msg, 4)
 }
 
 // formatMessage formats connection event as structured syslog message (RFC 5424 style)
@@ -170,8 +177,8 @@ func (w *SyslogWriter) formatMessage(conn *Connection, event ConnectionEvent) st
 	}
 
 	// Add timing information
-	if event == EventEstablished && !conn.SynSentTime.IsZero() && !conn.EstablishedTime.IsZero() {
-		rtt := conn.EstablishedTime.Sub(conn.SynSentTime)
+	if event == EventEstablished && conn.HandshakeDuration() > 0 {
+		rtt := conn.HandshakeDuration()
 		parts = append(parts, fmt.Sprintf("handshake_ms=%d", rtt.Milliseconds()))
 	}
 
@@ -208,4 +215,20 @@ func (w *SyslogWriter) protocolString(proto uint8) string {
 // GetConnectionKey generates a unique key for a connection
 func GetConnectionKey(sourceIP net.IP, sourcePort uint16, destIP net.IP, destPort uint16, protocol uint8) string {
 	return makeConnectionKey(sourceIP, sourcePort, destIP, destPort, protocol)
+}
+
+func (w *SyslogWriter) write(msg string, severity int) error {
+	if w.remote == nil {
+		if severity == 4 {
+			return w.writer.Warning(msg)
+		}
+		return w.writer.Info(msg)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.remote.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(w.remote, "<%d>%s %s %s[%d]: %s\n", int(w.config.Facility)|severity, time.Now().Format(time.Stamp), w.hostname, w.config.Tag, os.Getpid(), strings.ReplaceAll(msg, "\n", " "))
+	return err
 }

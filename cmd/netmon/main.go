@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -338,34 +342,31 @@ func main() {
 		if err != nil {
 			return fmt.Errorf("loading configuration: %w", err)
 		}
-		var reloadErrors []error
-		if err := locationMatcher.Reload(newCfg.Metadata.Locations.Path); err != nil {
-			logger.Warn("Failed to reload locations", zap.Error(err))
-			reloadErrors = append(reloadErrors, fmt.Errorf("reloading locations: %w", err))
-		} else {
-			metadataAPI.SetFilePath("locations", newCfg.Metadata.Locations.Path)
-			logger.Info("Locations reloaded")
+		// Only file contents are reloadable. Reconfiguring long-lived pollers,
+		// collectors or HTTP listeners requires a restart, never a partial reload.
+		if !reflect.DeepEqual(cfg, newCfg) {
+			return fmt.Errorf("configuration changes require restart; reload only refreshes metadata contents")
 		}
-
-		if err := roleMatcher.Reload(newCfg.Metadata.Roles.Path); err != nil {
-			logger.Warn("Failed to reload roles", zap.Error(err))
-			reloadErrors = append(reloadErrors, fmt.Errorf("reloading roles: %w", err))
-		} else {
-			metadataAPI.SetFilePath("roles", newCfg.Metadata.Roles.Path)
-			logger.Info("Roles reloaded")
+		stagedLocations, err := metadata.NewLocationMatcher(newCfg.Metadata.Locations.Path, logger)
+		if err != nil {
+			return fmt.Errorf("staging locations: %w", err)
 		}
-
+		stagedRoles, err := metadata.NewRoleMatcher(newCfg.Metadata.Roles.Path, logger)
+		if err != nil {
+			return fmt.Errorf("staging roles: %w", err)
+		}
+		var stagedTopology *topology.Topology
 		if newCfg.Topology.Enabled {
-			if err := networkTopology.Reload(newCfg.Topology.Path); err != nil {
-				logger.Warn("Failed to reload topology", zap.Error(err))
-				reloadErrors = append(reloadErrors, fmt.Errorf("reloading topology: %w", err))
-			} else {
-				metadataAPI.SetFilePath("topology", newCfg.Topology.Path)
-				logger.Info("Topology reloaded", zap.Int("devices", networkTopology.DeviceCount()))
+			stagedTopology, err = topology.Load(newCfg.Topology.Path)
+			if err != nil {
+				return fmt.Errorf("staging topology: %w", err)
 			}
 		}
+		exporter.ReplaceMetadata(stagedLocations, stagedRoles)
+		if stagedTopology != nil {
+			networkTopology.ReplaceFrom(stagedTopology)
+		}
 
-		exporter.SetMatchers(locationMatcher, roleMatcher)
 		discoveryMu.RLock()
 		service := discoveryService
 		discoveryMu.RUnlock()
@@ -376,9 +377,6 @@ func main() {
 			unknownTracker.Reconcile()
 		}
 
-		if err := errors.Join(reloadErrors...); err != nil {
-			return err
-		}
 		logger.Info("Configuration reloaded successfully")
 		return nil
 	})
@@ -422,6 +420,8 @@ func main() {
 		// Create cache and loss tracker
 		cache := discovery.NewPathCache(cfg.TTL(), 1000)
 		lossTracker := discovery.NewLossTracker(cfg.TTL())
+		lossTracker.StartCleanup(ctx.Done(), time.Minute)
+		prometheus.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "netmon_discovery_pairs_evicted_total", Help: "Loss pairs evicted by the cardinality limit."}, func() float64 { return float64(lossTracker.Evictions()) }))
 
 		probeTimeout, err := time.ParseDuration(cfg.Discovery.Traceroute.Timeout)
 		if err != nil {
@@ -446,7 +446,9 @@ func main() {
 			cfg.Discovery.Traceroute.Mode,
 			interval,
 		)
-		service.SetMetrics(discovery.NewMetrics(prometheus.DefaultRegisterer, 1000))
+		discoveryMetrics := discovery.NewMetrics(prometheus.DefaultRegisterer, 1000)
+		discoveryMetrics.StartJanitor(ctx)
+		service.SetMetrics(discoveryMetrics)
 		service.SetTopology(networkTopology)
 		service.StartPeriodicDiscovery(ctx)
 		discoveryMu.Lock()
@@ -544,9 +546,12 @@ func main() {
 		}
 	}
 
+	var bwMonitor *bandwidth.Monitor
+	var latencyMonitor *latency.Monitor
+	var dnsMonitor *dns.Monitor
 	// Start bandwidth monitor (optional)
 	if cfg.Bandwidth.Enabled {
-		bwMonitor := bandwidth.NewMonitor(cfg.Bandwidth, logger)
+		bwMonitor = bandwidth.NewMonitor(cfg.Bandwidth, logger)
 		go func() {
 			if err := bwMonitor.Run(ctx); err != nil {
 				logger.Error("Bandwidth monitor error", zap.Error(err))
@@ -559,7 +564,7 @@ func main() {
 
 	// Start latency monitor (optional)
 	if cfg.Latency.Enabled {
-		latencyMonitor := latency.NewMonitor(cfg.Latency, logger)
+		latencyMonitor = latency.NewMonitor(cfg.Latency, logger)
 		go func() {
 			if err := latencyMonitor.Run(ctx); err != nil {
 				logger.Error("Latency monitor error", zap.Error(err))
@@ -572,7 +577,7 @@ func main() {
 
 	// Start DNS monitor (optional)
 	if cfg.DNS.Enabled {
-		dnsMonitor := dns.NewMonitor(cfg.DNS, logger)
+		dnsMonitor = dns.NewMonitor(cfg.DNS, logger)
 		go func() {
 			if err := dnsMonitor.Run(ctx); err != nil {
 				logger.Error("DNS monitor error", zap.Error(err))
@@ -591,6 +596,26 @@ func main() {
 	requireAuth := func(handler http.Handler) http.Handler {
 		return requireAuthMiddleware(handler, cfg.Global.AuthToken)
 	}
+
+	mux.Handle("/api/v1/monitoring", requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		result := map[string]interface{}{}
+		if bwMonitor != nil {
+			result["bandwidth"] = bwMonitor.GetAllStats()
+		}
+		if latencyMonitor != nil {
+			result["latency"] = latencyMonitor.GetAllResults()
+		}
+		if dnsMonitor != nil {
+			result["dns"] = dnsMonitor.GetAllResults()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	})))
 
 	// Prometheus metrics endpoint (protected if auth token is set)
 	metricsHandler := promhttp.HandlerFor(
@@ -652,7 +677,7 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", cfg.Global.MetricsAddr, cfg.Global.MetricsPort),
+		Addr:              net.JoinHostPort(cfg.Global.MetricsAddr, strconv.Itoa(cfg.Global.MetricsPort)),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -733,6 +758,9 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 		zapCfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
 	}
 
+	if cfg.Logging.OutputPath != "" {
+		zapCfg.OutputPaths = []string{cfg.Logging.OutputPath}
+	}
 	return zapCfg.Build()
 }
 
@@ -779,10 +807,11 @@ func reloadLocationMetadata(
 	roleMatcher *metadata.RoleMatcher,
 	exporter *metrics.Exporter,
 ) error {
-	if err := locationMatcher.Reload(path); err != nil {
+	staged, err := metadata.NewLocationMatcher(path, zap.NewNop())
+	if err != nil {
 		return err
 	}
-	exporter.SetMatchers(locationMatcher, roleMatcher)
+	exporter.ReplaceMetadata(staged, nil)
 	return nil
 }
 
@@ -793,9 +822,10 @@ func reloadRoleMetadata(
 	roleMatcher *metadata.RoleMatcher,
 	exporter *metrics.Exporter,
 ) error {
-	if err := roleMatcher.Reload(path); err != nil {
+	staged, err := metadata.NewRoleMatcher(path, zap.NewNop())
+	if err != nil {
 		return err
 	}
-	exporter.SetMatchers(locationMatcher, roleMatcher)
+	exporter.ReplaceMetadata(nil, staged)
 	return nil
 }

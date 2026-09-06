@@ -46,7 +46,9 @@ git push origin v2.2.0
 
 The workflow rebuilds eBPF objects, embeds them, builds netmon and conntrack,
 creates runnable bundles and raw binaries, generates `checksums.txt`, and
-publishes the GitHub Release.
+creates a draft GitHub Release using `docs/releases/<version>.md`.
+Validate the exact downloaded draft assets and checksums, then publish the draft
+with `gh release edit <version> --draft=false --latest`.
 
 Expected assets:
 

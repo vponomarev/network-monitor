@@ -47,7 +47,7 @@ func TestPath_TotalLoss(t *testing.T) {
 				{TTL: 3, Lost: true},
 				{TTL: 4, Lost: false},
 			},
-			expected: 50,
+			expected: 0,
 		},
 		{
 			name: "100% loss",
@@ -55,7 +55,7 @@ func TestPath_TotalLoss(t *testing.T) {
 				{TTL: 1, Lost: true},
 				{TTL: 2, Lost: true},
 			},
-			expected: 100,
+			expected: 0,
 		},
 	}
 
@@ -142,7 +142,7 @@ func TestFindBottleneck(t *testing.T) {
 					{TTL: 3, Lost: true, IP: net.ParseIP("10.0.0.3")},
 				},
 			},
-			wantNil:  false,
+			wantNil:  true,
 			wantHop:  2,
 			wantLoss: 100,
 		},

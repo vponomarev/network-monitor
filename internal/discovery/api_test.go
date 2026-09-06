@@ -145,7 +145,7 @@ func TestDiscoveryService_pathToResponse(t *testing.T) {
 
 	assert.Equal(t, "path-192.168.1.1-192.168.1.2", resp.PathID)
 	assert.Equal(t, 2, len(resp.Hops))
-	assert.NotNil(t, resp.Bottleneck)
+	assert.Nil(t, resp.Bottleneck, "ICMP reply loss cannot identify a forwarding bottleneck")
 }
 
 func TestDiscoveryService_HTTPHandler_Discover(t *testing.T) {

@@ -55,53 +55,18 @@ type Tracerouter interface {
 
 // FindBottleneck analyzes a path and identifies the bottleneck hop
 func FindBottleneck(path *Path) *Bottleneck {
-	if path == nil || len(path.Hops) == 0 {
-		return nil
-	}
-
-	var maxLoss float64
-	var bottleneck *Bottleneck
-	for _, hop := range path.Hops {
-		lossPercent := hop.LossPercent
-		if hop.ProbesSent == 0 && hop.Lost {
-			lossPercent = 100
-		}
-		if lossPercent > maxLoss {
-			maxLoss = lossPercent
-			bottleneck = &Bottleneck{
-				HopIP:       hop.IP.String(),
-				HopTTL:      hop.TTL,
-				Device:      hop.Device,
-				LossPercent: lossPercent,
-			}
-		}
-	}
-
-	return bottleneck
+	// ICMP response suppression does not identify a forwarding bottleneck.
+	// Keep the optional API field unset until independent evidence exists.
+	return nil
 }
 
-// TotalLoss returns the total packet loss percentage for a path
+// TotalLoss is retained for Go callers; it returns destination ICMP response loss.
+// Use DestinationProbeLoss to distinguish unknown measurements.
 func (p *Path) TotalLoss() float64 {
-	if len(p.Hops) == 0 {
-		return 0
+	if loss := p.DestinationProbeLoss(); loss != nil {
+		return *loss
 	}
-
-	totalSent, totalReceived := 0, 0
-	for _, hop := range p.Hops {
-		if hop.ProbesSent > 0 {
-			totalSent += hop.ProbesSent
-			totalReceived += hop.ProbesReceived
-		} else {
-			totalSent++
-			if !hop.Lost {
-				totalReceived++
-			}
-		}
-	}
-	if totalSent == 0 {
-		return 0
-	}
-	return float64(totalSent-totalReceived) / float64(totalSent) * 100
+	return 0
 }
 
 // AvgRTT returns the average RTT for successful hops
@@ -121,4 +86,16 @@ func (p *Path) AvgRTT() time.Duration {
 	}
 
 	return total / time.Duration(count)
+}
+
+// DestinationProbeLoss measures missing ICMP replies from the destination only.
+// Nil means the destination did not respond: the forwarding loss is unknown.
+func (p *Path) DestinationProbeLoss() *float64 {
+	for _, hop := range p.Hops {
+		if p.DstIP != nil && hop.IP != nil && hop.IP.Equal(p.DstIP) && hop.ProbesSent > 0 {
+			loss := float64(hop.ProbesSent-hop.ProbesReceived) / float64(hop.ProbesSent) * 100
+			return &loss
+		}
+	}
+	return nil
 }

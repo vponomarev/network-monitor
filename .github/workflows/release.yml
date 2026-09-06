@@ -6,7 +6,7 @@ on:
       - 'v*'  # Trigger on version tags (v1.0.0, v1.2.3, etc.)
 
 env:
-  GO_VERSION: '1.26'
+  GO_VERSION: '1.26.7'
 
 permissions:
   contents: write
@@ -70,6 +70,12 @@ jobs:
           sudo apt-get install -y clang llvm libbpf-dev
           make -C bpf all
           cp bpf/conntrack.bpf.o bpf/tcploss.bpf.o pkg/embedded/bpf/
+
+      - name: Test the exact release commit
+        run: |
+          go test -race -count=1 ./internal/... ./cmd/... ./pkg/...
+          go vet ./...
+          go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Build binary
         env:
@@ -192,65 +198,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ needs.validate.outputs.version }}
-          body: |
-            ${{ steps.changelog.outputs.changelog }}
-
-            ## 📦 Installation (netmon — TCP loss monitoring)
-
-            Download the bundle for your architecture — it contains the `netmon`
-            binary, example configs, and a systemd unit.
-
-            ```bash
-            # Supported release architecture: amd64
-            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/netmon-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz
-            tar -xzf netmon-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz
-            cd netmon-${{ needs.validate.outputs.version }}-linux-amd64
-
-            sudo install -m 0755 netmon /usr/local/bin/netmon
-            sudo mkdir -p /etc/netmon
-            sudo cp configs/*.yaml /etc/netmon/
-            sudo cp netmon.service /etc/systemd/system/netmon.service
-            sudo systemctl daemon-reload
-            sudo systemctl enable --now netmon
-
-            curl -s http://localhost:9876/ready
-            ```
-
-            Prefer just the binary? Download `netmon-linux-amd64` directly.
-
-            ## Connection tracking
-
-            Standalone conntrack bundles are published as
-            `conntrack-${{ needs.validate.outputs.version }}-linux-amd64.tar.gz`.
-            They contain the embedded-eBPF binary, minimal configuration, and
-            the qualified systemd unit.
-
-            ## IRQ/NUMA diagnostics
-
-            `irqdiag-linux-amd64` is a read-only support tool. Run it on an
-            affected host and share the generated JSON report:
-
-            ```bash
-            chmod +x irqdiag-linux-amd64
-            ./irqdiag-linux-amd64 --output irq-report.json
-            ```
-
-            ## 🔍 Verify checksums
-
-            ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.version }}/checksums.txt
-            sha256sum -c checksums.txt --ignore-missing
-            ```
-
-            ## 📖 Documentation
-
-            - [README](https://github.com/${{ github.repository }}/blob/main/README.md)
-            - [Production Deployment Guide (EN)](https://github.com/${{ github.repository }}/blob/main/docs/PRODUCTION_en.md)
-            - [Production Deployment Guide (RU)](https://github.com/${{ github.repository }}/blob/main/docs/PRODUCTION_ru.md)
-
-            > **Requirements:** Linux kernel 5.8+ with BTF (`/sys/kernel/btf/vmlinux`).
-            > Recommended capabilities: `CAP_SYS_ADMIN CAP_NET_RAW` (see the guide).
-          draft: false
+          body_path: docs/releases/${{ needs.validate.outputs.version }}.md
+          draft: true
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           files: |
             dist/netmon-linux-amd64

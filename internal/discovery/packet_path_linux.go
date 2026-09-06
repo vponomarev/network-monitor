@@ -44,7 +44,7 @@ func (t *packetPathTracerouter) RunWithTimeout(ctx context.Context, src, dst str
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	result, err := t.pool.Trace(ctx, dst)
+	result, err := t.pool.TraceFrom(ctx, src, dst)
 	if err != nil {
 		return nil, err
 	}

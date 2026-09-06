@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"container/list"
 	"sort"
 	"sync"
 	"time"
@@ -12,19 +13,33 @@ type LossPair struct {
 	DstIP     string    `json:"dst_ip"`
 	LossCount uint64    `json:"loss_count"`
 	LastSeen  time.Time `json:"last_seen"`
-	LossRate  float64   `json:"loss_rate"` // losses per second
+	buckets   [64]lossBucket
+	LossRate  float64 `json:"loss_rate"` // losses per second
+}
+
+type lossBucket struct {
+	Tick  int64
+	Count uint64
 }
 
 // LossTracker tracks loss statistics for IP pairs
 type LossTracker struct {
-	mu     sync.RWMutex
-	pairs  map[string]*LossPair
-	window time.Duration // Time window for rate calculation
+	mu       sync.RWMutex
+	pairs    map[string]*LossPair
+	window   time.Duration // Rate window, quantized into 64 bounded time buckets.
+	maxPairs int
+	order    *list.List
+	index    map[string]*list.Element
+	evicted  uint64
 }
 
 // NewLossTracker creates a new loss tracker
 func NewLossTracker(window time.Duration) *LossTracker {
+	if window <= 0 {
+		window = 5 * time.Minute
+	}
 	return &LossTracker{
+		maxPairs: 10000, order: list.New(), index: make(map[string]*list.Element),
 		pairs:  make(map[string]*LossPair),
 		window: window,
 	}
@@ -44,28 +59,34 @@ func (t *LossTracker) RecordLoss(srcIP, dstIP string) {
 	now := time.Now()
 
 	if pair, ok := t.pairs[key]; ok {
+		if now.Sub(pair.LastSeen) >= t.window {
+			pair.buckets = [64]lossBucket{}
+		}
 		pair.LossCount++
 		pair.LastSeen = now
-		pair.LossRate = float64(pair.LossCount) / t.window.Seconds()
+		t.recordBucket(pair, now)
+		t.order.MoveToFront(t.index[key])
 	} else {
+		if len(t.pairs) >= t.maxPairs {
+			t.remove(t.order.Back().Value.(string))
+			t.evicted++
+		}
+		t.index[key] = t.order.PushFront(key)
 		t.pairs[key] = &LossPair{
 			SrcIP:     srcIP,
 			DstIP:     dstIP,
 			LossCount: 1,
 			LastSeen:  now,
-			LossRate:  1.0 / t.window.Seconds(),
 		}
+		t.recordBucket(t.pairs[key], now)
 	}
 }
 
 // GetTopPairs returns the top N pairs by loss count
 func (t *LossTracker) GetTopPairs(n int) []*LossPair {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	pairs := make([]*LossPair, 0, len(t.pairs))
-	for _, pair := range t.pairs {
-		pairs = append(pairs, pair)
+	pairs := t.GetAllPairs()
+	if n <= 0 {
+		return nil
 	}
 
 	// Sort by loss count descending
@@ -82,12 +103,9 @@ func (t *LossTracker) GetTopPairs(n int) []*LossPair {
 
 // GetTopPairsByRate returns the top N pairs by loss rate
 func (t *LossTracker) GetTopPairsByRate(n int) []*LossPair {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	pairs := make([]*LossPair, 0, len(t.pairs))
-	for _, pair := range t.pairs {
-		pairs = append(pairs, pair)
+	pairs := t.GetAllPairs()
+	if n <= 0 {
+		return nil
 	}
 
 	// Sort by loss rate descending
@@ -112,14 +130,7 @@ func (t *LossTracker) GetPair(srcIP, dstIP string) (*LossPair, bool) {
 		return nil, false
 	}
 
-	// Return a copy
-	return &LossPair{
-		SrcIP:     pair.SrcIP,
-		DstIP:     pair.DstIP,
-		LossCount: pair.LossCount,
-		LastSeen:  pair.LastSeen,
-		LossRate:  pair.LossRate,
-	}, true
+	return t.snapshot(pair, time.Now()), true
 }
 
 // GetAllPairs returns all tracked pairs
@@ -129,7 +140,7 @@ func (t *LossTracker) GetAllPairs() []*LossPair {
 
 	pairs := make([]*LossPair, 0, len(t.pairs))
 	for _, pair := range t.pairs {
-		pairs = append(pairs, pair)
+		pairs = append(pairs, t.snapshot(pair, time.Now()))
 	}
 	return pairs
 }
@@ -151,7 +162,7 @@ func (t *LossTracker) Cleanup() int {
 
 	for key, pair := range t.pairs {
 		if pair.LastSeen.Before(cutoff) {
-			delete(t.pairs, key)
+			t.remove(key)
 			removed++
 		}
 	}
@@ -164,6 +175,8 @@ func (t *LossTracker) Clear() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.pairs = make(map[string]*LossPair)
+	t.order.Init()
+	t.index = make(map[string]*list.Element)
 }
 
 // makeKey creates a unique key for a pair
@@ -173,6 +186,9 @@ func (t *LossTracker) makeKey(srcIP, dstIP string) string {
 
 // StartCleanup starts a background cleanup goroutine
 func (t *LossTracker) StartCleanup(stopCh <-chan struct{}, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -187,3 +203,44 @@ func (t *LossTracker) StartCleanup(stopCh <-chan struct{}, interval time.Duratio
 		}
 	}()
 }
+
+func (t *LossTracker) remove(key string) {
+	delete(t.pairs, key)
+	if e := t.index[key]; e != nil {
+		t.order.Remove(e)
+		delete(t.index, key)
+	}
+}
+func (t *LossTracker) bucketWidth() time.Duration {
+	width := t.window / 64
+	if width < time.Nanosecond {
+		return time.Nanosecond
+	}
+	return width
+}
+func (t *LossTracker) recordBucket(pair *LossPair, now time.Time) {
+	tick := now.UnixNano() / int64(t.bucketWidth())
+	b := &pair.buckets[tick%64]
+	if b.Tick != tick {
+		*b = lossBucket{Tick: tick}
+	}
+	b.Count++
+}
+func (t *LossTracker) snapshot(pair *LossPair, now time.Time) *LossPair {
+	snapshot := *pair
+	snapshot.LossCount = 0
+	snapshot.LossRate = 0
+	tick := now.UnixNano() / int64(t.bucketWidth())
+	if now.Sub(pair.LastSeen) < t.window {
+		for _, b := range pair.buckets {
+			if b.Tick <= tick && b.Tick > tick-64 {
+				snapshot.LossCount += b.Count
+				snapshot.LossRate += float64(b.Count) / t.window.Seconds()
+			}
+		}
+	}
+	return &snapshot
+}
+
+// Evictions reports pairs removed by the independent cardinality limit.
+func (t *LossTracker) Evictions() uint64 { t.mu.RLock(); defer t.mu.RUnlock(); return t.evicted }
