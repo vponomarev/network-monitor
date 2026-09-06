@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,13 +88,16 @@ type bpfConnectionEvent struct {
 	TCPFlags    uint8    // offset 64
 	_           [7]byte  // offset 65-71 (padding for comm alignment)
 	Comm        [16]byte // offset 72
+	SocketID    uint64
+	StartedNS   uint64
+	HandshakeNS uint64
 }
 
 // validateBpfConnectionEvent checks that Go struct matches C struct
 func validateBpfConnectionEvent() error {
 	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
-	if unsafe.Sizeof(bpfConnectionEvent{}) != 88 {
-		return fmt.Errorf("bpfConnectionEvent size mismatch: got %d, expected 88",
+	if unsafe.Sizeof(bpfConnectionEvent{}) != 112 {
+		return fmt.Errorf("bpfConnectionEvent size mismatch: got %d, expected 112",
 			unsafe.Sizeof(bpfConnectionEvent{}))
 	}
 
@@ -229,7 +233,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 		t.wg.Add(1)
 		go func() {
 			defer t.wg.Done()
-			t.writeSyslog()
+			t.writeSyslog(runCtx)
 		}()
 	}
 	t.ready.Store(true)
@@ -264,12 +268,16 @@ func (t *Tracker) Run(ctx context.Context) error {
 		}
 	}
 	cancelRun()
+	if t.syslogWriter != nil && t.syslogWriter.remote != nil {
+		_ = t.syslogWriter.Close()
+	}
 	if !readerStopped {
 		if err := <-readerErr; err != nil && ctx.Err() == nil {
 			runErr = fmt.Errorf("ringbuf consumer stopped: %w", err)
 		}
 	}
 	if t.syslogEvents != nil {
+		t.stateMachine.Stop() // Stop timeout callbacks before closing their queue.
 		close(t.syslogEvents)
 	}
 	t.ready.Store(false)
@@ -331,6 +339,9 @@ func (t *Tracker) loadEBPFFromFile(path string) error {
 }
 
 func (t *Tracker) loadEBPFSpec(spec *ebpf.CollectionSpec) error {
+	if m := spec.Maps["connections"]; m == nil || m.KeySize != 45 {
+		return fmt.Errorf("incompatible conntrack eBPF ABI: rebuild the object with this binary")
+	}
 	if connections, ok := spec.Maps["connections"]; ok {
 		// #nosec G115 -- NewTracker rejects values outside uint32 above.
 		connections.MaxEntries = uint32(t.config.MaxTrackedConnections)
@@ -435,7 +446,7 @@ func (t *Tracker) attachPrograms() error {
 		zap.Strings("programs", mapKeys(t.colls.Programs)),
 	)
 
-	if t.config.TrackOutgoing || t.config.TrackCloses {
+	if t.config.TrackOutgoing || t.config.TrackIncoming || t.config.TrackCloses {
 		prog, ok := t.colls.Programs["trace_outgoing"]
 		if !ok {
 			return fmt.Errorf("outgoing inet_sock_set_state program is missing")
@@ -453,11 +464,13 @@ func (t *Tracker) attachPrograms() error {
 		if prog, ok := t.colls.Programs["inet_csk_accept"]; ok {
 			l, err := link.Kretprobe("inet_csk_accept", prog, nil)
 			if err != nil {
-				t.logger.Warn("Failed to attach kretprobe/inet_csk_accept", zap.Error(err))
+				return fmt.Errorf("linking kretprobe/inet_csk_accept: %w", err)
 			} else {
 				t.links = append(t.links, l)
 				t.logger.Info("Attached kretprobe/inet_csk_accept for incoming connections")
 			}
+		} else {
+			return fmt.Errorf("incoming inet_csk_accept program is missing")
 		}
 	}
 
@@ -506,7 +519,7 @@ func (t *Tracker) readEvents(ctx context.Context, rd *ringbuf.Reader) error {
 // parseConnectionEvent parses raw eBPF event data
 func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 	// C struct: 8+8+4+4+16+16+2+2+1+1+1+1+1+7(pad)+16 = 88 bytes
-	if len(data) < 88 {
+	if len(data) != 112 {
 		t.logger.Debug("Event data too short", zap.Int("len", len(data)))
 		return nil
 	}
@@ -533,15 +546,19 @@ func (t *Tracker) parseConnectionEvent(data []byte) *Connection {
 	conn := &Connection{
 		// bpf_ktime_get_ns is monotonic since boot, not a Unix timestamp.
 		// Use wall time at ingestion for logs and userspace retention.
-		Timestamp:  time.Now(),
-		SourceIP:   IPFromBytes(event.SrcIP),
-		SourcePort: event.SrcPort,
-		DestIP:     IPFromBytes(event.DstIP),
-		DestPort:   event.DstPort,
-		Protocol:   event.Protocol,
-		Direction:  Direction(event.Direction),
-		State:      ConnectionState(event.State),
-		PID:        event.PID,
+		Timestamp:         kernelEventTime(event.TimestampNs),
+		SocketID:          binary.NativeEndian.Uint64(data[88:96]),
+		StartedNS:         binary.NativeEndian.Uint64(data[96:104]),
+		MeasuredHandshake: boundedKernelDuration(binary.NativeEndian.Uint64(data[104:112])),
+		EventType:         ConnectionEvent(event.EventType),
+		SourceIP:          IPFromBytes(event.SrcIP),
+		SourcePort:        event.SrcPort,
+		DestIP:            IPFromBytes(event.DstIP),
+		DestPort:          event.DstPort,
+		Protocol:          event.Protocol,
+		Direction:         Direction(event.Direction),
+		State:             ConnectionState(event.State),
+		PID:               event.PID,
 		// comm is captured in eBPF while the originating process context is
 		// available. Never block the ring-buffer consumer on /proc I/O.
 		ProcessName: sanitizeProcessName(string(event.Comm[:])),
@@ -587,15 +604,6 @@ func (t *Tracker) processConnection(conn *Connection) {
 	if len(t.config.FilterPorts) > 0 && !containsPort(t.config.FilterPorts, conn.SourcePort, conn.DestPort) {
 		return
 	}
-	// Determine event type from state
-	eventType := EventNew
-	switch conn.State {
-	case StateEstablished:
-		eventType = EventEstablished
-	case StateClosed:
-		eventType = EventClosed
-	}
-
 	// Create raw event for state machine
 	evt := &ConnectionEventRaw{
 		SourceIP:    conn.SourceIP,
@@ -604,7 +612,10 @@ func (t *Tracker) processConnection(conn *Connection) {
 		DestPort:    conn.DestPort,
 		Protocol:    conn.Protocol,
 		Direction:   conn.Direction,
-		EventType:   eventType,
+		EventType:   conn.EventType,
+		SocketID:    conn.SocketID,
+		StartedNS:   conn.StartedNS,
+		Handshake:   conn.MeasuredHandshake,
 		State:       conn.State,
 		PID:         conn.PID,
 		ProcessName: conn.ProcessName,
@@ -679,8 +690,16 @@ func containsPort(ports []int, src, dst uint16) bool {
 	return false
 }
 
-func (t *Tracker) writeSyslog() {
+func (t *Tracker) writeSyslog(ctx context.Context) {
 	for item := range t.syslogEvents {
+		if ctx.Err() != nil {
+			dropped := 1
+			for range t.syslogEvents {
+				dropped++
+			}
+			t.metricsCollector.UpdateDroppedMetrics("syslog_shutdown", uint64(dropped))
+			return
+		}
 		if err := t.syslogWriter.WriteConnection(item.conn, item.event); err != nil {
 			t.logger.Warn("Failed to write to syslog", zap.Error(err))
 		}
@@ -798,7 +817,11 @@ func (t *Tracker) cleanupKernelStateOnce() {
 		if !ok {
 			continue
 		}
-		remaining, deleted, err := cleanupTimestampedMap(m, now, t.config.StateTTL)
+		ttl := t.config.StateTTL
+		if item.name == "connections" {
+			ttl = 0
+		} // Established sockets are removed by CLOSE, never by age.
+		remaining, deleted, err := cleanupTimestampedMap(m, now, ttl)
 		if err != nil {
 			t.logger.Warn("Cleaning conntrack kernel map", zap.String("map", item.name), zap.Error(err))
 			continue
@@ -830,7 +853,7 @@ func cleanupTimestampedMap(m *ebpf.Map, nowNS uint64, ttl time.Duration) (remain
 			return remaining, deleted, fmt.Errorf("map value too short: %d", len(value))
 		}
 		timestamp := binary.NativeEndian.Uint64(value[:8])
-		if timestamp > nowNS || nowNS-timestamp < cutoff {
+		if ttl == 0 || timestamp > nowNS || nowNS-timestamp < cutoff {
 			continue
 		}
 		expired = append(expired, append([]byte(nil), key...))
@@ -895,4 +918,21 @@ func (t *Tracker) close() {
 	if t.syslogWriter != nil {
 		t.syslogWriter.Close()
 	}
+}
+
+// Translate a monotonic kernel event to wall time, retaining time spent in the ring buffer.
+func kernelEventTime(timestamp uint64) time.Time {
+	now := time.Now()
+	mono, err := monotonicNowNS()
+	if err != nil || timestamp > mono {
+		return now
+	}
+	return now.Add(-boundedKernelDuration(mono - timestamp))
+}
+
+func boundedKernelDuration(ns uint64) time.Duration {
+	if ns > math.MaxInt64 {
+		return 0
+	}
+	return time.Duration(ns)
 }

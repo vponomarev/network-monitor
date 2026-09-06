@@ -10,10 +10,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -218,18 +216,10 @@ func (c *EBPFLossCollector) Run(ctx context.Context) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) || errors.Is(err, os.ErrClosed) {
-				c.logger.Info("Ring buffer closed, stopping loss collector")
+			if ctx.Err() != nil {
 				return nil
 			}
-			c.logger.Warn("Reading loss ring buffer", zap.Error(err))
-			// Back off to avoid a busy loop on persistent errors.
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(100 * time.Millisecond):
-			}
-			continue
+			return fmt.Errorf("reading loss ring buffer: %w", err)
 		}
 
 		c.eventsRead.Add(1)

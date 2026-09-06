@@ -1,7 +1,10 @@
 package discovery
 
 import (
+	"context"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -12,12 +15,35 @@ type Metrics struct {
 	mu          sync.Mutex
 	maxPaths    int
 	paths       map[string]string
+	updated     map[string]time.Time
 	pathsActive prometheus.Gauge
 	lastRun     prometheus.Gauge
 	hops        *prometheus.GaugeVec
 	rtt         *prometheus.GaugeVec
 	bottleneck  *prometheus.GaugeVec
 	dropped     prometheus.Counter
+}
+
+// StartJanitor removes stale series even when no new traces arrive.
+func (m *Metrics) StartJanitor(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				m.mu.Lock()
+				for key, seen := range m.updated {
+					if now.Sub(seen) >= 10*time.Minute {
+						m.remove(key)
+					}
+				}
+				m.mu.Unlock()
+			}
+		}
+	}()
 }
 
 func NewMetrics(reg prometheus.Registerer, maxPaths int) *Metrics {
@@ -27,6 +53,7 @@ func NewMetrics(reg prometheus.Registerer, maxPaths int) *Metrics {
 	m := &Metrics{
 		maxPaths: maxPaths,
 		paths:    make(map[string]string),
+		updated:  make(map[string]time.Time),
 		pathsActive: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "netmon", Name: "discovery_paths", Help: "Number of paths currently exported by discovery.",
 		}),
@@ -59,16 +86,28 @@ func (m *Metrics) Observe(path *Path, bottleneck *Bottleneck) {
 	src, dst := path.SrcIP.String(), path.DstIP.String()
 	key := src + "\x00" + dst
 	m.mu.Lock()
+	now := time.Now()
+	for old, seen := range m.updated {
+		if now.Sub(seen) >= 10*time.Minute {
+			m.remove(old)
+		}
+	}
 	previousBottleneck, ok := m.paths[key]
 	if !ok {
 		if len(m.paths) >= m.maxPaths {
+			oldest := ""
+			for candidate, seen := range m.updated {
+				if oldest == "" || seen.Before(m.updated[oldest]) {
+					oldest = candidate
+				}
+			}
+			m.remove(oldest)
 			m.dropped.Inc()
-			m.mu.Unlock()
-			return
 		}
 		m.paths[key] = ""
 		m.pathsActive.Set(float64(len(m.paths)))
 	}
+	m.updated[key] = now
 	m.hops.WithLabelValues(src, dst).Set(float64(len(path.Hops)))
 	m.rtt.WithLabelValues(src, dst).Set(path.AvgRTT().Seconds())
 	if previousBottleneck != "" && (bottleneck == nil || previousBottleneck != bottleneck.HopIP) {
@@ -82,4 +121,17 @@ func (m *Metrics) Observe(path *Path, bottleneck *Bottleneck) {
 	}
 	m.lastRun.SetToCurrentTime()
 	m.mu.Unlock()
+}
+
+func (m *Metrics) remove(key string) {
+	labels := strings.Split(key, "\x00")
+	if len(labels) != 2 {
+		return
+	}
+	m.hops.DeleteLabelValues(labels...)
+	m.rtt.DeleteLabelValues(labels...)
+	m.bottleneck.DeleteLabelValues(labels[0], labels[1], m.paths[key])
+	delete(m.paths, key)
+	delete(m.updated, key)
+	m.pathsActive.Set(float64(len(m.paths)))
 }

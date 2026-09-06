@@ -106,8 +106,12 @@ func (m *Monitor) collect() {
 		if prev, ok := m.prev[iface]; ok {
 			duration := now.Sub(prev.Timestamp).Seconds()
 			if duration > 0 {
-				stats.RxBytesPerSec = float64(stats.RxBytes-prev.RxBytes) / duration
-				stats.TxBytesPerSec = float64(stats.TxBytes-prev.TxBytes) / duration
+				if stats.RxBytes >= prev.RxBytes {
+					stats.RxBytesPerSec = float64(stats.RxBytes-prev.RxBytes) / duration
+				}
+				if stats.TxBytes >= prev.TxBytes {
+					stats.TxBytesPerSec = float64(stats.TxBytes-prev.TxBytes) / duration
+				}
 			}
 		}
 

@@ -4,7 +4,9 @@
 package discovery
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -19,6 +21,7 @@ import (
 
 // TracerouteConfig holds traceroute configuration
 type TracerouteConfig struct {
+	SourceIP     string        `json:"source_ip,omitempty"`
 	MaxHops      int           `json:"max_hops"`
 	Timeout      time.Duration `json:"timeout"`
 	ProbesPerHop int           `json:"probes_per_hop"`
@@ -74,7 +77,6 @@ type PacketTracerouter interface {
 type ICMPPacketTracerouter struct {
 	config *TracerouteConfig
 	logger *zap.Logger
-	seq    atomic.Uint32
 }
 
 // NewICMPTracerouter creates a new ICMP-based tracerouter
@@ -112,6 +114,15 @@ func (t *ICMPPacketTracerouter) Trace(ctx context.Context, dstIP string) (*Trace
 		return nil, fmt.Errorf("creating ICMP connection: %w", err)
 	}
 	defer conn.Close()
+	if t.config.SourceIP != "" {
+		ip := net.ParseIP(t.config.SourceIP).To4()
+		if ip == nil {
+			return nil, fmt.Errorf("IPv4 source required")
+		}
+		if err := syscall.Bind(conn.fd, &syscall.SockaddrInet4{Addr: [4]byte(ip)}); err != nil {
+			return nil, fmt.Errorf("binding source %s: %w", t.config.SourceIP, err)
+		}
+	}
 
 	// Trace each hop
 	for ttl := t.config.StartTTL; ttl <= t.config.MaxHops; ttl++ {
@@ -194,9 +205,15 @@ func (t *ICMPPacketTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Dura
 	start := time.Now()
 
 	// Create ICMP Echo Request
-	seq := int(t.seq.Add(1) & 0xFFFF)
-	id := os.Getpid() & 0xFFFF
-	icmpData := createICMPEchoRequest(seq)
+	probe := globalProbeSequence.Add(1)
+	seq, id := uint16(probe&0xffff), uint16(probe>>16)
+	icmpData := createICMPEchoRequest(int(seq))
+	binary.BigEndian.PutUint16(icmpData[4:6], id)
+	if _, err := rand.Read(icmpData[8:]); err != nil {
+		return 0, nil, err
+	}
+	icmpData[2], icmpData[3] = 0, 0
+	binary.BigEndian.PutUint16(icmpData[2:4], calculateICMPChecksum(icmpData))
 
 	// Send
 	if err := conn.SendTo(icmpData, dst); err != nil {
@@ -213,13 +230,27 @@ func (t *ICMPPacketTracerouter) sendProbe(conn *icmpConn, dst net.IP) (time.Dura
 		if err != nil {
 			return 0, nil, err
 		}
-		if matchesICMPProbe(response, uint16(id), uint16(seq)) {
+		if matchesICMPReply(response, fromIP, dst, id, seq, icmpData[8:]) {
 			return time.Since(start), fromIP, nil
 		}
 		if time.Now().After(deadline) {
 			return 0, nil, fmt.Errorf("waiting for matching ICMP response: timeout")
 		}
 	}
+}
+
+// IDs span all instances, so concurrent sockets never reuse a live id/sequence pair.
+var globalProbeSequence atomic.Uint32
+
+func matchesICMPReply(data []byte, from, dst net.IP, id, seq uint16, nonce []byte) bool {
+	if !matchesICMPProbe(data, id, seq) {
+		return false
+	}
+	if data[0] == 0 {
+		return from.Equal(dst) && bytes.Equal(data[8:], nonce)
+	}
+	// RFC 792 only guarantees the quoted header and 8 bytes of payload.
+	return len(data) >= 28 && net.IP(data[24:28]).Equal(dst)
 }
 
 // matchesICMPProbe rejects unrelated traffic on the shared raw ICMP socket.
@@ -321,8 +352,8 @@ func (c *icmpConn) SetTTL(ttl int) error {
 // SetReadDeadline sets the read timeout
 func (c *icmpConn) SetReadDeadline(deadline time.Time) error {
 	timeout := time.Until(deadline)
-	if timeout < 0 {
-		timeout = 0
+	if timeout <= 0 {
+		timeout = time.Microsecond
 	}
 	tv := syscall.NsecToTimeval(timeout.Nanoseconds())
 	return syscall.SetsockoptTimeval(c.fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
@@ -553,8 +584,8 @@ func (c *udpConn) SetTTL(ttl int) error {
 
 func (c *udpConn) SetReadDeadline(deadline time.Time) error {
 	timeout := time.Until(deadline)
-	if timeout < 0 {
-		timeout = 0
+	if timeout <= 0 {
+		timeout = time.Microsecond
 	}
 	tv := syscall.NsecToTimeval(timeout.Nanoseconds())
 	return syscall.SetsockoptTimeval(c.fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
@@ -645,6 +676,10 @@ func NewTraceroutePool(factory *TracerouteFactory, maxConcurrent int) *Tracerout
 
 // Trace performs traceroute with concurrency control
 func (p *TraceroutePool) Trace(ctx context.Context, dstIP string) (*TracerouteResult, error) {
+	return p.TraceFrom(ctx, "", dstIP)
+}
+
+func (p *TraceroutePool) TraceFrom(ctx context.Context, srcIP, dstIP string) (*TracerouteResult, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -655,7 +690,9 @@ func (p *TraceroutePool) Trace(ctx context.Context, dstIP string) (*TracerouteRe
 	if p.factory == nil {
 		return nil, fmt.Errorf("traceroute factory is nil")
 	}
-	tracerouter, err := p.factory.Create(p.factory.config.Protocol)
+	cfg := *p.factory.config
+	cfg.SourceIP = srcIP
+	tracerouter, err := NewTracerouteFactory(&cfg, p.factory.logger).Create(cfg.Protocol)
 	if err != nil {
 		return nil, err
 	}
@@ -932,8 +969,8 @@ func (c *tcpConn) SetTTL(ttl int) error {
 
 func (c *tcpConn) SetReadDeadline(deadline time.Time) error {
 	timeout := time.Until(deadline)
-	if timeout < 0 {
-		timeout = 0
+	if timeout <= 0 {
+		timeout = time.Microsecond
 	}
 	tv := syscall.NsecToTimeval(timeout.Nanoseconds())
 	return syscall.SetsockoptTimeval(c.fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)

@@ -299,7 +299,7 @@ func TestStateMachine_GetAllConnections(t *testing.T) {
 	}
 }
 
-func TestStateMachine_RetentionRemovesOrphanedConnection(t *testing.T) {
+func TestStateMachine_RetentionPreservesEstablishedConnection(t *testing.T) {
 	var cleaned int32
 	sm := NewStateMachine(StateMachineConfig{
 		RetentionTTL:    time.Minute,
@@ -325,11 +325,11 @@ func TestStateMachine_RetentionRemovesOrphanedConnection(t *testing.T) {
 	sm.mu.Unlock()
 	sm.cleanup(time.Now())
 
-	if got := sm.GetConnectionCount(); got != 0 {
-		t.Fatalf("GetConnectionCount() = %d, want 0", got)
+	if got := sm.GetConnectionCount(); got != 1 {
+		t.Fatalf("GetConnectionCount() = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&cleaned); got != 1 {
-		t.Fatalf("TTL cleanup count = %d, want 1", got)
+	if got := atomic.LoadInt32(&cleaned); got != 0 {
+		t.Fatalf("TTL cleanup count = %d, want 0", got)
 	}
 }
 

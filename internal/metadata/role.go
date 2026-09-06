@@ -146,3 +146,15 @@ func (m *RoleMatcher) ParseRolesFromCSV(path string) error {
 	// For now, return error to indicate this is not yet implemented
 	return fmt.Errorf("CSV parsing not yet implemented, use YAML format")
 }
+
+// ReplaceFrom publishes already validated metadata without another file read.
+func (m *RoleMatcher) ReplaceFrom(staged *RoleMatcher) {
+	staged.mu.RLock()
+	networks := append([]netWithRole(nil), staged.networks...)
+	longest := staged.longestFirst
+	staged.mu.RUnlock()
+	m.mu.Lock()
+	m.networks = networks
+	m.longestFirst = longest
+	m.mu.Unlock()
+}

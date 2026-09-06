@@ -100,7 +100,11 @@ func IPFromBytes(b [16]byte) net.IP {
 // Connection represents a tracked network connection
 type Connection struct {
 	// Unique identifier
-	ID string
+	ID                string
+	SocketID          uint64
+	StartedNS         uint64
+	EventType         ConnectionEvent
+	MeasuredHandshake time.Duration
 
 	// Network information
 	SourceIP   net.IP
@@ -143,6 +147,9 @@ func (c *Connection) Duration() time.Duration {
 
 // HandshakeDuration returns the TCP handshake duration (SYN to ESTABLISHED)
 func (c *Connection) HandshakeDuration() time.Duration {
+	if c.MeasuredHandshake > 0 {
+		return c.MeasuredHandshake
+	}
 	if c.EstablishedTime.IsZero() {
 		return 0
 	}

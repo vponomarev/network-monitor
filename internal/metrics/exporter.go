@@ -510,47 +510,39 @@ func (e *Exporter) Collector() prometheus.Collector {
 }
 
 // SetMatchers updates the location and role matchers (for SIGHUP reload) and
-// recomputes labels for all series, preserving counts. Series whose new labels
-// collide are merged.
+// begins a new counter epoch; historical aggregates cannot be relabelled safely.
 func (e *Exporter) SetMatchers(locationMatcher *metadata.LocationMatcher, roleMatcher *metadata.RoleMatcher) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	saved := e.series
-
-	// Update matchers.
+	// Aggregates cannot be split by a representative IP. Start a new counter
+	// epoch on reload; Prometheus treats the decrease as a counter reset.
 	e.locationMatcher = locationMatcher
 	e.roleMatcher = roleMatcher
 	e.matcherVersion++
+	e.resetMetadataEpoch()
+}
 
-	// Reset Prometheus metrics and rebuild the series map with new labels.
+// ReplaceMetadata commits staged matcher contents under the same lock as the
+// counter epoch. A lookup started before the commit is retried using its version.
+func (e *Exporter) ReplaceMetadata(locations *metadata.LocationMatcher, roles *metadata.RoleMatcher) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if locations != nil {
+		e.locationMatcher.ReplaceFrom(locations)
+	}
+	if roles != nil {
+		e.roleMatcher.ReplaceFrom(roles)
+	}
+	e.matcherVersion++
+	e.resetMetadataEpoch()
+}
+
+func (e *Exporter) resetMetadataEpoch() {
 	e.counter.Reset()
-	e.series = make(map[string]*seriesData, len(saved))
-
-	for _, data := range saved {
-		newLabels := e.labelsFor(data.repSrc, data.repDst)
-		newKey := seriesKeyOf(newLabels)
-		if existing, ok := e.series[newKey]; ok {
-			// Two old series collapse to the same new series — merge counts.
-			existing.count += data.count
-			if data.lastSeen.After(existing.lastSeen) {
-				existing.lastSeen = data.lastSeen
-			}
-			continue
-		}
-		data.labels = newLabels
-		e.series[newKey] = data
-	}
-
-	// Recreate Prometheus metrics with new labels but preserved counts.
-	for _, data := range e.series {
-		data.counter = e.counter.WithLabelValues(data.labels...)
-		data.counter.Add(float64(data.count))
-	}
-	e.activeSeries.Set(float64(len(e.series)))
-
-	e.logger.Info("Matchers updated, metrics recreated with new labels (counters preserved)",
-		zap.Int("series", len(e.series)))
+	e.series = make(map[string]*seriesData)
+	e.activeSeries.Set(0)
+	e.logger.Info("Matchers updated; loss counters reset for the new metadata epoch")
 }
 
 // Registry returns the Prometheus registerer used by the exporter.

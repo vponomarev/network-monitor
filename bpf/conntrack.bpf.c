@@ -50,6 +50,9 @@ struct connection_event {
     __u8 tcp_flags;
     __u8 _pad[7];              /* Explicit padding for 8-byte alignment */
     char comm[TASK_COMM_LEN];  /* Aligned at offset 72 */
+    __u64 socket_id;
+    __u64 started_ns;
+    __u64 handshake_ns;
 };
 
 /* Connection key - packed to avoid padding issues */
@@ -59,6 +62,7 @@ struct connection_key {
     __u16 src_port;
     __u16 dst_port;
     __u8 protocol;
+    __u64 socket_id;
 } __attribute__((packed));
 
 struct connection_entry {
@@ -205,6 +209,7 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
     key->src_port = sport;
     key->dst_port = dport;
     key->protocol = IPPROTO_TCP;
+    key->socket_id = (__u64)sk;
 }
 
 /* -------------------------------------------------------------------------
@@ -222,7 +227,7 @@ static __always_inline void make_key_from_sock(struct sock *sk, struct connectio
 SEC("tracepoint/sock/inet_sock_set_state")
 int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
 {
-    if (!track_outgoing && !track_closes)
+    if (!track_outgoing && !track_incoming && !track_closes)
         return 0;
 
     /* Correlate SYN_SENT (process context) with ESTABLISHED (complete tuple). */
@@ -239,31 +244,33 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
     if (!port_is_tracked(filter_sport, filter_dport))
         return 0;
 
-    if (track_outgoing && newstate == TCP_SYN_SENT) {
-        struct pending_outgoing_meta meta = {};
-        meta.timestamp_ns = bpf_ktime_get_ns();
-        meta.pid_tgid = bpf_get_current_pid_tgid();
-        bpf_get_current_comm(&meta.comm, sizeof(meta.comm));
-        if (bpf_map_update_elem(&pending_outgoing, &skaddr, &meta, BPF_ANY) != 0)
-            count_drop(DROP_PENDING_MAP_FULL);
-        return 0;
-    }
+    bool starting = track_outgoing && newstate == TCP_SYN_SENT;
     bool established = track_outgoing && oldstate == TCP_SYN_SENT && newstate == TCP_ESTABLISHED;
-    bool closed = track_closes && newstate == TCP_CLOSE;
-    if (!established && !closed)
+    bool closed = newstate == TCP_CLOSE;
+    if (!starting && !established && !closed)
         return 0;
-
-    struct pending_outgoing_meta *meta = established ?
-        bpf_map_lookup_elem(&pending_outgoing, &skaddr) : 0;
+    if (starting) {
+        struct pending_outgoing_meta initial = {};
+        initial.timestamp_ns = bpf_ktime_get_ns();
+        initial.pid_tgid = bpf_get_current_pid_tgid();
+        bpf_get_current_comm(&initial.comm, sizeof(initial.comm));
+        if (bpf_map_update_elem(&pending_outgoing, &skaddr, &initial, BPF_ANY) != 0)
+            count_drop(DROP_PENDING_MAP_FULL);
+    }
+    struct pending_outgoing_meta *meta = bpf_map_lookup_elem(&pending_outgoing, &skaddr);
+    bool failed = closed && meta;
 
     struct connection_event evt = {};
-    evt.timestamp_ns = meta ? meta->timestamp_ns : bpf_ktime_get_ns();
+    evt.timestamp_ns = bpf_ktime_get_ns();
+    evt.socket_id = skaddr;
+    evt.started_ns = meta ? meta->timestamp_ns : evt.timestamp_ns;
+    evt.handshake_ns = established && meta ? evt.timestamp_ns - meta->timestamp_ns : 0;
     evt.pid_tgid = meta ? meta->pid_tgid : bpf_get_current_pid_tgid();
     evt.pid = (__u32)(evt.pid_tgid >> 32);
     evt.tid = (__u32)(evt.pid_tgid & 0xFFFFFFFF);
-    evt.direction = established ? DIR_OUTGOING : DIR_UNKNOWN;
-    evt.state = established ? CONN_STATE_ESTABLISHED : CONN_STATE_CLOSED;
-    evt.event_type = established ? CONN_EVENT_ESTABLISHED : CONN_EVENT_CLOSED;
+    evt.direction = (starting || established || failed) ? DIR_OUTGOING : DIR_UNKNOWN;
+    evt.state = starting ? CONN_STATE_SYN_SENT : (established ? CONN_STATE_ESTABLISHED : CONN_STATE_CLOSED);
+    evt.event_type = starting ? CONN_EVENT_NEW : (failed ? CONN_EVENT_FAILED : (established ? CONN_EVENT_ESTABLISHED : CONN_EVENT_CLOSED));
     evt.tcp_flags = established ? (TCP_SYN | TCP_ACK) : TCP_FIN;
     evt.protocol = IPPROTO_TCP;
 
@@ -318,10 +325,18 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
     key.src_port = evt.src_port;
     key.dst_port = evt.dst_port;
     key.protocol = IPPROTO_TCP;
+    key.socket_id = skaddr;
+
+    if (starting || failed) {
+        if (failed)
+            bpf_map_delete_elem(&pending_outgoing, &skaddr);
+        submit_event(&evt);
+        return 0;
+    }
 
     if (established) {
         struct connection_entry entry = {};
-        entry.timestamp_ns = evt.timestamp_ns;
+        entry.timestamp_ns = evt.started_ns;
         entry.pid = evt.pid;
         entry.direction = DIR_OUTGOING;
         entry.state = CONN_STATE_ESTABLISHED;
@@ -333,6 +348,7 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
     } else {
         struct connection_entry *entry = bpf_map_lookup_elem(&connections, &key);
         if (entry) {
+            evt.started_ns = entry->timestamp_ns;
             evt.direction = entry->direction;
             evt.pid = entry->pid;
             __builtin_memcpy(evt.comm, entry->comm, TASK_COMM_LEN);
@@ -354,7 +370,8 @@ int trace_outgoing(struct trace_event_raw_inet_sock_set_state *ctx)
         }
     }
 
-    submit_event(&evt);
+    if (!closed || track_closes)
+        submit_event(&evt);
     return 0;
 }
 
@@ -397,6 +414,8 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
     evt.pid_tgid = bpf_get_current_pid_tgid();
     evt.pid = evt.pid_tgid >> 32;
     evt.tid = evt.pid_tgid & 0xFFFFFFFF;
+    evt.socket_id = (__u64)ret_sk;
+    evt.started_ns = evt.timestamp_ns;
     evt.direction = DIR_INCOMING;
     evt.state = CONN_STATE_ESTABLISHED;
     evt.event_type = CONN_EVENT_ESTABLISHED;
@@ -429,7 +448,7 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 
     // Store in connections map (key is in raw socket format)
     struct connection_entry entry = {};
-    entry.timestamp_ns = evt.timestamp_ns;
+    entry.timestamp_ns = evt.started_ns;
     entry.pid = evt.pid;
     entry.direction = DIR_INCOMING;
     entry.state = CONN_STATE_ESTABLISHED;
@@ -438,77 +457,6 @@ int BPF_KRETPROBE(inet_csk_accept, struct sock *ret_sk)
 
     if (bpf_map_update_elem(&connections, &key, &entry, BPF_ANY) != 0)
         count_drop(DROP_CONNECTIONS_MAP_FULL);
-
-    submit_event(&evt);
-    return 0;
-}
-
-/* Trace tcp_close - connection closing
- * Use kprobe (not kretprobe) to get socket before it's freed
- * Signature: void tcp_close(struct sock *sk, long timeout)
- *
- * Note: tcp_close() is only called for TCP sockets (net/ipv4/tcp.c),
- * so protocol check is unnecessary. Only family check is needed.
- *
- * evt.comm semantics:
- *   - If connection found in map: comm = process that OPENED the connection
- *   - If not found: comm = process that is CLOSING the connection (fallback)
- */
-SEC("kprobe/tcp_close")
-int BPF_KPROBE(tcp_close, struct sock *sk)
-{
-    if (!track_closes)
-        return 0;
-
-    // Check socket family - only IPv4 supported
-    // Note: tcp_close() is only called for TCP sockets, no protocol check needed
-    __u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    if (family != AF_INET)
-        return 0;
-
-    struct connection_event evt = {};
-    struct connection_key key = {};
-
-    evt.timestamp_ns = bpf_ktime_get_ns();
-    evt.pid_tgid = bpf_get_current_pid_tgid();
-    evt.pid = evt.pid_tgid >> 32;
-    evt.tid = evt.pid_tgid & 0xFFFFFFFF;
-    evt.state = CONN_STATE_CLOSED;
-    evt.event_type = CONN_EVENT_CLOSED;
-
-    // Get process name once
-    bpf_get_current_comm(&evt.comm, sizeof(evt.comm));
-
-    // Create key from raw socket values (must match how it was stored)
-    make_key_from_sock(sk, &key);
-    if (!port_is_tracked(key.src_port, key.dst_port))
-        return 0;
-
-    // Look up stored connection to get original direction
-    struct connection_entry *entry;
-    entry = bpf_map_lookup_elem(&connections, &key);
-    if (entry) {
-        evt.direction = entry->direction;
-        __builtin_memcpy(evt.comm, entry->comm, TASK_COMM_LEN);  // Process that opened
-        __builtin_memcpy(evt.src_ip, key.src_ip, 16);
-        __builtin_memcpy(evt.dst_ip, key.dst_ip, 16);
-        evt.src_port = key.src_port;
-        evt.dst_port = key.dst_port;
-        evt.protocol = key.protocol;
-
-        // Remove from tracking map
-        bpf_map_delete_elem(&connections, &key);
-    } else {
-        // Connection not found - extract from socket anyway
-        // Cases: A) Tracker started after connection opened (most common)
-        //        B) Map overflow - entry was evicted
-        //        C) Race condition during concurrent close
-        // comm = process that is closing (already set above)
-        extract_ipv4_addrs(sk, evt.src_ip, evt.dst_ip);
-        extract_ports(sk, &evt.src_port, &evt.dst_port);
-        evt.protocol = IPPROTO_TCP;  // tcp_close() only called for TCP
-        evt.direction = DIR_UNKNOWN;  // Unknown: connection not tracked from start
-    }
 
     submit_event(&evt);
     return 0;

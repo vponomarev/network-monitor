@@ -151,3 +151,14 @@ func (t *Topology) Reload(path string) error {
 
 	return nil
 }
+
+// ReplaceFrom publishes a private, fully parsed topology.
+func (t *Topology) ReplaceFrom(staged *Topology) {
+	staged.mu.RLock()
+	defer staged.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.devices = staged.devices
+	t.ipIndex = staged.ipIndex
+	t.subnetIndex = staged.subnetIndex
+}

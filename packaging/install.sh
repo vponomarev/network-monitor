@@ -90,7 +90,7 @@ check_requirements() {
     if command -v wget &>/dev/null; then
         DOWNLOAD_CMD="wget -qO-"
     elif command -v curl &>/dev/null; then
-        DOWNLOAD_CMD="curl -sL"
+        DOWNLOAD_CMD="curl -fsSL"
     else
         log_error "Neither wget nor curl found. Please install one."
         exit 1
@@ -138,13 +138,26 @@ install_binary() {
 
     log_info "Downloading netmon $version ($arch)..."
 
-    if $DOWNLOAD_CMD "$download_url" > "$INSTALL_DIR/netmon" 2>/dev/null; then
-        chmod +x "$INSTALL_DIR/netmon"
-        log_success "Binary installed: $INSTALL_DIR/netmon"
-    else
-        log_error "Failed to download binary from $download_url"
-        exit 1
+    local staged checksums expected actual
+    staged=$(mktemp "$INSTALL_DIR/.netmon-download.XXXXXX")
+    checksums=$(mktemp "$INSTALL_DIR/.netmon-checksums.XXXXXX")
+    if ! $DOWNLOAD_CMD "$download_url" > "$staged" || ! $DOWNLOAD_CMD "${download_url%/*}/checksums.txt" > "$checksums"; then
+        rm -f -- "$staged" "$checksums"
+        log_error "Download failed; existing binary preserved"
+        return 1
     fi
+    expected=$(awk -v name="$binary_name" '$2 == name {print $1}' "$checksums")
+    actual=$(sha256sum "$staged" | cut -d ' ' -f1)
+    rm -f -- "$checksums"
+    if [[ ! "$expected" =~ ^[0-9a-f]{64}$ || "$actual" != "$expected" ]]; then
+        rm -f -- "$staged"; log_error "Checksum mismatch"; return 1
+    fi
+    chmod 0755 "$staged"
+    if ! "$staged" --version >/dev/null 2>&1; then rm -f -- "$staged"; return 1; fi
+    if [[ -f "$INSTALL_DIR/netmon" ]]; then cp -p "$INSTALL_DIR/netmon" "$INSTALL_DIR/netmon.previous"; fi
+    mv -f -- "$staged" "$INSTALL_DIR/netmon"
+    log_success "Verified binary installed atomically"
+
 }
 
 # Install local binary (from build)
@@ -157,8 +170,12 @@ install_local_binary() {
     fi
 
     log_info "Installing local binary..."
-    cp "$local_binary" "$INSTALL_DIR/netmon"
-    chmod +x "$INSTALL_DIR/netmon"
+    local staged
+    staged=$(mktemp "$INSTALL_DIR/.netmon-local.XXXXXX")
+    install -m 0755 "$local_binary" "$staged"
+    if ! "$staged" --version >/dev/null 2>&1; then rm -f -- "$staged"; return 1; fi
+    if [[ -f "$INSTALL_DIR/netmon" ]]; then cp -p "$INSTALL_DIR/netmon" "$INSTALL_DIR/netmon.previous"; fi
+    mv -f -- "$staged" "$INSTALL_DIR/netmon"
     log_success "Binary installed: $INSTALL_DIR/netmon"
 }
 
@@ -173,6 +190,12 @@ install_config() {
     else
         log_warn "Config already exists: $CONFIG_DIR/config.yaml"
     fi
+
+    for name in locations roles; do
+        if [[ ! -f "$CONFIG_DIR/$name.yaml" ]]; then
+            install -m 0644 "configs/$name.example.yaml" "$CONFIG_DIR/$name.yaml"
+        fi
+    done
 
     # Install topology if not exists
     if [[ ! -f "$CONFIG_DIR/topology.yaml" ]]; then
@@ -199,27 +222,14 @@ install_systemd() {
 
 # Configure firewall (optional)
 configure_firewall() {
-    log_info "Configuring firewall (optional)..."
-
-    if command -v firewall-cmd &>/dev/null; then
-        # firewalld
-        firewall-cmd --permanent --add-port=9876/tcp 2>/dev/null || true
-        firewall-cmd --reload 2>/dev/null || true
-        log_success "firewalld configured (port 9876)"
-    elif command -v ufw &>/dev/null; then
-        # ufw
-        ufw allow 9876/tcp 2>/dev/null || true
-        log_success "ufw configured (port 9876)"
-    else
-        log_warn "No firewall manager found (firewalld/ufw). Configure manually if needed."
-    fi
+    log_info "Default listener is loopback; configure authenticated remote access and firewall explicitly"
 }
 
 # Start service
 start_service() {
     log_info "Starting netmon service..."
 
-    systemctl start netmon.service
+    systemctl restart netmon.service || true
 
     # Wait for service to start
     sleep 2
@@ -228,7 +238,12 @@ start_service() {
         log_success "netmon service started"
     else
         log_error "Failed to start netmon service"
-        systemctl status netmon.service --no-pager
+        if [[ -f "$INSTALL_DIR/netmon.previous" ]]; then
+            mv -f "$INSTALL_DIR/netmon.previous" "$INSTALL_DIR/netmon"
+            systemctl restart netmon.service || true
+            log_warn "Restored previous binary"
+        fi
+        systemctl status netmon.service --no-pager || true
         exit 1
     fi
 }
@@ -290,4 +305,4 @@ main() {
 }
 
 # Run main function
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

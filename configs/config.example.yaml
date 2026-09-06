@@ -4,7 +4,7 @@
 global:
   ttl_hours: 3
   metrics_port: 9876
-  metrics_addr: 0.0.0.0       # Bind address for HTTP server (default: 0.0.0.0)
+  metrics_addr: 127.0.0.1     # Use a Bearer token and explicit ACL before enabling remote access
   # auth_token: ""            # Optional: Bearer token for /metrics and /api/* endpoints
                               # Can also be set via NETMON_AUTH_TOKEN environment variable
                               # /health and /ready are NEVER protected

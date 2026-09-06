@@ -35,15 +35,16 @@ type DiscoveryRequest struct {
 
 // DiscoveryResponse represents an API discovery response
 type DiscoveryResponse struct {
-	PathID     string             `json:"path_id"`
-	SrcIP      string             `json:"src_ip"`
-	DstIP      string             `json:"dst_ip"`
-	Hops       []Hop              `json:"hops"`
-	Bottleneck *Bottleneck        `json:"bottleneck,omitempty"`
-	Discovered time.Time          `json:"discovered"`
-	TotalLoss  float64            `json:"total_loss"`
-	AvgRTT     string             `json:"avg_rtt"`
-	Topology   *topology.PathInfo `json:"topology,omitempty"`
+	PathID               string             `json:"path_id"`
+	SrcIP                string             `json:"src_ip"`
+	DstIP                string             `json:"dst_ip"`
+	Hops                 []Hop              `json:"hops"`
+	Bottleneck           *Bottleneck        `json:"bottleneck,omitempty"`
+	Discovered           time.Time          `json:"discovered"`
+	DestinationProbeLoss *float64           `json:"destination_probe_loss_percent"`
+	TotalLoss            float64            `json:"-"`
+	AvgRTT               string             `json:"avg_rtt"`
+	Topology             *topology.PathInfo `json:"topology,omitempty"`
 }
 
 // NewDiscoveryService creates a new discovery service
@@ -68,8 +69,12 @@ func NewDiscoveryService(
 
 // Discover performs path discovery for a specific pair
 func (s *DiscoveryService) Discover(ctx context.Context, srcIP, dstIP string) (*DiscoveryResponse, error) {
+	return s.discover(ctx, srcIP, dstIP, false)
+}
+
+func (s *DiscoveryService) discover(ctx context.Context, srcIP, dstIP string, fresh bool) (*DiscoveryResponse, error) {
 	// Try cache first
-	if path, ok := s.cache.Get(srcIP, dstIP); ok {
+	if path, ok := s.cache.Get(srcIP, dstIP); ok && !fresh {
 		return s.pathToResponse(path), nil
 	}
 
@@ -92,7 +97,7 @@ func (s *DiscoveryService) DiscoverTop(ctx context.Context) ([]*DiscoveryRespons
 	responses := make([]*DiscoveryResponse, 0, len(topPairs))
 
 	for _, pair := range topPairs {
-		resp, err := s.Discover(ctx, pair.SrcIP, pair.DstIP)
+		resp, err := s.discover(ctx, pair.SrcIP, pair.DstIP, true)
 		if err != nil {
 			continue
 		}
@@ -159,14 +164,15 @@ func (s *DiscoveryService) GetLossTracker() *LossTracker {
 func (s *DiscoveryService) pathToResponse(path *Path) *DiscoveryResponse {
 	bottleneck := FindBottleneck(path)
 	response := &DiscoveryResponse{
-		PathID:     path.PathID(),
-		SrcIP:      path.SrcIP.String(),
-		DstIP:      path.DstIP.String(),
-		Hops:       path.Hops,
-		Bottleneck: bottleneck,
-		Discovered: path.Discovered,
-		TotalLoss:  path.TotalLoss(),
-		AvgRTT:     path.AvgRTT().String(),
+		PathID:               path.PathID(),
+		SrcIP:                path.SrcIP.String(),
+		DstIP:                path.DstIP.String(),
+		Hops:                 path.Hops,
+		Bottleneck:           bottleneck,
+		Discovered:           path.Discovered,
+		TotalLoss:            path.TotalLoss(),
+		DestinationProbeLoss: path.DestinationProbeLoss(),
+		AvgRTT:               path.AvgRTT().String(),
 	}
 	s.mu.RLock()
 	networkTopology := s.topology

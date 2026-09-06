@@ -26,6 +26,8 @@ Environment=GOMAXPROCS=2
 # Environment=NETMON_AUTH_TOKEN=your-secret-token-here
 
 # Working directory
+StateDirectory=netmon
+LogsDirectory=netmon
 WorkingDirectory=/var/lib/netmon
 
 # Security hardening
@@ -33,7 +35,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=/var/lib/netmon /var/log/netmon
+ReadWritePaths=/var/lib/netmon /var/log/netmon /etc/netmon
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

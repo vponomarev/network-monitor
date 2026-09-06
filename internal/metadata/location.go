@@ -198,3 +198,15 @@ func (m *LocationMatcher) ParseLocationsFromCSV(path string) error {
 	// For now, return error to indicate this is not yet implemented
 	return fmt.Errorf("CSV parsing not yet implemented, use YAML format")
 }
+
+// ReplaceFrom publishes already validated metadata without another file read.
+func (m *LocationMatcher) ReplaceFrom(staged *LocationMatcher) {
+	staged.mu.RLock()
+	networks := append([]netWithLocation(nil), staged.networks...)
+	longest := staged.longestFirst
+	staged.mu.RUnlock()
+	m.mu.Lock()
+	m.networks = networks
+	m.longestFirst = longest
+	m.mu.Unlock()
+}
